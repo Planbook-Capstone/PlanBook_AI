@@ -124,6 +124,9 @@ class PDFUploadResponse(BaseModel):
     textbook_id: str = Field(..., description="ID sách đã upload")
     message: str = Field(..., description="Thông báo")
     processing_status: str = Field(..., description="Trạng thái xử lý")
+    pdf_file_id: Optional[str] = Field(None, description="ID file PDF trong GridFS")
+    total_chapters: int = Field(default=0, description="Tổng số chương")
+    total_pages: int = Field(default=0, description="Tổng số trang")
 
 class LessonPlanGenerationRequest(BaseModel):
     """Request cho tạo giáo án"""
@@ -138,6 +141,7 @@ class LessonPlanGenerationResponse(BaseModel):
     """Response cho tạo giáo án"""
     lesson_plan_id: str = Field(..., description="ID giáo án")
     docx_download_url: str = Field(..., description="URL download file DOCX")
+    docx_file_id: Optional[str] = Field(None, description="ID file DOCX trong GridFS")
     message: str = Field(..., description="Thông báo")
     generation_time: float = Field(..., description="Thời gian tạo (giây)")
 

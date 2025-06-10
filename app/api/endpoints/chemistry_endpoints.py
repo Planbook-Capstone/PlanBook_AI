@@ -2,14 +2,14 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Form
 from fastapi.responses import StreamingResponse
 import os
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from bson import ObjectId
 from app.database.models import (
     PDFUploadRequest, PDFUploadResponse,
     LessonPlanGenerationRequest, LessonPlanGenerationResponse
 )
-from app.services.pdf_service import pdf_service
 from app.services.file_storage_service import file_storage
+from app.services.pdf_service import pdf_service
 from app.agents.lesson_plan_agent import ChemistryLessonAgent
 from app.database.connection import get_database, LESSON_PLANS_COLLECTION
 
@@ -38,6 +38,9 @@ async def upload_chemistry_textbook(
     """
     try:
         # Validate file type (relaxed for testing)
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="Tên file không hợp lệ")
+
         allowed_extensions = ['.pdf', '.txt']  # Allow .txt for testing
         if not any(file.filename.lower().endswith(ext) for ext in allowed_extensions):
             raise HTTPException(status_code=400, detail="Chỉ chấp nhận file PDF hoặc TXT (testing)")
@@ -157,6 +160,8 @@ async def download_lesson_plan(lesson_plan_id: str):
     try:
         # Get lesson plan from database
         db = await get_database()
+        if db is None:
+            raise HTTPException(status_code=500, detail="Database connection failed")
         collection = db[LESSON_PLANS_COLLECTION]
         
         lesson_plan = await collection.find_one({"_id": ObjectId(lesson_plan_id)})
@@ -183,7 +188,7 @@ async def download_lesson_plan(lesson_plan_id: str):
 
 @router.get("/lesson-plans")
 async def list_lesson_plans(
-    grade: str = None,
+    grade: Optional[str] = None,
     limit: int = 10,
     skip: int = 0
 ):
@@ -198,6 +203,8 @@ async def list_lesson_plans(
         from app.database.connection import get_database_sync, LESSON_PLANS_COLLECTION
         
         db = get_database_sync()
+        if db is None:
+            raise HTTPException(status_code=500, detail="Database connection failed")
         collection = db[LESSON_PLANS_COLLECTION]
         
         # Build query filter
@@ -241,6 +248,8 @@ async def list_textbooks():
         from app.database.connection import get_database_sync, CHEMISTRY_TEXTBOOK_COLLECTION
         
         db = get_database_sync()
+        if db is None:
+            raise HTTPException(status_code=500, detail="Database connection failed")
         collection = db[CHEMISTRY_TEXTBOOK_COLLECTION]
         
         textbooks = list(collection.find().sort("upload_date", -1))
@@ -275,7 +284,7 @@ async def get_agent_status():
             "status": "active",
             "supported_grades": chemistry_agent.get_supported_grades()
         }
-        
+
     except Exception as e:
         logger.error(f"Failed to get agent status: {str(e)}")
         raise HTTPException(
@@ -283,10 +292,90 @@ async def get_agent_status():
             detail=f"Lỗi lấy trạng thái agent: {str(e)}"
         )
 
+@router.post("/test-lesson-plan")
+async def test_lesson_plan_generation(request: LessonPlanGenerationRequest):
+    """
+    Test endpoint để tạo lesson plan đơn giản (không dùng RAG)
+    """
+    try:
+        logger.info(f"Testing lesson plan generation: {request.topic} - Grade {request.grade}")
+
+        # Tạo lesson plan data đơn giản
+        lesson_plan_data = {
+            "title": f"Giáo án Hóa học lớp {request.grade}",
+            "subject": "Hóa học",
+            "grade": request.grade,
+            "topic": request.topic,
+            "duration": request.duration,
+            "lesson_type": "Lý thuyết",
+            "objectives": [
+                f"Học sinh hiểu được khái niệm về {request.topic}",
+                f"Học sinh vận dụng được kiến thức về {request.topic}",
+                "Học sinh có thái độ tích cực trong học tập"
+            ],
+            "materials": [
+                "Bảng, phấn",
+                "Sách giáo khoa",
+                "Thiết bị thí nghiệm"
+            ],
+            "activities": [
+                {
+                    "name": "Hoạt động khởi động",
+                    "duration": 10,
+                    "content": "Ôn tập kiến thức cũ",
+                    "teacher_activities": "Đặt câu hỏi ôn tập",
+                    "student_activities": "Trả lời câu hỏi"
+                },
+                {
+                    "name": "Hoạt động hình thành kiến thức",
+                    "duration": 25,
+                    "content": f"Tìm hiểu về {request.topic}",
+                    "teacher_activities": "Giảng bài, hướng dẫn",
+                    "student_activities": "Nghe giảng, ghi chép"
+                },
+                {
+                    "name": "Hoạt động luyện tập",
+                    "duration": 8,
+                    "content": "Làm bài tập",
+                    "teacher_activities": "Hướng dẫn bài tập",
+                    "student_activities": "Làm bài tập"
+                },
+                {
+                    "name": "Hoạt động tổng kết",
+                    "duration": 2,
+                    "content": "Tổng kết bài học",
+                    "teacher_activities": "Tóm tắt bài học",
+                    "student_activities": "Ghi nhớ kiến thức"
+                }
+            ],
+            "assessment": {
+                "methods": ["Quan sát", "Hỏi đáp"],
+                "criteria": ["Hiểu bài", "Tham gia tích cực"],
+                "questions": [f"Câu hỏi về {request.topic}"]
+            },
+            "homework": [
+                "Làm bài tập SGK",
+                "Chuẩn bị bài mới"
+            ]
+        }
+
+        return {
+            "success": True,
+            "lesson_plan_data": lesson_plan_data,
+            "message": f"Test lesson plan cho '{request.topic}' đã được tạo thành công"
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to test lesson plan generation: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Lỗi test tạo giáo án: {str(e)}"
+        )
+
 @router.get("/files/{file_type}")
 async def list_files_by_type(
     file_type: str,
-    grade: str = None,
+    grade: Optional[str] = None,
     limit: int = 50
 ):
     """
