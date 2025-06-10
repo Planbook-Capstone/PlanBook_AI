@@ -16,8 +16,14 @@ from app.database.connection import get_database, LESSON_PLANS_COLLECTION
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Initialize Chemistry Lesson Agent
-chemistry_agent = ChemistryLessonAgent()
+# Initialize Chemistry Lesson Agent (singleton pattern)
+_chemistry_agent = None
+
+def get_chemistry_agent():
+    global _chemistry_agent
+    if _chemistry_agent is None:
+        _chemistry_agent = ChemistryLessonAgent()
+    return _chemistry_agent
 
 @router.post("/upload-textbook", response_model=PDFUploadResponse)
 async def upload_chemistry_textbook(
@@ -100,8 +106,9 @@ async def generate_chemistry_lesson_plan(request: LessonPlanGenerationRequest):
             raise HTTPException(status_code=400, detail="Thời lượng phải từ 15-90 phút")
         
         logger.info(f"Generating lesson plan: {request.topic} - Grade {request.grade}")
-        
+
         # Generate lesson plan using Chemistry Agent (now async)
+        chemistry_agent = get_chemistry_agent()
         result = await chemistry_agent.process(
             topic=request.topic,
             grade=request.grade,
@@ -260,8 +267,9 @@ async def get_agent_status():
     Lấy trạng thái của Chemistry Lesson Agent
     """
     try:
+        chemistry_agent = get_chemistry_agent()
         agent_info = chemistry_agent.get_agent_info()
-        
+
         return {
             "agent_info": agent_info,
             "status": "active",
