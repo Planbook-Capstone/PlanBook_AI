@@ -2,10 +2,9 @@
 OCR Service cho xử lý PDF scan với VietOCR
 Hỗ trợ tiếng Việt và xử lý song song nhiều trang
 """
-import os
 import io
 import logging
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import fitz  # PyMuPDF
@@ -23,8 +22,6 @@ try:
 except ImportError:
     VIETOCR_AVAILABLE = False
     logging.warning("VietOCR not available. Install with: pip install vietocr")
-
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +95,12 @@ class OCRService:
             
             for page_num in range(doc.page_count):
                 page = doc[page_num]
-                text = page.get_text()
+                # Use get_text() method which is the correct method for PyMuPDF
+                try:
+                    text = page.get_text()  # type: ignore # Try without parameter first
+                except AttributeError:
+                    # Fallback for different PyMuPDF versions
+                    text = page.getText() if hasattr(page, 'getText') else ""  # type: ignore
                 full_text += f"\n--- Page {page_num + 1} ---\n{text}"
             
             total_pages = doc.page_count
@@ -240,9 +242,10 @@ class OCRService:
                 logger.error(f"OCR error for page {page_num}: {e}")
                 return "", 0.0
         
-        return await asyncio.get_event_loop().run_in_executor(
+        result = await asyncio.get_event_loop().run_in_executor(
             self.executor, process_image
         )
+        return result  # type: ignore
     
     def _preprocess_image(self, image: Image.Image) -> Image.Image:
         """
@@ -286,16 +289,14 @@ class OCRService:
         """
         Extract text from a single image
         """
-        def process():
+        async def process():
             # Convert bytes to PIL Image
             image = Image.open(io.BytesIO(image_bytes))
-            
+
             # Process with OCR
-            return self._ocr_image(image, 1, use_vietocr)
-        
-        return await asyncio.get_event_loop().run_in_executor(
-            self.executor, process
-        )
+            return await self._ocr_image(image, 1, use_vietocr)
+
+        return await process()
     
     def get_supported_languages(self) -> List[str]:
         """Get list of supported OCR languages"""
@@ -353,7 +354,8 @@ class OCRService:
         
         try:
             # Test pdf2image
-            from pdf2image import convert_from_bytes
+            import pdf2image  # type: ignore
+            _ = pdf2image.convert_from_bytes  # Test if function exists
             status["pdf2image_available"] = True
         except Exception as e:
             logger.error(f"pdf2image not available: {e}")

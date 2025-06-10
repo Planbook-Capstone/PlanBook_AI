@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
@@ -12,7 +13,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = os.getenv("PROJECT_NAME", "PlanBook AI Service")
 
     # API Keys
-    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY")
+    GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
 
     # MongoDB Configuration
     MONGODB_URL: str = os.getenv("MONGODB_URL", "mongodb://localhost:27017/planbook_db")
@@ -56,7 +57,7 @@ class Settings(BaseSettings):
     RETRY_ATTEMPTS: int = int(os.getenv("RETRY_ATTEMPTS", "3"))
 
     # Security
-    SECRET_KEY: str = os.getenv("SECRET_KEY")
+    SECRET_KEY: Optional[str] = os.getenv("SECRET_KEY")
     ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 

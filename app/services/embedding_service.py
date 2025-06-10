@@ -1,10 +1,9 @@
-from sentence_transformers import SentenceTransformer
-from typing import List, Dict, Any, Tuple
-import numpy as np
+from typing import List, Dict, Any, Optional
 import logging
 from app.core.config import settings
 from app.database.connection import get_database_sync, CHEMISTRY_EMBEDDINGS_COLLECTION
 from app.database.models import ChemistryEmbedding
+from bson import ObjectId
 import re
 
 logger = logging.getLogger(__name__)
@@ -27,6 +26,8 @@ class EmbeddingService:
         """Load embedding model"""
         if self.model is None:
             try:
+                # Lazy import to avoid startup issues
+                from sentence_transformers import SentenceTransformer
                 self.model = SentenceTransformer(self.model_name)
                 logger.info(f"Loaded embedding model: {self.model_name}")
             except Exception as e:
@@ -102,6 +103,9 @@ class EmbeddingService:
         """Tạo embeddings cho list texts"""
         self._load_model()
 
+        if self.model is None:
+            raise RuntimeError("Embedding model is not loaded")
+
         try:
             embeddings = self.model.encode(texts, convert_to_tensor=False)
             return embeddings.tolist()
@@ -118,7 +122,7 @@ class EmbeddingService:
         content_id: str,
         content_type: str,
         text: str,
-        metadata: Dict[str, Any] = None
+        metadata: Optional[Dict[str, Any]] = None
     ) -> List[str]:
         """
         Chia text thành chunks, tạo embeddings và lưu vào MongoDB
@@ -136,12 +140,17 @@ class EmbeddingService:
 
             # Lưu vào MongoDB
             db = get_database_sync()
+            if db is None:
+                raise RuntimeError("Database connection failed")
             collection = db[CHEMISTRY_EMBEDDINGS_COLLECTION]
 
             embedding_ids = []
             for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+                # Convert content_id to ObjectId if it's a string
+                content_obj_id = ObjectId(content_id) if isinstance(content_id, str) else content_id
+
                 embedding_doc = ChemistryEmbedding(
-                    content_id=content_id,
+                    content_id=content_obj_id,
                     content_type=content_type,
                     text_chunk=chunk,
                     chunk_index=i,
@@ -162,9 +171,9 @@ class EmbeddingService:
     def similarity_search(
         self,
         query: str,
-        top_k: int = None,
-        content_type: str = None,
-        metadata_filter: Dict[str, Any] = None
+        top_k: Optional[int] = None,
+        content_type: Optional[str] = None,
+        metadata_filter: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
         """
         Tìm kiếm similarity với query
@@ -256,6 +265,8 @@ class EmbeddingService:
 
             # Thực hiện search
             db = get_database_sync()
+            if db is None:
+                raise RuntimeError("Database connection failed")
             collection = db[CHEMISTRY_EMBEDDINGS_COLLECTION]
 
             results = list(collection.aggregate(pipeline))
@@ -271,10 +282,15 @@ class EmbeddingService:
         """Lấy tất cả embeddings của một content"""
         try:
             db = get_database_sync()
+            if db is None:
+                raise RuntimeError("Database connection failed")
             collection = db[CHEMISTRY_EMBEDDINGS_COLLECTION]
 
+            # Convert content_id to ObjectId if it's a string
+            content_obj_id = ObjectId(content_id) if isinstance(content_id, str) else content_id
+
             results = list(collection.find(
-                {"content_id": content_id},
+                {"content_id": content_obj_id},
                 sort=[("chunk_index", 1)]
             ))
 
