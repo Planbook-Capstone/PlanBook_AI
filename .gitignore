@@ -43,3 +43,35 @@ htmlcov/
 # OS specific
 .DS_Store
 Thumbs.db
+
+# PlanBookAI specific
+temp_uploads/
+data/
+chroma_db/
+tessdata/
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+.pytest_cache/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Docker volumes
+redis_data/
+mongodb_data/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Environment files
+.env.local
+.env.production
+.env.development
+
+# API Keys (backup)
+.env.example.backup
