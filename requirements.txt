@@ -1,22 +1,10 @@
+# Core FastAPI
 fastapi>=0.95.0
 uvicorn>=0.21.1
 pydantic>=2.0.0
 python-dotenv>=1.0.0
-httpx>=0.24.0
-pytest>=7.3.1
 python-multipart>=0.0.6
-tenacity>=8.2.2
-langchain>=0.0.200
-google-generativeai>=0.3.0
-
-# Celery & Redis
-celery>=5.3.0
-redis>=5.0.0
-flower>=2.0.1
-
-# MongoDB
-pymongo>=4.5.0
-motor>=3.3.0
+pydantic-settings>=2.0.0
 
 # PDF Processing
 PyMuPDF>=1.23.0
@@ -25,18 +13,8 @@ Pillow>=10.0.0
 
 # OCR
 pytesseract>=0.3.10
-vietocr>=0.3.12
+easyocr>=1.7.0
+numpy>=1.24.0
 
-# Embeddings
-sentence-transformers>=2.2.2
-torch>=2.0.0
-transformers>=4.30.0
-
-# Additional utilities
-aiofiles>=23.2.1
-python-magic>=0.4.27
-pydantic-settings>=2.0.0
-
-# Document processing
-pdfplumber>=0.11.6
-python-docx>=1.1.2
+# LLM
+google-generativeai>=0.3.0

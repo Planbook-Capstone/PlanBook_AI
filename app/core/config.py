@@ -65,9 +65,12 @@ class Settings(BaseSettings):
         case_sensitive = True
 
     def __post_init__(self):
-        if not self.GEMINI_API_KEY:
-            raise ValueError("GEMINI_API_KEY environment variable is required")
-        if not self.SECRET_KEY or self.SECRET_KEY == "your_secret_key_here":
-            raise ValueError("SECRET_KEY environment variable must be set and changed from default")
+        # Only validate API keys for main application, not for Celery workers
+        import sys
+        if 'celery' not in ' '.join(sys.argv).lower():
+            if not self.GEMINI_API_KEY:
+                print("⚠️ Warning: GEMINI_API_KEY not set")
+            if not self.SECRET_KEY or self.SECRET_KEY == "your_secret_key_here":
+                print("⚠️ Warning: SECRET_KEY not set or using default")
 
 settings = Settings()
