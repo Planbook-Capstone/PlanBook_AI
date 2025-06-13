@@ -2,7 +2,7 @@
 PDF Endpoints - Endpoint đơn giản để xử lý PDF với OCR và LLM formatting
 """
 import logging
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Query
 from fastapi.responses import JSONResponse
 from typing import Dict, Any, Optional
 from pydantic import BaseModel
@@ -333,7 +333,8 @@ async def parse_cv_text(request: FormatTextRequest) -> Dict[str, Any]:
 @router.post("/process-textbook", response_model=Dict[str, Any])
 async def process_textbook(
     file: UploadFile = File(...),
-    metadata: str = Form(...)
+    metadata: str = Form(...),
+    create_embeddings: bool = Form(False)  # Thêm tham số mới
 ) -> Dict[str, Any]:
     """
     Xử lý sách giáo khoa thành cấu trúc dữ liệu cho giáo án
@@ -341,6 +342,7 @@ async def process_textbook(
     Args:
         file: PDF file của sách giáo khoa
         metadata: JSON string chứa metadata của sách
+        create_embeddings: Có tạo embeddings cho RAG không
 
     Returns:
         Dict containing processing results
@@ -410,7 +412,7 @@ async def process_textbook(
             }
 
         # Return enhanced structure with OCR results
-        return {
+        result = {
             "success": True,
             "book_id": book_metadata.get("id"),
             "filename": file.filename,
@@ -427,6 +429,32 @@ async def process_textbook(
             },
             "message": "Textbook processed successfully with OCR structure analysis"
         }
+        
+        # Thêm phần tạo embeddings nếu được yêu cầu
+        if create_embeddings:
+            try:
+                from app.services.qdrant_service import qdrant_service
+                
+                # Tạo embeddings và lưu vào Qdrant
+                embedding_result = await qdrant_service.process_textbook(
+                    book_id=book_metadata.get("id"),
+                    book_structure=enhanced_result["book"]
+                )
+                
+                # Thêm thông tin về embeddings vào kết quả
+                result["embeddings_created"] = embedding_result.get("success", False)
+                result["embeddings_info"] = {
+                    "collection_name": embedding_result.get("collection_name"),
+                    "vector_count": embedding_result.get("total_chunks", 0),
+                    "vector_dimension": embedding_result.get("vector_dimension")
+                }
+                result["message"] += " with searchable embeddings in Qdrant"
+            except Exception as e:
+                logger.warning(f"Embeddings creation failed: {e}")
+                result["embeddings_created"] = False
+                result["embeddings_error"] = str(e)
+        
+        return result
 
     except HTTPException:
         raise
@@ -678,6 +706,64 @@ async def get_lesson_content(book_id: str, lesson_id: str) -> Dict[str, Any]:
             detail=f"Internal server error: {str(e)}"
         )
 
+@router.get("/textbook/{book_id}/search", response_model=Dict[str, Any])
+async def search_textbook(
+    book_id: str,
+    query: str,
+    limit: int = Query(5, ge=1, le=20)
+) -> Dict[str, Any]:
+    """
+    Tìm kiếm trong sách giáo khoa bằng RAG với Qdrant
+    
+    Args:
+        book_id: ID của sách
+        query: Câu truy vấn tìm kiếm
+        limit: Số lượng kết quả tối đa
+        
+    Returns:
+        Dict chứa kết quả tìm kiếm
+    """
+    try:
+        from app.services.qdrant_service import qdrant_service
+        
+        # Kiểm tra xem sách có tồn tại không
+        structure = await textbook_parser_service.get_book_structure(book_id)
+        if not structure:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Textbook with ID '{book_id}' not found"
+            )
+        
+        # Tìm kiếm với Qdrant
+        search_result = await qdrant_service.search_textbook(
+            book_id=book_id,
+            query=query,
+            limit=limit
+        )
+        
+        if not search_result.get("success", False):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Search failed: {search_result.get('error', 'Unknown error')}"
+            )
+        
+        return {
+            "success": True,
+            "book_id": book_id,
+            "query": query,
+            "results": search_result.get("results", []),
+            "message": f"Found {len(search_result.get('results', []))} results"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error searching textbook: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
+
 @router.get("/health")
 async def health_check():
     """
@@ -709,3 +795,6 @@ async def health_check():
             "status": "unhealthy",
             "error": str(e)
         }
+
+
+

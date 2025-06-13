@@ -18,3 +18,9 @@ numpy>=1.24.0
 
 # LLM
 google-generativeai>=0.3.0
+
+#Embeding 
+sentence-transformers>=2.2.2
+
+#VectorDB
+qdrant-client>=1.6.0

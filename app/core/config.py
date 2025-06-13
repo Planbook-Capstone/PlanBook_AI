@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     MAX_CHUNK_SIZE: int = int(os.getenv("MAX_CHUNK_SIZE", "500"))
     CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "50"))
     TOP_K_DOCUMENTS: int = int(os.getenv("TOP_K_DOCUMENTS", "5"))
+    
+    # Qdrant Settings
+    QDRANT_URL: str = os.getenv("QDRANT_URL", "http://localhost:6333")
+    QDRANT_API_KEY: Optional[str] = os.getenv("QDRANT_API_KEY")
 
     # File Upload Settings
     MAX_FILE_SIZE: int = int(os.getenv("MAX_FILE_SIZE", "209715200"))  # 200MB
