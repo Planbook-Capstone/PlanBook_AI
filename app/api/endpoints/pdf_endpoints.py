@@ -807,6 +807,72 @@ async def search_textbook(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+@router.get("/search", response_model=Dict[str, Any])
+async def search_all_textbooks(
+    query: str, limit: int = Query(10, ge=1, le=50)
+) -> Dict[str, Any]:
+    """
+    Tìm kiếm trong TẤT CẢ sách giáo khoa (Global Search)
+
+    Endpoint này cho phép người dùng tìm kiếm mà không cần biết book_id cụ thể.
+    Hệ thống sẽ tìm kiếm trong tất cả sách đã được xử lý.
+
+    Args:
+        query: Câu truy vấn tìm kiếm (từ khóa, câu hỏi, chủ đề)
+        limit: Số lượng kết quả tối đa (1-50, mặc định 10)
+
+    Returns:
+        Dict chứa kết quả tìm kiếm từ tất cả sách
+
+    Examples:
+        - /api/v1/pdf/search?query=hóa học là gì
+        - /api/v1/pdf/search?query=định nghĩa nguyên tử&limit=5
+        - /api/v1/pdf/search?query=bài tập về liên kết hóa học
+    """
+    try:
+        from app.services.qdrant_service import qdrant_service
+
+        logger.info(f"Global search query: '{query}' with limit: {limit}")
+
+        # Tìm kiếm trong tất cả textbooks
+        search_result = await qdrant_service.search_all_textbooks(
+            query=query, limit=limit
+        )
+
+        if not search_result.get("success", False):
+            error_msg = search_result.get("error", "Unknown error")
+            if "No textbooks found" in error_msg:
+                return {
+                    "success": True,
+                    "query": query,
+                    "results": [],
+                    "total_collections_searched": 0,
+                    "message": "No textbooks have been processed yet. Please upload and process textbooks first.",
+                }
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Search failed: {error_msg}",
+                )
+
+        return {
+            "success": True,
+            "query": query,
+            "results": search_result.get("results", []),
+            "total_collections_searched": search_result.get(
+                "total_collections_searched", 0
+            ),
+            "collections_searched": search_result.get("collections_searched", []),
+            "message": search_result.get("message", "Search completed"),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in global search: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
 @router.get("/health")
 async def health_check():
     """
