@@ -13,6 +13,7 @@ from app.services.llm_service import llm_service
 from app.services.cv_parser_service import cv_parser_service
 from app.services.textbook_parser_service import textbook_parser_service
 from app.services.enhanced_textbook_service import enhanced_textbook_service
+from app.services.background_task_service import background_task_service, TaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -300,6 +301,115 @@ async def parse_cv_text(request: FormatTextRequest) -> Dict[str, Any]:
         raise
     except Exception as e:
         logger.error(f"Error parsing CV text: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.post("/process-textbook-async", response_model=Dict[str, Any])
+async def process_textbook_async(
+    file: UploadFile = File(...),
+    metadata: str = Form(...),
+    create_embeddings: bool = Form(True),
+) -> Dict[str, Any]:
+    """
+    Xử lý sách giáo khoa bất đồng bộ (Async Processing)
+
+    Upload PDF và nhận task_id ngay lập tức, không cần đợi xử lý hoàn thành.
+    Sử dụng endpoint /task-status/{task_id} để theo dõi tiến độ.
+
+    Args:
+        file: File PDF sách giáo khoa
+        metadata: JSON metadata của sách (id, title, subject, grade)
+        create_embeddings: Có tạo embeddings cho RAG search không
+
+    Returns:
+        Dict chứa task_id để theo dõi tiến độ
+
+    Example:
+        1. Upload: POST /process-textbook-async
+        2. Nhận: {"task_id": "abc-123", "status": "pending"}
+        3. Theo dõi: GET /task-status/abc-123
+    """
+    try:
+        # Validate file type
+        if not file.filename or not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+        # Parse metadata
+        try:
+            import json
+
+            book_metadata = json.loads(metadata)
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=400, detail="Invalid JSON in metadata field"
+            )
+
+        # Validate required metadata fields
+        required_fields = ["id", "title"]
+        for field in required_fields:
+            if field not in book_metadata:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Missing required field in metadata: {field}",
+                )
+
+        # Read file content
+        file_content = await file.read()
+
+        if len(file_content) == 0:
+            raise HTTPException(status_code=400, detail="Empty file uploaded")
+
+        logger.info(
+            f"Received async PDF upload: {file.filename} ({len(file_content)} bytes)"
+        )
+
+        # Tạo background task
+        task_data = {
+            "file_content": file_content,
+            "filename": file.filename,
+            "metadata": book_metadata,
+            "create_embeddings": create_embeddings,
+        }
+
+        task_id = background_task_service.create_task(
+            task_type="process_textbook", task_data=task_data
+        )
+
+        # Bắt đầu xử lý bất đồng bộ trong background
+        import threading
+
+        def run_background_task():
+            """Chạy task trong thread riêng biệt"""
+            import asyncio
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(
+                    background_task_service.process_pdf_task(task_id)
+                )
+            finally:
+                loop.close()
+
+        # Chạy trong thread riêng để không block response
+        thread = threading.Thread(target=run_background_task, daemon=True)
+        thread.start()
+
+        return {
+            "success": True,
+            "task_id": task_id,
+            "status": "pending",
+            "message": f"PDF processing started. Use /task-status/{task_id} to check progress.",
+            "book_id": book_metadata.get("id"),
+            "filename": file.filename,
+            "estimated_time": "2-5 minutes",
+            "check_status_url": f"/api/v1/pdf/task-status/{task_id}",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting async PDF processing: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
@@ -804,6 +914,104 @@ async def search_textbook(
         raise
     except Exception as e:
         logger.error(f"Error searching textbook: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/task-status/{task_id}", response_model=Dict[str, Any])
+async def get_task_status(task_id: str) -> Dict[str, Any]:
+    """
+    Lấy trạng thái của background task
+
+    Args:
+        task_id: ID của task cần kiểm tra
+
+    Returns:
+        Dict chứa thông tin chi tiết về task
+
+    Example:
+        GET /task-status/abc-123
+
+    Response:
+        {
+            "task_id": "abc-123",
+            "status": "processing",
+            "progress": 45,
+            "message": "Creating embeddings...",
+            "result": null  // Chỉ có khi completed
+        }
+    """
+    try:
+        task = background_task_service.get_task_status(task_id)
+
+        if not task:
+            raise HTTPException(
+                status_code=404, detail=f"Task with ID '{task_id}' not found"
+            )
+
+        # Tạo response với thông tin cần thiết
+        response = {
+            "task_id": task["task_id"],
+            "status": task["status"],
+            "progress": task["progress"],
+            "message": task["message"],
+            "created_at": task["created_at"],
+            "started_at": task["started_at"],
+            "completed_at": task["completed_at"],
+        }
+
+        # Thêm result nếu task đã hoàn thành
+        if task["status"] == TaskStatus.COMPLETED:
+            response["result"] = task["result"]
+
+        # Thêm error nếu task thất bại
+        if task["status"] == TaskStatus.FAILED:
+            response["error"] = task["error"]
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting task status: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/tasks", response_model=Dict[str, Any])
+async def get_all_tasks() -> Dict[str, Any]:
+    """
+    Lấy danh sách tất cả tasks (Admin endpoint)
+
+    Returns:
+        Dict chứa thống kê và danh sách tasks
+    """
+    try:
+        return background_task_service.get_all_tasks()
+    except Exception as e:
+        logger.error(f"Error getting all tasks: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.delete("/tasks/cleanup")
+async def cleanup_old_tasks(
+    max_age_hours: int = Query(24, ge=1, le=168),
+) -> Dict[str, Any]:
+    """
+    Dọn dẹp tasks cũ (Admin endpoint)
+
+    Args:
+        max_age_hours: Tuổi tối đa của task (giờ) để xóa
+
+    Returns:
+        Dict xác nhận việc dọn dẹp
+    """
+    try:
+        background_task_service.cleanup_old_tasks(max_age_hours)
+        return {
+            "success": True,
+            "message": f"Cleaned up tasks older than {max_age_hours} hours",
+        }
+    except Exception as e:
+        logger.error(f"Error cleaning up tasks: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 

@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PlanBookAI - Async PDF Processing Demo</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .upload-section {
+            border: 2px dashed #3498db;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #34495e;
+        }
+
+        input,
+        select,
+        button {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background-color 0.3s;
+        }
+
+        button:hover {
+            background-color: #2980b9;
+        }
+
+        button:disabled {
+            background-color: #bdc3c7;
+            cursor: not-allowed;
+        }
+
+        .progress-section {
+            display: none;
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #ecf0f1;
+            border-radius: 8px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background-color: #27ae60;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .status-message {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        .status-pending {
+            background-color: #f39c12;
+            color: white;
+        }
+
+        .status-processing {
+            background-color: #3498db;
+            color: white;
+        }
+
+        .status-completed {
+            background-color: #27ae60;
+            color: white;
+        }
+
+        .status-failed {
+            background-color: #e74c3c;
+            color: white;
+        }
+
+        .result-section {
+            display: none;
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #d5f4e6;
+            border-radius: 8px;
+        }
+
+        .search-section {
+            display: none;
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #e8f4fd;
+            border-radius: 8px;
+        }
+
+        .search-result {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: white;
+            border-radius: 5px;
+            border-left: 4px solid #3498db;
+        }
+
+        .log {
+            background-color: #2c3e50;
+            color: #ecf0f1;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🚀 PlanBookAI - Async PDF Processing</h1>
+
+        <div class="upload-section">
+            <h3>📤 Upload PDF Textbook</h3>
+            <form id="uploadForm">
+                <div class="form-group">
+                    <label for="pdfFile">Chọn file PDF:</label>
+                    <input type="file" id="pdfFile" accept=".pdf" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="bookId">Book ID:</label>
+                    <input type="text" id="bookId" placeholder="vd: hoa12_async" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="bookTitle">Tiêu đề sách:</label>
+                    <input type="text" id="bookTitle" placeholder="vd: Hóa học 12" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="subject">Môn học:</label>
+                    <select id="subject" required>
+                        <option value="">Chọn môn học</option>
+                        <option value="Hóa học">Hóa học</option>
+                        <option value="Vật lý">Vật lý</option>
+                        <option value="Sinh học">Sinh học</option>
+                        <option value="Toán học">Toán học</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="grade">Lớp:</label>
+                    <select id="grade" required>
+                        <option value="">Chọn lớp</option>
+                        <option value="10">Lớp 10</option>
+                        <option value="11">Lớp 11</option>
+                        <option value="12">Lớp 12</option>
+                    </select>
+                </div>
+
+                <button type="submit" id="uploadBtn">🚀 Upload & Process (Async)</button>
+            </form>
+        </div>
+
+        <div class="progress-section" id="progressSection">
+            <h3>📊 Processing Progress</h3>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="status-message" id="statusMessage">Initializing...</div>
+            <p><strong>Task ID:</strong> <span id="taskId">-</span></p>
+        </div>
+
+        <div class="result-section" id="resultSection">
+            <h3>✅ Processing Completed</h3>
+            <div id="resultContent"></div>
+        </div>
+
+        <div class="search-section" id="searchSection">
+            <h3>🔍 Test Search</h3>
+            <div class="form-group">
+                <label for="searchQuery">Tìm kiếm:</label>
+                <input type="text" id="searchQuery" placeholder="vd: hóa học là gì">
+            </div>
+            <button onclick="testSearch()" id="searchBtn">🔍 Search</button>
+            <div id="searchResults"></div>
+        </div>
+
+        <div class="log" id="logOutput">
+            📋 Logs sẽ hiển thị ở đây...
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000/api/v1/pdf';
+        let currentTaskId = null;
+        let progressInterval = null;
+
+        function log(message) {
+            const logOutput = document.getElementById('logOutput');
+            const timestamp = new Date().toLocaleTimeString();
+            logOutput.innerHTML += `[${timestamp}] ${message}\n`;
+            logOutput.scrollTop = logOutput.scrollHeight;
+            console.log(`[${timestamp}] ${message}`); // Also log to console
+        }
+
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const fileInput = document.getElementById('pdfFile');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                alert('Vui lòng chọn file PDF');
+                return;
+            }
+
+            const metadata = {
+                id: document.getElementById('bookId').value,
+                title: document.getElementById('bookTitle').value,
+                subject: document.getElementById('subject').value,
+                grade: document.getElementById('grade').value
+            };
+
+            log(`🚀 Starting upload: ${file.name}`);
+            log(`📚 Metadata: ${JSON.stringify(metadata)}`);
+
+            // Disable upload button
+            document.getElementById('uploadBtn').disabled = true;
+            document.getElementById('uploadBtn').textContent = '⏳ Uploading...';
+
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('metadata', JSON.stringify(metadata));
+                formData.append('create_embeddings', 'true'); // Bật embeddings để lưu vào Qdrant
+
+                log(`📡 Sending request to: ${API_BASE}/process-textbook-async`);
+                log(`📦 File size: ${file.size} bytes`);
+
+                const response = await fetch(`${API_BASE}/process-textbook-async`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                log(`📨 Response status: ${response.status} ${response.statusText}`);
+
+                const result = await response.json();
+                log(`📄 Response data: ${JSON.stringify(result, null, 2)}`);
+
+                if (response.ok) {
+                    currentTaskId = result.task_id;
+                    log(`✅ Upload successful! Task ID: ${currentTaskId}`);
+                    log(`⏱️ Estimated time: ${result.estimated_time}`);
+
+                    // Show progress section
+                    document.getElementById('progressSection').style.display = 'block';
+                    document.getElementById('taskId').textContent = currentTaskId;
+
+                    // Start monitoring progress
+                    startProgressMonitoring();
+                } else {
+                    log(`❌ Upload failed: ${result.detail || 'Unknown error'}`);
+                    alert('Upload failed: ' + (result.detail || 'Unknown error'));
+                }
+            } catch (error) {
+                log(`💥 Upload error: ${error.message}`);
+                alert('Upload error: ' + error.message);
+            } finally {
+                // Re-enable upload button
+                document.getElementById('uploadBtn').disabled = false;
+                document.getElementById('uploadBtn').textContent = '🚀 Upload & Process (Async)';
+            }
+        });
+
+        async function startProgressMonitoring() {
+            if (!currentTaskId) return;
+
+            progressInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`${API_BASE}/task-status/${currentTaskId}`);
+                    const status = await response.json();
+
+                    if (response.ok) {
+                        updateProgress(status);
+
+                        if (status.status === 'completed') {
+                            clearInterval(progressInterval);
+                            showResult(status.result);
+                        } else if (status.status === 'failed') {
+                            clearInterval(progressInterval);
+                            showError(status.error);
+                        }
+                    } else {
+                        log(`❌ Error checking status: ${status.detail}`);
+                    }
+                } catch (error) {
+                    log(`💥 Status check error: ${error.message}`);
+                }
+            }, 2000); // Check every 2 seconds
+        }
+
+        function updateProgress(status) {
+            const progressFill = document.getElementById('progressFill');
+            const statusMessage = document.getElementById('statusMessage');
+
+            progressFill.style.width = `${status.progress}%`;
+            statusMessage.textContent = `${status.status}: ${status.message}`;
+            statusMessage.className = `status-message status-${status.status}`;
+
+            log(`📊 Progress: ${status.progress}% - ${status.message}`);
+        }
+
+        function showResult(result) {
+            log(`✅ Processing completed successfully!`);
+
+            const resultSection = document.getElementById('resultSection');
+            const resultContent = document.getElementById('resultContent');
+
+            resultContent.innerHTML = `
+                <p><strong>Book ID:</strong> ${result.book_id}</p>
+                <p><strong>Filename:</strong> ${result.filename}</p>
+                <p><strong>Total Pages:</strong> ${result.statistics.total_pages}</p>
+                <p><strong>Chapters:</strong> ${result.statistics.total_chapters}</p>
+                <p><strong>Lessons:</strong> ${result.statistics.total_lessons}</p>
+                <p><strong>Embeddings Created:</strong> ${result.embeddings_created ? '✅ Yes' : '❌ No'}</p>
+                <p><strong>Vector Count:</strong> ${result.embeddings_info.vector_count}</p>
+            `;
+
+            resultSection.style.display = 'block';
+
+            // Show search section if embeddings were created
+            if (result.embeddings_created) {
+                document.getElementById('searchSection').style.display = 'block';
+            }
+        }
+
+        function showError(error) {
+            log(`❌ Processing failed: ${error}`);
+            alert('Processing failed: ' + error);
+        }
+
+        async function testSearch() {
+            const query = document.getElementById('searchQuery').value;
+            if (!query) {
+                alert('Vui lòng nhập từ khóa tìm kiếm');
+                return;
+            }
+
+            log(`🔍 Searching: "${query}"`);
+
+            try {
+                const response = await fetch(`${API_BASE}/search?query=${encodeURIComponent(query)}&limit=3`);
+                const result = await response.json();
+
+                if (response.ok) {
+                    displaySearchResults(result.results);
+                    log(`✅ Found ${result.results.length} results`);
+                } else {
+                    log(`❌ Search failed: ${result.detail}`);
+                }
+            } catch (error) {
+                log(`💥 Search error: ${error.message}`);
+            }
+        }
+
+        function displaySearchResults(results) {
+            const searchResults = document.getElementById('searchResults');
+
+            if (results.length === 0) {
+                searchResults.innerHTML = '<p>Không tìm thấy kết quả nào.</p>';
+                return;
+            }
+
+            searchResults.innerHTML = results.map((result, index) => `
+                <div class="search-result">
+                    <h4>Result ${index + 1} (Score: ${result.score.toFixed(3)})</h4>
+                    <p><strong>Book:</strong> ${result.book_id}</p>
+                    <p><strong>Chapter:</strong> ${result.chapter_title}</p>
+                    <p><strong>Lesson:</strong> ${result.lesson_title}</p>
+                    <p><strong>Text:</strong> ${result.text.substring(0, 200)}...</p>
+                </div>
+            `).join('');
+        }
+
+        // Initialize
+        log('🎯 PlanBookAI Async Processing Demo Ready');
+        log('📤 Upload a PDF to start processing...');
+    </script>
+</body>
+
+</html>
