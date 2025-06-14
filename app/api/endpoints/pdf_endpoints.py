@@ -13,7 +13,7 @@ from app.services.llm_service import llm_service
 from app.services.cv_parser_service import cv_parser_service
 from app.services.textbook_parser_service import textbook_parser_service
 from app.services.enhanced_textbook_service import enhanced_textbook_service
-from app.services.background_task_service import background_task_service, TaskStatus
+from app.services.background_task_processor import background_task_processor
 
 logger = logging.getLogger(__name__)
 
@@ -371,7 +371,7 @@ async def process_textbook_async(
             "create_embeddings": create_embeddings,
         }
 
-        task_id = background_task_service.create_task(
+        task_id = background_task_processor.create_task(
             task_type="process_textbook", task_data=task_data
         )
 
@@ -386,7 +386,7 @@ async def process_textbook_async(
             asyncio.set_event_loop(loop)
             try:
                 loop.run_until_complete(
-                    background_task_service.process_pdf_task(task_id)
+                    background_task_processor.process_pdf_task(task_id)
                 )
             finally:
                 loop.close()
@@ -403,7 +403,7 @@ async def process_textbook_async(
             "book_id": book_metadata.get("id"),
             "filename": file.filename,
             "estimated_time": "2-5 minutes",
-            "check_status_url": f"/api/v1/pdf/task-status/{task_id}",
+            "check_status_url": f"/api/v1/tasks/status/{task_id}",
         }
 
     except HTTPException:
@@ -914,104 +914,6 @@ async def search_textbook(
         raise
     except Exception as e:
         logger.error(f"Error searching textbook: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@router.get("/task-status/{task_id}", response_model=Dict[str, Any])
-async def get_task_status(task_id: str) -> Dict[str, Any]:
-    """
-    Lấy trạng thái của background task
-
-    Args:
-        task_id: ID của task cần kiểm tra
-
-    Returns:
-        Dict chứa thông tin chi tiết về task
-
-    Example:
-        GET /task-status/abc-123
-
-    Response:
-        {
-            "task_id": "abc-123",
-            "status": "processing",
-            "progress": 45,
-            "message": "Creating embeddings...",
-            "result": null  // Chỉ có khi completed
-        }
-    """
-    try:
-        task = background_task_service.get_task_status(task_id)
-
-        if not task:
-            raise HTTPException(
-                status_code=404, detail=f"Task with ID '{task_id}' not found"
-            )
-
-        # Tạo response với thông tin cần thiết
-        response = {
-            "task_id": task["task_id"],
-            "status": task["status"],
-            "progress": task["progress"],
-            "message": task["message"],
-            "created_at": task["created_at"],
-            "started_at": task["started_at"],
-            "completed_at": task["completed_at"],
-        }
-
-        # Thêm result nếu task đã hoàn thành
-        if task["status"] == TaskStatus.COMPLETED:
-            response["result"] = task["result"]
-
-        # Thêm error nếu task thất bại
-        if task["status"] == TaskStatus.FAILED:
-            response["error"] = task["error"]
-
-        return response
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting task status: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@router.get("/tasks", response_model=Dict[str, Any])
-async def get_all_tasks() -> Dict[str, Any]:
-    """
-    Lấy danh sách tất cả tasks (Admin endpoint)
-
-    Returns:
-        Dict chứa thống kê và danh sách tasks
-    """
-    try:
-        return background_task_service.get_all_tasks()
-    except Exception as e:
-        logger.error(f"Error getting all tasks: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@router.delete("/tasks/cleanup")
-async def cleanup_old_tasks(
-    max_age_hours: int = Query(24, ge=1, le=168),
-) -> Dict[str, Any]:
-    """
-    Dọn dẹp tasks cũ (Admin endpoint)
-
-    Args:
-        max_age_hours: Tuổi tối đa của task (giờ) để xóa
-
-    Returns:
-        Dict xác nhận việc dọn dẹp
-    """
-    try:
-        background_task_service.cleanup_old_tasks(max_age_hours)
-        return {
-            "success": True,
-            "message": f"Cleaned up tasks older than {max_age_hours} hours",
-        }
-    except Exception as e:
-        logger.error(f"Error cleaning up tasks: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 

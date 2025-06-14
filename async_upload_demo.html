@@ -325,7 +325,7 @@
 
             progressInterval = setInterval(async () => {
                 try {
-                    const response = await fetch(`${API_BASE}/task-status/${currentTaskId}`);
+                    const response = await fetch(`http://localhost:8000/api/v1/tasks/status/${currentTaskId}`);
                     const status = await response.json();
 
                     if (response.ok) {

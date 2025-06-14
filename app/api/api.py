@@ -2,7 +2,7 @@ from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.api.endpoints import pdf_endpoints
+from app.api.endpoints import pdf_endpoints, tasks
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -10,7 +10,7 @@ app = FastAPI(
     openapi_url=f"{settings.API_PREFIX}/openapi.json",
     docs_url=f"{settings.API_PREFIX}/docs",
     redoc_url=f"{settings.API_PREFIX}/redoc",
-    debug=settings.DEBUG
+    debug=settings.DEBUG,
 )
 
 # Set up CORS
@@ -27,10 +27,15 @@ api_router = APIRouter()
 
 # Include routers from endpoints
 api_router.include_router(pdf_endpoints.router, prefix="/pdf", tags=["PDF Services"])
+api_router.include_router(tasks.router, prefix="/tasks", tags=["Task Management"])
 
 # Add API router to app
 app.include_router(api_router, prefix=settings.API_PREFIX)
 
+
 @app.get("/")
 async def root():
-    return {"message": "Welcome to PlanBook AI Service", "docs": f"{settings.API_PREFIX}/docs"}
+    return {
+        "message": "Welcome to PlanBook AI Service",
+        "docs": f"{settings.API_PREFIX}/docs",
+    }
