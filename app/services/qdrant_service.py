@@ -149,10 +149,33 @@ class QdrantService:
             for chapter in book_structure.get("chapters", []):
                 chapter_id = chapter.get("chapter_id")
                 chapter_title = chapter.get("chapter_title")
+                chapter_start_page = chapter.get("start_page")
+                chapter_end_page = chapter.get("end_page")
 
                 for lesson in chapter.get("lessons", []):
                     lesson_id = lesson.get("lesson_id")
                     lesson_title = lesson.get("lesson_title")
+                    lesson_start_page = lesson.get("start_page")
+                    lesson_end_page = lesson.get("end_page")
+
+                    # Lấy thông tin content đầy đủ
+                    content = lesson.get("content", {})
+                    lesson_images = (
+                        content.get("images", []) if isinstance(content, dict) else []
+                    )
+                    lesson_pages = (
+                        content.get("pages", []) if isinstance(content, dict) else []
+                    )
+                    lesson_total_pages = (
+                        content.get("total_pages", 0)
+                        if isinstance(content, dict)
+                        else 0
+                    )
+                    lesson_has_images = (
+                        content.get("has_images", False)
+                        if isinstance(content, dict)
+                        else False
+                    )
 
                     # Tạo chunk cho tiêu đề bài học
                     title_text = f"{chapter_title} - {lesson_title}"
@@ -173,6 +196,14 @@ class QdrantService:
                                 "text": title_text,
                                 "chapter_title": chapter_title,
                                 "lesson_title": lesson_title,
+                                "chapter_start_page": chapter_start_page,
+                                "chapter_end_page": chapter_end_page,
+                                "lesson_start_page": lesson_start_page,
+                                "lesson_end_page": lesson_end_page,
+                                "lesson_images": lesson_images,
+                                "lesson_pages": lesson_pages,
+                                "lesson_total_pages": lesson_total_pages,
+                                "lesson_has_images": lesson_has_images,
                             },
                         )
                     )
@@ -220,6 +251,14 @@ class QdrantService:
                                     "text": chunk_text,
                                     "chapter_title": chapter_title,
                                     "lesson_title": lesson_title,
+                                    "chapter_start_page": chapter_start_page,
+                                    "chapter_end_page": chapter_end_page,
+                                    "lesson_start_page": lesson_start_page,
+                                    "lesson_end_page": lesson_end_page,
+                                    "lesson_images": lesson_images,
+                                    "lesson_pages": lesson_pages,
+                                    "lesson_total_pages": lesson_total_pages,
+                                    "lesson_has_images": lesson_has_images,
                                 },
                             )
                         )
@@ -234,9 +273,13 @@ class QdrantService:
                     f"Uploaded batch {i//batch_size + 1}/{(len(points)-1)//batch_size + 1} to Qdrant"
                 )
 
-            # Lưu metadata về quá trình xử lý
+            # Lưu metadata về quá trình xử lý VÀ toàn bộ book_structure gốc
             # Sửa lỗi: vector=[0.0] * self.vector_size
             zero_vector = [0.0] * self.vector_size
+
+            # Lưu book_info từ book_structure
+            book_info = book_structure.get("book_info", {})
+
             metadata_point = qdrant_models.PointStruct(
                 id=str(uuid.uuid4()),  # Sử dụng UUID cho metadata
                 vector=zero_vector,  # Vector rỗng cho metadata
@@ -248,6 +291,12 @@ class QdrantService:
                     "model": settings.EMBEDDING_MODEL,
                     "chunk_size": settings.MAX_CHUNK_SIZE,
                     "chunk_overlap": settings.CHUNK_OVERLAP,
+                    # Lưu toàn bộ book_structure gốc để có thể tái tạo format đầy đủ
+                    "original_book_structure": book_structure,
+                    "book_title": book_info.get("title", "Unknown"),
+                    "book_subject": book_info.get("subject", "Unknown"),
+                    "book_grade": book_info.get("grade", "Unknown"),
+                    "book_total_pages": book_info.get("total_pages", 0),
                 },
             )
 

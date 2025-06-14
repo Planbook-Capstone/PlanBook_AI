@@ -47,17 +47,39 @@ async def get_task_status(task_id: str) -> Dict[str, Any]:
         # Tạo response với thông tin cần thiết
         response = {
             "task_id": task["task_id"],
+            "task_type": task["task_type"],
             "status": task["status"],
             "progress": task["progress"],
             "message": task["message"],
             "created_at": task["created_at"],
             "started_at": task["started_at"],
             "completed_at": task["completed_at"],
+            "estimated_duration": task.get("estimated_duration", "Unknown"),
         }
 
         # Thêm result nếu task đã hoàn thành
         if task["status"] == "completed":
             response["result"] = task["result"]
+
+            # Thêm thông tin nhanh cho completed tasks
+            if task["result"]:
+                response["quick_info"] = {
+                    "success": task["result"].get("success", False),
+                    "book_id": task["result"].get("book_id"),
+                    "filename": task["result"].get("filename"),
+                    "embeddings_created": task["result"].get(
+                        "embeddings_created", False
+                    ),
+                    "total_pages": task["result"]
+                    .get("statistics", {})
+                    .get("total_pages", 0),
+                    "total_chapters": task["result"]
+                    .get("statistics", {})
+                    .get("total_chapters", 0),
+                    "total_lessons": task["result"]
+                    .get("statistics", {})
+                    .get("total_lessons", 0),
+                }
 
         # Thêm error nếu task thất bại
         if task["status"] == "failed":
@@ -69,6 +91,67 @@ async def get_task_status(task_id: str) -> Dict[str, Any]:
         raise
     except Exception as e:
         logger.error(f"Error getting task status: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/result/{task_id}", response_model=Dict[str, Any])
+async def get_task_result(task_id: str) -> Dict[str, Any]:
+    """
+    Lấy kết quả của task đã hoàn thành (chỉ trả về result, không trả về toàn bộ task info)
+
+    Args:
+        task_id: ID của task
+
+    Returns:
+        Dict chứa kết quả task với định dạng giống /process-textbook
+
+    Example:
+        GET /api/v1/tasks/result/abc-123
+    """
+    try:
+        task = background_task_processor.get_task_status(task_id)
+
+        if not task:
+            raise HTTPException(
+                status_code=404, detail=f"Task with ID '{task_id}' not found"
+            )
+
+        if task["status"] != "completed":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Task '{task_id}' is not completed yet. Current status: {task['status']}",
+            )
+
+        if not task.get("result"):
+            raise HTTPException(
+                status_code=404, detail=f"No result found for task '{task_id}'"
+            )
+
+        # Trả về kết quả với định dạng giống /process-textbook
+        result = task["result"]
+
+        return {
+            "success": result.get("success", False),
+            "book_id": result.get("book_id"),
+            "filename": result.get("filename"),
+            "book_structure": result.get("book_structure"),
+            "statistics": result.get("statistics", {}),
+            "processing_info": result.get("processing_info", {}),
+            "message": result.get("message", "Task completed successfully"),
+            "embeddings_created": result.get("embeddings_created", False),
+            "embeddings_info": result.get("embeddings_info", {}),
+            "task_info": {
+                "task_id": task_id,
+                "task_type": task["task_type"],
+                "completed_at": task["completed_at"],
+                "processing_time": task.get("processing_time"),
+            },
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting task result: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
@@ -257,6 +340,7 @@ async def get_task_types() -> Dict[str, Any]:
         "task_types": [
             "process_textbook",
             "process_textbook_auto",
+            "quick_analysis",
             "process_cv",
             "create_embeddings",
             "generate_lesson_plan",
@@ -265,8 +349,51 @@ async def get_task_types() -> Dict[str, Any]:
         "descriptions": {
             "process_textbook": "Xử lý sách giáo khoa PDF với metadata từ người dùng",
             "process_textbook_auto": "Xử lý sách giáo khoa PDF với tự động phân tích metadata",
+            "quick_analysis": "Phân tích nhanh cấu trúc sách giáo khoa và tạo embeddings",
             "process_cv": "Xử lý CV/Resume với OCR",
             "create_embeddings": "Tạo embeddings cho RAG search",
             "generate_lesson_plan": "Tạo giáo án từ nội dung sách",
         },
     }
+
+
+@router.get("/debug/{task_id}", response_model=Dict[str, Any])
+async def debug_task(task_id: str) -> Dict[str, Any]:
+    """
+    Debug task - Lấy toàn bộ thông tin task để debug
+
+    Args:
+        task_id: ID của task
+
+    Returns:
+        Dict chứa toàn bộ thông tin task
+    """
+    try:
+        task = background_task_processor.get_task_status(task_id)
+
+        if not task:
+            raise HTTPException(
+                status_code=404, detail=f"Task with ID '{task_id}' not found"
+            )
+
+        # Trả về toàn bộ thông tin task
+        return {
+            "success": True,
+            "task": task,
+            "debug_info": {
+                "task_exists": True,
+                "has_result": bool(task.get("result")),
+                "result_keys": list(task.get("result", {}).keys())
+                if task.get("result")
+                else [],
+                "data_keys": list(task.get("data", {}).keys())
+                if task.get("data")
+                else [],
+            },
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error debugging task: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")

@@ -243,6 +243,141 @@ class BackgroundTaskProcessor:
             logger.error(f"Error processing embeddings task {task_id}: {e}")
             self.mark_task_failed(task_id, str(e))
 
+    async def create_quick_analysis_task(
+        self, pdf_content: bytes, filename: str, create_embeddings: bool = True
+    ) -> str:
+        """Tạo task phân tích nhanh sách giáo khoa"""
+
+        task_data = {
+            "file_content": pdf_content,
+            "filename": filename,
+            "create_embeddings": create_embeddings,
+        }
+
+        task_id = self.create_task("quick_analysis", task_data)
+
+        # Bắt đầu xử lý task bất đồng bộ
+        asyncio.create_task(self.process_quick_analysis_task(task_id))
+
+        return task_id
+
+    async def process_quick_analysis_task(self, task_id: str):
+        """Xử lý task phân tích nhanh sách giáo khoa"""
+
+        task = self.task_service.get_task_status(task_id)
+        if not task:
+            logger.error(f"Task {task_id} not found")
+            return
+
+        try:
+            self.mark_task_processing(task_id)
+
+            # Lấy dữ liệu task
+            file_content = task["data"]["file_content"]
+            filename = task["data"]["filename"]
+            create_embeddings = task["data"].get("create_embeddings", True)
+
+            self.update_task_progress(
+                task_id, 10, "Starting quick textbook analysis..."
+            )
+
+            # Import services
+            from app.services.enhanced_textbook_service import enhanced_textbook_service
+            from app.services.qdrant_service import qdrant_service
+            import uuid
+
+            # Bước 1: OCR và phân tích cấu trúc
+            self.update_task_progress(task_id, 20, "Extracting pages with OCR...")
+
+            pages_data = await enhanced_textbook_service._extract_pages_with_ocr(
+                file_content
+            )
+
+            self.update_task_progress(task_id, 40, "Analyzing book structure...")
+
+            # Tạo metadata tự động
+            book_metadata = {
+                "id": str(uuid.uuid4())[:8],  # Tạo ID ngắn
+                "title": filename.replace(".pdf", ""),
+                "subject": "Chưa xác định",
+                "grade": "Chưa xác định",
+                "author": "Chưa xác định",
+                "language": "vi",
+            }
+
+            book_structure = (
+                await enhanced_textbook_service._analyze_book_structure_enhanced(
+                    pages_data, book_metadata
+                )
+            )
+
+            if not book_structure:
+                raise Exception("Failed to analyze textbook structure")
+
+            self.update_task_progress(task_id, 60, "Book structure analysis completed")
+
+            # Bước 2: Tạo embeddings nếu được yêu cầu
+            embeddings_result = None
+            if create_embeddings:
+                self.update_task_progress(task_id, 70, "Creating embeddings...")
+
+                embeddings_result = await qdrant_service.process_textbook(
+                    book_id=book_metadata.get("id"), book_structure=book_structure
+                )
+
+                if embeddings_result.get("success"):
+                    self.update_task_progress(
+                        task_id, 90, "Embeddings created successfully"
+                    )
+                else:
+                    logger.warning(
+                        f"Embeddings creation failed: {embeddings_result.get('error')}"
+                    )
+
+            # Tạo kết quả với định dạng giống /process-textbook
+            result = {
+                "success": True,
+                "book_id": book_metadata.get("id"),
+                "filename": filename,
+                "book_structure": book_structure,
+                "statistics": {
+                    "total_pages": len(pages_data),
+                    "total_chapters": len(book_structure.get("chapters", [])),
+                    "total_lessons": sum(
+                        len(chapter.get("lessons", []))
+                        for chapter in book_structure.get("chapters", [])
+                    ),
+                },
+                "processing_info": {
+                    "ocr_applied": True,
+                    "llm_analysis": True,
+                    "processing_method": "quick_analysis_async",
+                },
+                "message": "Quick textbook analysis completed successfully with searchable embeddings in Qdrant",
+                "embeddings_created": embeddings_result.get("success", False)
+                if embeddings_result
+                else False,
+                "embeddings_info": {
+                    "collection_name": embeddings_result.get("collection_name")
+                    if embeddings_result
+                    else None,
+                    "vector_count": embeddings_result.get("total_chunks", 0)
+                    if embeddings_result
+                    else 0,
+                    "vector_dimension": embeddings_result.get("vector_dimension")
+                    if embeddings_result
+                    else None,
+                }
+                if embeddings_result
+                else None,
+            }
+
+            self.mark_task_completed(task_id, result)
+
+        except Exception as e:
+            logger.error(f"Error processing quick analysis task {task_id}: {e}")
+            self.mark_task_failed(task_id, str(e))
+
     async def process_pdf_auto_task(self, task_id: str):
         """Xử lý task PDF với tự động phân tích metadata"""
 

@@ -4,13 +4,9 @@ PDF Endpoints - Endpoint đơn giản để xử lý PDF với OCR và LLM forma
 
 import logging
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Query
-from fastapi.responses import JSONResponse
-from typing import Dict, Any, Optional
-from pydantic import BaseModel
+from typing import Dict, Any
 
-from app.services.pdf_service import simple_pdf_service
 from app.services.llm_service import llm_service
-from app.services.cv_parser_service import cv_parser_service
 from app.services.textbook_parser_service import textbook_parser_service
 from app.services.enhanced_textbook_service import enhanced_textbook_service
 from app.services.background_task_processor import background_task_processor
@@ -18,290 +14,7 @@ from app.services.background_task_processor import background_task_processor
 logger = logging.getLogger(__name__)
 
 
-class FormatTextRequest(BaseModel):
-    text: str
-    document_type: Optional[str] = "general"
-
-
-class TextbookMetadata(BaseModel):
-    id: str
-    title: str
-    author: Optional[str] = None
-    language: str = "vi"
-    grade: Optional[str] = None
-    subject: Optional[str] = None
-
-
 router = APIRouter()
-
-
-@router.post("/extract-text", response_model=Dict[str, Any])
-async def extract_text_from_pdf(file: UploadFile = File(...)) -> Dict[str, Any]:
-    """
-    Extract text from PDF using OCR
-
-    Args:
-        file: PDF file to process
-
-    Returns:
-        Dict containing extracted text and metadata
-    """
-    try:
-        # Validate file type
-        if not file.filename or not file.filename.lower().endswith(".pdf"):
-            raise HTTPException(status_code=400, detail="Only PDF files are supported")
-
-        # Read file content
-        file_content = await file.read()
-
-        if len(file_content) == 0:
-            raise HTTPException(status_code=400, detail="Empty file uploaded")
-
-        logger.info(f"Processing PDF file: {file.filename} ({len(file_content)} bytes)")
-
-        # Process PDF
-        result = await simple_pdf_service.extract_text_from_pdf(
-            file_content=file_content, filename=file.filename
-        )
-
-        if not result.get("success", False):
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to process PDF: {result.get('error', 'Unknown error')}",
-            )
-
-        return {
-            "success": True,
-            "filename": result["filename"],
-            "extracted_text": result["extracted_text"],
-            "metadata": result["metadata"],
-            "message": "PDF processed successfully",
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error processing PDF: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@router.post("/extract-and-format", response_model=Dict[str, Any])
-async def extract_and_format_pdf(
-    file: UploadFile = File(...), document_type: str = "general"
-) -> Dict[str, Any]:
-    """
-    Extract text from PDF and format it using LLM
-
-    Args:
-        file: PDF file to process
-        document_type: Type of document (cv, report, letter, general)
-
-    Returns:
-        Dict containing extracted and formatted text
-    """
-    try:
-        # Validate file type
-        if not file.filename or not file.filename.lower().endswith(".pdf"):
-            raise HTTPException(status_code=400, detail="Only PDF files are supported")
-
-        # Read file content
-        file_content = await file.read()
-
-        if len(file_content) == 0:
-            raise HTTPException(status_code=400, detail="Empty file uploaded")
-
-        logger.info(
-            f"Processing and formatting PDF: {file.filename} ({len(file_content)} bytes)"
-        )
-
-        # Extract text from PDF
-        extract_result = await simple_pdf_service.extract_text_from_pdf(
-            file_content=file_content, filename=file.filename
-        )
-
-        # Luôn lấy text, ngay cả khi extraction thất bại
-        extracted_text = extract_result.get("extracted_text", "")
-        extraction_success = extract_result.get("success", False)
-
-        # Format text using LLM - ngay cả khi extracted_text rỗng hoặc có lỗi
-        if extracted_text.strip():
-            format_result = await llm_service.format_document_text(
-                raw_text=extracted_text, document_type=document_type
-            )
-        else:
-            # Nếu không có text, tạo thông báo để LLM format
-            fallback_text = f"[PDF_PROCESSING_INFO] File: {file.filename}\nStatus: Could not extract text from PDF. This may be a scanned document or image-based PDF.\nSuggestion: Please try using OCR tools or convert to text format."
-            format_result = await llm_service.format_document_text(
-                raw_text=fallback_text, document_type="info"
-            )
-
-        extraction_success = extract_result.get("success", False)
-
-        return {
-            "success": True,  # Luôn trả về success
-            "filename": extract_result["filename"],
-            "extraction_metadata": extract_result["metadata"],
-            "extraction_success": extraction_success,
-            "extracted_text": extracted_text,
-            "formatted_text": format_result.get("formatted_text", extracted_text),
-            "formatting_success": format_result.get("success", False),
-            "formatting_error": format_result.get("error"),
-            "document_type": document_type,
-            "message": "PDF processed and formatted successfully"
-            if extraction_success
-            else "PDF processed with limited text extraction, but formatting applied",
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error processing and formatting PDF: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@router.post("/format-text", response_model=Dict[str, Any])
-async def format_text_only(request: FormatTextRequest) -> Dict[str, Any]:
-    """
-    Format text using LLM (without PDF extraction)
-
-    Args:
-        request: Text and document type to format
-
-    Returns:
-        Dict containing formatted text
-    """
-    try:
-        if not request.text.strip():
-            raise HTTPException(status_code=400, detail="Text cannot be empty")
-
-        logger.info(f"Formatting text of length: {len(request.text)} characters")
-
-        # Format text using LLM
-        format_result = await llm_service.format_document_text(
-            raw_text=request.text, document_type=request.document_type or "general"
-        )
-
-        return {
-            "success": format_result.get("success", False),
-            "original_text": request.text,
-            "formatted_text": format_result.get("formatted_text", request.text),
-            "formatting_error": format_result.get("error"),
-            "document_type": request.document_type,
-            "original_length": len(request.text),
-            "formatted_length": len(format_result.get("formatted_text", "")),
-            "message": "Text formatted successfully"
-            if format_result.get("success")
-            else "Text formatting failed",
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error formatting text: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@router.post("/extract-and-parse", response_model=Dict[str, Any])
-async def extract_and_parse_cv(file: UploadFile = File(...)) -> Dict[str, Any]:
-    """
-    Extract text from PDF và parse thành structured CV data
-
-    Args:
-        file: PDF file to process
-
-    Returns:
-        Dict containing structured CV data with fields
-    """
-    try:
-        # Validate file type
-        if not file.filename or not file.filename.lower().endswith(".pdf"):
-            raise HTTPException(status_code=400, detail="Only PDF files are supported")
-
-        # Read file content
-        file_content = await file.read()
-
-        if len(file_content) == 0:
-            raise HTTPException(status_code=400, detail="Empty file uploaded")
-
-        logger.info(
-            f"Processing and parsing CV: {file.filename} ({len(file_content)} bytes)"
-        )
-
-        # Extract text from PDF
-        extract_result = await simple_pdf_service.extract_text_from_pdf(
-            file_content=file_content, filename=file.filename
-        )
-
-        extracted_text = extract_result.get("extracted_text", "")
-        extraction_success = extract_result.get("success", False)
-
-        if not extracted_text.strip():
-            raise HTTPException(
-                status_code=400, detail="Could not extract text from PDF"
-            )
-
-        # Parse CV to structured data
-        parse_result = await cv_parser_service.parse_cv_to_structured_data(
-            extracted_text
-        )
-
-        return {
-            "success": True,
-            "filename": extract_result["filename"],
-            "extraction_metadata": extract_result["metadata"],
-            "extraction_success": extraction_success,
-            "parsing_success": parse_result.get("success", False),
-            "parsing_method": parse_result.get("parsing_method", "unknown"),
-            "cv_data": parse_result.get("cv_data"),
-            "parsing_error": parse_result.get("error"),
-            "message": "CV processed and parsed successfully"
-            if parse_result.get("success")
-            else "CV processed but parsing failed",
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error processing and parsing CV: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@router.post("/parse-text", response_model=Dict[str, Any])
-async def parse_cv_text(request: FormatTextRequest) -> Dict[str, Any]:
-    """
-    Parse CV text thành structured data (without PDF extraction)
-
-    Args:
-        request: CV text to parse
-
-    Returns:
-        Dict containing structured CV data
-    """
-    try:
-        if not request.text.strip():
-            raise HTTPException(status_code=400, detail="Text cannot be empty")
-
-        logger.info(f"Parsing CV text of length: {len(request.text)} characters")
-
-        # Parse CV to structured data
-        parse_result = await cv_parser_service.parse_cv_to_structured_data(request.text)
-
-        return {
-            "success": parse_result.get("success", False),
-            "original_text": request.text,
-            "parsing_method": parse_result.get("parsing_method", "unknown"),
-            "cv_data": parse_result.get("cv_data"),
-            "parsing_error": parse_result.get("error"),
-            "message": "CV text parsed successfully"
-            if parse_result.get("success")
-            else "CV text parsing failed",
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error parsing CV text: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @router.post("/process-textbook-async", response_model=Dict[str, Any])
@@ -545,28 +258,26 @@ async def process_textbook(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.post("/process-textbook-enhanced", response_model=Dict[str, Any])
-async def process_textbook_enhanced(
+@router.post("/quick-textbook-analysis", response_model=Dict[str, Any])
+async def quick_textbook_analysis(
     file: UploadFile = File(...),
-    title: str = Form(...),
-    subject: str = Form("Chưa xác định"),
-    grade: str = Form("Chưa xác định"),
-    author: str = Form(None),
-    language: str = Form("vi"),
+    create_embeddings: bool = Form(True),
 ) -> Dict[str, Any]:
     """
-    Xử lý sách giáo khoa với OCR cải tiến và trả về cấu trúc: Sách → Chương → Bài → Nội dung
+    Phân tích nhanh cấu trúc sách giáo khoa với xử lý bất đồng bộ
+
+    Upload PDF và nhận task_id ngay lập tức. Hệ thống sẽ:
+    1. Phân tích cấu trúc sách (chapters, lessons)
+    2. Tự động trích xuất metadata
+    3. Tạo embeddings và lưu vào Qdrant (nếu được yêu cầu)
+    4. Trả về kết quả với định dạng giống /process-textbook
 
     Args:
-        file: PDF file sách giáo khoa
-        title: Tiêu đề sách
-        subject: Môn học (Toán, Lý, Hóa, ...)
-        grade: Lớp (10, 11, 12, ...)
-        author: Tác giả
-        language: Ngôn ngữ (vi, en)
+        file: PDF file của sách giáo khoa
+        create_embeddings: Có tạo embeddings cho RAG search không
 
     Returns:
-        Dict chứa cấu trúc sách hoàn chỉnh
+        Dict chứa task_id để theo dõi tiến độ
     """
     try:
         # Validate file type
@@ -580,127 +291,210 @@ async def process_textbook_enhanced(
             raise HTTPException(status_code=400, detail="Empty file uploaded")
 
         logger.info(
-            f"Processing enhanced textbook: {file.filename} ({len(file_content)} bytes)"
+            f"Starting quick analysis task for: {file.filename} ({len(file_content)} bytes)"
         )
 
-        # Prepare book metadata
-        book_metadata = {
-            "title": title,
-            "subject": subject,
-            "grade": grade,
-            "author": author,
-            "language": language,
-        }
-
-        # Process textbook with enhanced service
-        result = await enhanced_textbook_service.process_textbook_to_structure(
+        # Tạo task bất đồng bộ
+        task_id = await background_task_processor.create_quick_analysis_task(
             pdf_content=file_content,
             filename=file.filename,
-            book_metadata=book_metadata,
+            create_embeddings=create_embeddings,
         )
-
-        if not result.get("success", False):
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to process textbook: {result.get('error', 'Unknown error')}",
-            )
 
         return {
             "success": True,
+            "task_id": task_id,
             "filename": file.filename,
-            "book": result["book"],
-            "statistics": {
-                "total_pages": result.get("total_pages", 0),
-                "total_chapters": result.get("total_chapters", 0),
-                "total_lessons": result.get("total_lessons", 0),
+            "status": "processing",
+            "message": "Quick textbook analysis task created successfully. Use /api/v1/tasks/{task_id}/status to check progress.",
+            "endpoints": {
+                "check_status": f"/api/v1/tasks/{task_id}/status",
+                "get_result": f"/api/v1/tasks/{task_id}/result",
             },
-            "message": "Textbook processed successfully with enhanced OCR",
         }
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error processing enhanced textbook: {e}")
+        logger.error(f"Error creating quick analysis task: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.post("/quick-textbook-analysis", response_model=Dict[str, Any])
-async def quick_textbook_analysis(file: UploadFile = File(...)) -> Dict[str, Any]:
+@router.get("/textbooks", response_model=Dict[str, Any])
+async def list_all_textbooks() -> Dict[str, Any]:
     """
-    Phân tích nhanh cấu trúc sách giáo khoa (chỉ trả về outline, không xử lý nội dung chi tiết)
-
-    Args:
-        file: PDF file sách giáo khoa
+    Lấy danh sách tất cả sách giáo khoa đã được xử lý
 
     Returns:
-        Dict chứa outline cấu trúc sách
+        Dict chứa danh sách tất cả textbooks với ID và metadata
     """
     try:
-        # Validate file type
-        if not file.filename or not file.filename.lower().endswith(".pdf"):
-            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+        from app.services.qdrant_service import qdrant_service
 
-        # Read file content
-        file_content = await file.read()
+        # Lấy danh sách từ Qdrant collections
+        textbooks = []
 
-        if len(file_content) == 0:
-            raise HTTPException(status_code=400, detail="Empty file uploaded")
+        if qdrant_service.qdrant_client:
+            collections = qdrant_service.qdrant_client.get_collections().collections
 
-        logger.info(f"Quick analysis for: {file.filename} ({len(file_content)} bytes)")
+            for collection in collections:
+                if collection.name.startswith("textbook_"):
+                    book_id = collection.name.replace("textbook_", "")
 
-        # Extract pages for analysis only
-        pages_data = await enhanced_textbook_service._extract_pages_with_ocr(
-            file_content
-        )
+                    # Lấy metadata từ collection
+                    try:
+                        # Lấy một point bất kỳ để lấy metadata
+                        search_result = qdrant_service.qdrant_client.scroll(
+                            collection_name=collection.name, limit=1, with_payload=True
+                        )
 
-        # Analyze structure only
-        book_structure = (
-            await enhanced_textbook_service._analyze_book_structure_enhanced(
-                pages_data, {"title": file.filename.replace(".pdf", "")}
-            )
-        )
+                        if search_result[0]:  # Có points
+                            point = search_result[0][0]
+                            payload = point.payload or {}
 
-        # Return outline only
-        outline = {
-            "book_info": book_structure.get("book_info", {}),
-            "chapters_outline": [],
-        }
-
-        for chapter in book_structure.get("chapters", []):
-            chapter_outline = {
-                "chapter_id": chapter["chapter_id"],
-                "chapter_title": chapter["chapter_title"],
-                "page_range": f"{chapter['start_page']}-{chapter['end_page']}",
-                "lessons_count": len(chapter.get("lessons", [])),
-                "lessons_outline": [
-                    {
-                        "lesson_id": lesson["lesson_id"],
-                        "lesson_title": lesson["lesson_title"],
-                        "page_range": f"{lesson['start_page']}-{lesson['end_page']}",
-                    }
-                    for lesson in chapter.get("lessons", [])
-                ],
-            }
-            outline["chapters_outline"].append(chapter_outline)
+                            textbooks.append(
+                                {
+                                    "book_id": book_id,
+                                    "title": payload.get("book_title", "Unknown"),
+                                    "subject": payload.get("subject", "Unknown"),
+                                    "grade": payload.get("grade", "Unknown"),
+                                    "collection_name": collection.name,
+                                    "vector_count": getattr(
+                                        collection, "vectors_count", 0
+                                    ),
+                                    "status": "available",
+                                }
+                            )
+                    except Exception as e:
+                        logger.warning(f"Error getting metadata for {book_id}: {e}")
+                        textbooks.append(
+                            {
+                                "book_id": book_id,
+                                "title": "Unknown",
+                                "collection_name": collection.name,
+                                "vector_count": getattr(collection, "vectors_count", 0),
+                                "status": "available",
+                                "error": str(e),
+                            }
+                        )
 
         return {
             "success": True,
-            "filename": file.filename,
-            "outline": outline,
-            "statistics": {
-                "total_pages": len(pages_data),
-                "total_chapters": len(outline["chapters_outline"]),
-                "total_lessons": sum(
-                    ch["lessons_count"] for ch in outline["chapters_outline"]
-                ),
-            },
-            "message": "Quick textbook analysis completed",
+            "total_textbooks": len(textbooks),
+            "textbooks": textbooks,
+            "message": f"Found {len(textbooks)} textbooks",
         }
 
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error in quick textbook analysis: {e}")
+        logger.error(f"Error listing textbooks: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/textbooks-full", response_model=Dict[str, Any])
+async def list_all_textbooks_full_format() -> Dict[str, Any]:
+    """
+    Lấy danh sách tất cả sách giáo khoa với format đầy đủ như /process-textbook
+
+    Returns:
+        Dict chứa danh sách tất cả textbooks với format đầy đủ
+    """
+    try:
+        from app.services.qdrant_service import qdrant_service
+        from qdrant_client import models as qdrant_models
+
+        # Lấy danh sách từ Qdrant collections
+        textbooks = []
+
+        if qdrant_service.qdrant_client:
+            collections = qdrant_service.qdrant_client.get_collections().collections
+
+            for collection in collections:
+                if collection.name.startswith("textbook_"):
+                    book_id = collection.name.replace("textbook_", "")
+
+                    # Tìm metadata point để lấy original_book_structure
+                    try:
+                        search_result = qdrant_service.qdrant_client.scroll(
+                            collection_name=collection.name,
+                            scroll_filter=qdrant_models.Filter(
+                                must=[
+                                    qdrant_models.FieldCondition(
+                                        key="type",
+                                        match=qdrant_models.MatchValue(
+                                            value="metadata"
+                                        ),
+                                    )
+                                ]
+                            ),
+                            limit=1,
+                            with_payload=True,
+                        )
+
+                        if search_result[0]:  # Có metadata point
+                            metadata_point = search_result[0][0]
+                            payload = metadata_point.payload or {}
+
+                            # Lấy original_book_structure nếu có
+                            original_structure = payload.get("original_book_structure")
+
+                            if original_structure:
+                                # Trả về format đầy đủ như /process-textbook
+                                textbook_data = {
+                                    "success": True,
+                                    "book_id": book_id,
+                                    "filename": f"{book_id}.pdf",  # Không có filename gốc
+                                    "book_structure": original_structure,
+                                    "statistics": {
+                                        "total_pages": payload.get(
+                                            "book_total_pages", 0
+                                        ),
+                                        "total_chapters": len(
+                                            original_structure.get("chapters", [])
+                                        ),
+                                        "total_lessons": sum(
+                                            len(ch.get("lessons", []))
+                                            for ch in original_structure.get(
+                                                "chapters", []
+                                            )
+                                        ),
+                                    },
+                                    "processing_info": {
+                                        "ocr_applied": True,
+                                        "llm_analysis": True,
+                                        "processing_method": "retrieved_from_qdrant",
+                                        "processed_at": payload.get("processed_at"),
+                                    },
+                                    "embeddings_created": True,
+                                    "embeddings_info": {
+                                        "collection_name": collection.name,
+                                        "vector_count": getattr(
+                                            collection, "vectors_count", 0
+                                        ),
+                                        "vector_dimension": 384,  # Default dimension
+                                    },
+                                    "message": "Textbook retrieved successfully from Qdrant vector database",
+                                }
+                                textbooks.append(textbook_data)
+                            else:
+                                # Fallback format nếu không có original_structure
+                                logger.warning(
+                                    f"No original_book_structure found for {book_id}"
+                                )
+
+                    except Exception as e:
+                        logger.warning(
+                            f"Error getting full metadata for {book_id}: {e}"
+                        )
+
+        return {
+            "success": True,
+            "total_textbooks": len(textbooks),
+            "textbooks": textbooks,
+            "message": f"Found {len(textbooks)} textbooks with full format",
+        }
+
+    except Exception as e:
+        logger.error(f"Error listing textbooks with full format: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
@@ -774,6 +568,14 @@ async def get_textbook_structure(book_id: str) -> Dict[str, Any]:
                                     }
                                 )
 
+                    # Thêm lesson IDs để có thể sử dụng API endpoints
+                    for chapter in chapters.values():
+                        for lesson in chapter.get("lessons", []):
+                            lesson["api_endpoints"] = {
+                                "get_content": f"/api/v1/pdf/textbook/{book_id}/lesson/{lesson.get('lesson_id')}",
+                                "search": f"/api/v1/pdf/textbook/{book_id}/search?query=<your_query>",
+                            }
+
                     structure = {
                         "metadata": {
                             "book_id": book_id,
@@ -787,6 +589,11 @@ async def get_textbook_structure(book_id: str) -> Dict[str, Any]:
                             "source": "qdrant",
                         },
                         "chapters": list(chapters.values()),
+                        "api_usage": {
+                            "book_structure": f"/api/v1/pdf/textbook/{book_id}/structure",
+                            "search_book": f"/api/v1/pdf/textbook/{book_id}/search?query=<your_query>",
+                            "global_search": "/api/v1/pdf/search?query=<your_query>",
+                        },
                     }
 
                     return {"success": True, "book_id": book_id, "structure": structure}
@@ -810,7 +617,7 @@ async def get_textbook_structure(book_id: str) -> Dict[str, Any]:
 @router.get("/textbook/{book_id}/lesson/{lesson_id}", response_model=Dict[str, Any])
 async def get_lesson_content(book_id: str, lesson_id: str) -> Dict[str, Any]:
     """
-    Lấy nội dung chi tiết của một bài học
+    Lấy nội dung chi tiết của một bài học từ Qdrant hoặc file system
 
     Args:
         book_id: ID của sách
@@ -820,22 +627,168 @@ async def get_lesson_content(book_id: str, lesson_id: str) -> Dict[str, Any]:
         Dict containing lesson content
     """
     try:
+        # Thử lấy từ file system trước (legacy data)
         lesson_content = await textbook_parser_service.get_lesson_content(
             book_id, lesson_id
         )
 
-        if not lesson_content:
+        if lesson_content:
+            return {
+                "success": True,
+                "book_id": book_id,
+                "lesson_id": lesson_id,
+                "content": lesson_content,
+                "source": "file_system",
+            }
+
+        # Nếu không tìm thấy trong file system, thử lấy từ Qdrant
+        from app.services.qdrant_service import qdrant_service
+        from qdrant_client import models as qdrant_models
+
+        collection_name = f"textbook_{book_id}"
+
+        try:
+            if not qdrant_service.qdrant_client:
+                raise Exception("Qdrant client not available")
+
+            # Tìm tất cả chunks của lesson này
+            search_result = qdrant_service.qdrant_client.scroll(
+                collection_name=collection_name,
+                scroll_filter=qdrant_models.Filter(
+                    must=[
+                        qdrant_models.FieldCondition(
+                            key="lesson_id",
+                            match=qdrant_models.MatchValue(value=lesson_id),
+                        )
+                    ]
+                ),
+                limit=100,
+                with_payload=True,
+            )
+
+            if not search_result[0]:  # Không có points
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Lesson '{lesson_id}' not found in textbook '{book_id}'",
+                )
+
+            # Tổng hợp nội dung từ các chunks
+            lesson_chunks = []
+            lesson_info = {}
+
+            for point in search_result[0]:
+                payload = point.payload or {}
+
+                # Lấy thông tin lesson từ chunk đầu tiên
+                if not lesson_info:
+                    lesson_info = {
+                        "lesson_id": lesson_id,
+                        "lesson_title": payload.get("lesson_title", "Unknown"),
+                        "chapter_id": payload.get("chapter_id", "Unknown"),
+                        "chapter_title": payload.get("chapter_title", "Unknown"),
+                        "book_title": payload.get("book_title", "Unknown"),
+                        "subject": payload.get("subject", "Unknown"),
+                        "grade": payload.get("grade", "Unknown"),
+                        # Lấy thông tin pages và images từ payload
+                        "lesson_start_page": payload.get("lesson_start_page"),
+                        "lesson_end_page": payload.get("lesson_end_page"),
+                        "lesson_images": payload.get("lesson_images", []),
+                        "lesson_pages": payload.get("lesson_pages", []),
+                        "lesson_total_pages": payload.get("lesson_total_pages", 0),
+                        "lesson_has_images": payload.get("lesson_has_images", False),
+                    }
+
+                lesson_chunks.append(
+                    {
+                        "type": payload.get("type", "content"),
+                        "text": payload.get("text", ""),
+                        "chunk_id": str(point.id),
+                    }
+                )
+
+            # Sắp xếp chunks theo type (title trước, content sau)
+            lesson_chunks.sort(key=lambda x: 0 if x["type"] == "title" else 1)
+
+            # Tạo content text từ các chunks
+            content_text_parts = []
+            for chunk in lesson_chunks:
+                if chunk.get("type") == "title":
+                    content_text_parts.append(f"\n=== {chunk.get('text', '')} ===\n")
+                else:
+                    content_text_parts.append(chunk.get("text", ""))
+
+            content_text = "\n\n".join(content_text_parts).strip()
+
+            # Tạo cấu trúc giống /process-textbook
+            book_structure = {
+                "book_info": {
+                    "title": lesson_info.get("book_title", "Unknown"),
+                    "subject": lesson_info.get("subject", "Unknown"),
+                    "grade": lesson_info.get("grade", "Unknown"),
+                    "book_id": book_id,
+                    "total_pages": "Unknown",  # Không có thông tin pages từ Qdrant
+                },
+                "chapters": [
+                    {
+                        "chapter_id": lesson_info.get("chapter_id"),
+                        "chapter_title": lesson_info.get("chapter_title"),
+                        "lessons": [
+                            {
+                                "lesson_id": lesson_id,
+                                "lesson_title": lesson_info.get("lesson_title"),
+                                "start_page": lesson_info.get("lesson_start_page"),
+                                "end_page": lesson_info.get("lesson_end_page"),
+                                "content": {
+                                    "text": content_text,
+                                    "images": lesson_info.get("lesson_images", []),
+                                    "pages": lesson_info.get("lesson_pages", []),
+                                    "total_pages": lesson_info.get(
+                                        "lesson_total_pages", 0
+                                    ),
+                                    "has_images": lesson_info.get(
+                                        "lesson_has_images", False
+                                    ),
+                                    "chunks_info": {
+                                        "total_chunks": len(lesson_chunks),
+                                        "chunk_types": list(
+                                            set(
+                                                chunk.get("type", "content")
+                                                for chunk in lesson_chunks
+                                            )
+                                        ),
+                                    },
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+
+            return {
+                "success": True,
+                "book_id": book_id,
+                "lesson_id": lesson_id,
+                "book_structure": book_structure,
+                "source": "qdrant",
+                "statistics": {
+                    "total_chapters": 1,
+                    "total_lessons": 1,
+                    "total_chunks": len(lesson_chunks),
+                },
+                "navigation": {
+                    "book_structure": f"/api/v1/pdf/textbook/{book_id}/structure",
+                    "search_in_book": f"/api/v1/pdf/textbook/{book_id}/search?query=<your_query>",
+                    "global_search": "/api/v1/pdf/search?query=<your_query>",
+                },
+                "message": f"Lesson '{lesson_id}' retrieved successfully from vector database",
+            }
+
+        except Exception as e:
+            logger.warning(f"Error getting lesson from Qdrant: {e}")
             raise HTTPException(
                 status_code=404,
                 detail=f"Lesson '{lesson_id}' not found in textbook '{book_id}'",
             )
-
-        return {
-            "success": True,
-            "book_id": book_id,
-            "lesson_id": lesson_id,
-            "content": lesson_content,
-        }
 
     except HTTPException:
         raise
@@ -980,14 +933,33 @@ async def health_check():
             "status": "healthy",
             "services": {
                 "pdf_ocr": "available",
-                "llm_formatting": "available" if llm_available else "unavailable",
-                "cv_parsing": "available" if llm_available else "basic_only",
+                "llm_analysis": "available" if llm_available else "unavailable",
                 "textbook_processing": "available",
+                "async_processing": "available",
+                "vector_search": "available",
             },
             "supported_languages": supported_langs,
             "llm_status": "Gemini API configured"
             if llm_available
             else "Gemini API not configured",
+            "available_endpoints": [
+                "/process-textbook-async",
+                "/process-textbook",
+                "/quick-textbook-analysis",
+                "/textbooks",  # NEW: List all textbooks
+                "/textbook/{book_id}/structure",
+                "/textbook/{book_id}/lesson/{lesson_id}",
+                "/textbook/{book_id}/search",
+                "/search",
+                "/health",
+            ],
+            "usage_flow": {
+                "1": "Upload PDF: POST /process-textbook-async",
+                "2": "List textbooks: GET /textbooks",
+                "3": "Get structure: GET /textbook/{book_id}/structure",
+                "4": "Get lesson: GET /textbook/{book_id}/lesson/{lesson_id}",
+                "5": "Search: GET /search?query=your_query",
+            },
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")

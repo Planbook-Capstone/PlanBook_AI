@@ -28,6 +28,7 @@ class TaskType(str, Enum):
 
     PROCESS_TEXTBOOK = "process_textbook"
     PROCESS_TEXTBOOK_AUTO = "process_textbook_auto"
+    QUICK_ANALYSIS = "quick_analysis"
     PROCESS_CV = "process_cv"
     CREATE_EMBEDDINGS = "create_embeddings"
     GENERATE_LESSON_PLAN = "generate_lesson_plan"
@@ -243,6 +244,14 @@ class TaskService:
                 return "2-5 minutes"
             else:
                 return "5-10 minutes"
+        elif task_type == TaskType.QUICK_ANALYSIS:
+            file_size = len(task_data.get("file_content", b""))
+            if file_size < 1024 * 1024:  # < 1MB
+                return "30-60 seconds"
+            elif file_size < 10 * 1024 * 1024:  # < 10MB
+                return "1-2 minutes"
+            else:
+                return "2-3 minutes"
         elif task_type == TaskType.PROCESS_CV:
             return "30-60 seconds"
         elif task_type == TaskType.CREATE_EMBEDDINGS:
