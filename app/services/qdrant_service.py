@@ -379,7 +379,7 @@ class QdrantService:
                 query_vector=query_vector,
                 limit=limit,
                 with_payload=True,
-                score_threshold=0.5,  # Lọc kết quả có độ tương đồng > 0.5
+                score_threshold=0.3,  # Giảm threshold để có nhiều kết quả hơn
             )
 
             # Format kết quả

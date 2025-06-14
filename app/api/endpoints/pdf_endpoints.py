@@ -627,14 +627,89 @@ async def get_textbook_structure(book_id: str) -> Dict[str, Any]:
         Dict containing book structure
     """
     try:
+        # Thử lấy từ file system trước (legacy data)
         structure = await textbook_parser_service.get_book_structure(book_id)
 
-        if not structure:
-            raise HTTPException(
-                status_code=404, detail=f"Textbook with ID '{book_id}' not found"
-            )
+        if structure:
+            return {"success": True, "book_id": book_id, "structure": structure}
 
-        return {"success": True, "book_id": book_id, "structure": structure}
+        # Nếu không tìm thấy trong file system, thử lấy từ Qdrant
+        from app.services.qdrant_service import qdrant_service
+
+        # Kiểm tra collection có tồn tại không
+        collection_name = f"textbook_{book_id}"
+        try:
+            if not qdrant_service.qdrant_client:
+                raise Exception("Qdrant client not available")
+
+            collections = qdrant_service.qdrant_client.get_collections().collections
+            existing_names = [c.name for c in collections]
+
+            if collection_name in existing_names:
+                # Lấy tất cả points từ collection để tạo structure
+                all_points = qdrant_service.qdrant_client.scroll(
+                    collection_name=collection_name,
+                    limit=1000,
+                    with_payload=True,
+                )
+
+                if all_points[0]:  # Có data
+                    metadata = None
+                    chapters = {}
+
+                    # Phân loại points
+                    for point in all_points[0]:
+                        payload = point.payload or {}
+                        point_type = payload.get("type", "")
+
+                        if point_type == "metadata":
+                            metadata = payload
+                        elif point_type == "title":
+                            chapter_id = payload.get("chapter_id")
+                            chapter_title = payload.get("chapter_title")
+                            lesson_id = payload.get("lesson_id")
+                            lesson_title = payload.get("lesson_title")
+
+                            if chapter_id and chapter_id not in chapters:
+                                chapters[chapter_id] = {
+                                    "chapter_id": chapter_id,
+                                    "chapter_title": chapter_title,
+                                    "lessons": [],
+                                }
+
+                            if chapter_id and lesson_id:
+                                chapters[chapter_id]["lessons"].append(
+                                    {
+                                        "lesson_id": lesson_id,
+                                        "lesson_title": lesson_title,
+                                    }
+                                )
+
+                    structure = {
+                        "metadata": {
+                            "book_id": book_id,
+                            "total_chunks": metadata.get("total_chunks", 0)
+                            if metadata
+                            else 0,
+                            "processed_at": metadata.get("processed_at")
+                            if metadata
+                            else None,
+                            "model": metadata.get("model") if metadata else None,
+                            "source": "qdrant",
+                        },
+                        "chapters": list(chapters.values()),
+                    }
+
+                    return {"success": True, "book_id": book_id, "structure": structure}
+
+        except Exception as e:
+            logger.warning(f"Error checking Qdrant for book {book_id}: {e}")
+
+        # Không tìm thấy ở đâu cả
+        raise HTTPException(
+            status_code=404,
+            detail=f"Textbook with ID '{book_id}' not found in file system or Qdrant",
+        )
 
     except HTTPException:
         raise
@@ -698,23 +773,24 @@ async def search_textbook(
     try:
         from app.services.qdrant_service import qdrant_service
 
-        # Kiểm tra xem sách có tồn tại không
-        structure = await textbook_parser_service.get_book_structure(book_id)
-        if not structure:
-            raise HTTPException(
-                status_code=404, detail=f"Textbook with ID '{book_id}' not found"
-            )
-
-        # Tìm kiếm với Qdrant
+        # Tìm kiếm trực tiếp với Qdrant (không cần kiểm tra file system)
         search_result = await qdrant_service.search_textbook(
             book_id=book_id, query=query, limit=limit
         )
 
         if not search_result.get("success", False):
-            raise HTTPException(
-                status_code=500,
-                detail=f"Search failed: {search_result.get('error', 'Unknown error')}",
-            )
+            # Nếu search failed, có thể do collection không tồn tại
+            error_msg = search_result.get("error", "Unknown error")
+            if "Collection not found" in error_msg:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Textbook with ID '{book_id}' not found. Please process the textbook first.",
+                )
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Search failed: {error_msg}",
+                )
 
         return {
             "success": True,
