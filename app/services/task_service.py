@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 class TaskStatus(str, Enum):
     """Trạng thái của task"""
+
     PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
@@ -24,7 +25,9 @@ class TaskStatus(str, Enum):
 
 class TaskType(str, Enum):
     """Loại task"""
+
     PROCESS_TEXTBOOK = "process_textbook"
+    PROCESS_TEXTBOOK_AUTO = "process_textbook_auto"
     PROCESS_CV = "process_cv"
     CREATE_EMBEDDINGS = "create_embeddings"
     GENERATE_LESSON_PLAN = "generate_lesson_plan"
@@ -39,21 +42,21 @@ class TaskService:
         self._lock = threading.Lock()
 
     def create_task(
-        self, 
-        task_type: TaskType, 
-        task_data: Dict[str, Any], 
+        self,
+        task_type: TaskType,
+        task_data: Dict[str, Any],
         task_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Tạo task mới
-        
+
         Args:
             task_type: Loại task
             task_data: Dữ liệu task
             task_id: ID tùy chỉnh (optional)
             metadata: Metadata bổ sung (optional)
-            
+
         Returns:
             Task ID
         """
@@ -74,7 +77,7 @@ class TaskService:
                 "metadata": metadata or {},
                 "result": None,
                 "error": None,
-                "estimated_duration": self._estimate_duration(task_type, task_data)
+                "estimated_duration": self._estimate_duration(task_type, task_data),
             }
 
             self.tasks[task_id] = task
@@ -87,37 +90,53 @@ class TaskService:
         with self._lock:
             return self.tasks.get(task_id)
 
-    def get_all_tasks(self, limit: int = 100, status_filter: Optional[TaskStatus] = None) -> Dict[str, Any]:
+    def get_all_tasks(
+        self, limit: int = 100, status_filter: Optional[TaskStatus] = None
+    ) -> Dict[str, Any]:
         """
         Lấy danh sách tất cả tasks
-        
+
         Args:
             limit: Số lượng tasks tối đa
             status_filter: Lọc theo status
-            
+
         Returns:
             Dict chứa thống kê và danh sách tasks
         """
         with self._lock:
             tasks = list(self.tasks.values())
-            
+
             # Filter by status if provided
             if status_filter:
                 tasks = [t for t in tasks if t["status"] == status_filter.value]
-            
+
             # Sort by created_at desc
             tasks.sort(key=lambda x: x["created_at"], reverse=True)
-            
+
             # Limit results
             tasks = tasks[:limit]
-            
+
             return {
                 "tasks": tasks,
                 "total_tasks": len(self.tasks),
                 "processing_tasks": len(self.processing_tasks),
-                "completed_tasks": len([t for t in self.tasks.values() if t["status"] == TaskStatus.COMPLETED]),
-                "failed_tasks": len([t for t in self.tasks.values() if t["status"] == TaskStatus.FAILED]),
-                "pending_tasks": len([t for t in self.tasks.values() if t["status"] == TaskStatus.PENDING]),
+                "completed_tasks": len(
+                    [
+                        t
+                        for t in self.tasks.values()
+                        if t["status"] == TaskStatus.COMPLETED
+                    ]
+                ),
+                "failed_tasks": len(
+                    [t for t in self.tasks.values() if t["status"] == TaskStatus.FAILED]
+                ),
+                "pending_tasks": len(
+                    [
+                        t
+                        for t in self.tasks.values()
+                        if t["status"] == TaskStatus.PENDING
+                    ]
+                ),
             }
 
     def update_task_progress(self, task_id: str, progress: int, message: str = None):
@@ -161,7 +180,7 @@ class TaskService:
     def cancel_task(self, task_id: str) -> bool:
         """
         Hủy task (chỉ có thể hủy task pending)
-        
+
         Returns:
             True nếu hủy thành công, False nếu không thể hủy
         """
@@ -179,7 +198,7 @@ class TaskService:
     def delete_task(self, task_id: str) -> bool:
         """
         Xóa task (chỉ có thể xóa task completed hoặc failed)
-        
+
         Returns:
             True nếu xóa thành công, False nếu không thể xóa
         """
@@ -216,7 +235,7 @@ class TaskService:
 
     def _estimate_duration(self, task_type: TaskType, task_data: Dict[str, Any]) -> str:
         """Ước tính thời gian xử lý"""
-        if task_type == TaskType.PROCESS_TEXTBOOK:
+        if task_type in [TaskType.PROCESS_TEXTBOOK, TaskType.PROCESS_TEXTBOOK_AUTO]:
             file_size = len(task_data.get("file_content", b""))
             if file_size < 1024 * 1024:  # < 1MB
                 return "1-2 minutes"
@@ -242,7 +261,7 @@ class TaskService:
                     "total_tasks": 0,
                     "status_distribution": {},
                     "type_distribution": {},
-                    "average_processing_time": 0
+                    "average_processing_time": 0,
                 }
 
             status_counts = {}
@@ -265,14 +284,16 @@ class TaskService:
                     duration = (end - start).total_seconds()
                     processing_times.append(duration)
 
-            avg_processing_time = sum(processing_times) / len(processing_times) if processing_times else 0
+            avg_processing_time = (
+                sum(processing_times) / len(processing_times) if processing_times else 0
+            )
 
             return {
                 "total_tasks": total,
                 "status_distribution": status_counts,
                 "type_distribution": type_counts,
                 "average_processing_time": round(avg_processing_time, 2),
-                "processing_tasks_count": len(self.processing_tasks)
+                "processing_tasks_count": len(self.processing_tasks),
             }
 
 

@@ -75,7 +75,9 @@ async def get_task_status(task_id: str) -> Dict[str, Any]:
 @router.get("/", response_model=Dict[str, Any])
 async def get_all_tasks(
     limit: int = Query(100, ge=1, le=1000, description="Số lượng tasks tối đa"),
-    status: str = Query(None, description="Lọc theo status (pending, processing, completed, failed)")
+    status: str = Query(
+        None, description="Lọc theo status (pending, processing, completed, failed)"
+    ),
 ) -> Dict[str, Any]:
     """
     Lấy danh sách tất cả tasks với filtering
@@ -93,31 +95,28 @@ async def get_all_tasks(
     try:
         # Get all tasks
         result = background_task_processor.get_all_tasks()
-        
+
         # Filter by status if provided
         if status:
             valid_statuses = ["pending", "processing", "completed", "failed"]
             if status not in valid_statuses:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid status. Valid values: {valid_statuses}"
+                    detail=f"Invalid status. Valid values: {valid_statuses}",
                 )
-            
+
             # Filter tasks by status
             filtered_tasks = [t for t in result["tasks"] if t["status"] == status]
             result["tasks"] = filtered_tasks[:limit]
         else:
             result["tasks"] = result["tasks"][:limit]
-        
+
         return {
             "success": True,
             "data": result,
-            "filters": {
-                "limit": limit,
-                "status": status
-            }
+            "filters": {"limit": limit, "status": status},
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -144,15 +143,14 @@ async def cancel_task(task_id: str) -> Dict[str, Any]:
         task = background_task_processor.get_task_status(task_id)
         if not task:
             raise HTTPException(
-                status_code=404,
-                detail=f"Task with ID {task_id} not found"
+                status_code=404, detail=f"Task with ID {task_id} not found"
             )
 
         # Try to cancel (for now, just mark as failed)
         if task["status"] not in ["pending"]:
             raise HTTPException(
                 status_code=400,
-                detail=f"Cannot cancel task {task_id}. Only pending tasks can be cancelled. Current status: {task['status']}"
+                detail=f"Cannot cancel task {task_id}. Only pending tasks can be cancelled. Current status: {task['status']}",
             )
 
         # Mark task as cancelled
@@ -161,7 +159,7 @@ async def cancel_task(task_id: str) -> Dict[str, Any]:
         return {
             "success": True,
             "message": f"Task {task_id} cancelled successfully",
-            "task_id": task_id
+            "task_id": task_id,
         }
 
     except HTTPException:
@@ -173,7 +171,9 @@ async def cancel_task(task_id: str) -> Dict[str, Any]:
 
 @router.post("/cleanup")
 async def cleanup_old_tasks(
-    max_age_hours: int = Query(24, ge=1, le=168, description="Tuổi tối đa của tasks (giờ)")
+    max_age_hours: int = Query(
+        24, ge=1, le=168, description="Tuổi tối đa của tasks (giờ)"
+    ),
 ) -> Dict[str, Any]:
     """
     Dọn dẹp tasks cũ (completed/failed)
@@ -192,7 +192,9 @@ async def cleanup_old_tasks(
         before_count = len(background_task_processor.task_service.tasks)
 
         # Perform cleanup
-        background_task_processor.task_service.cleanup_old_tasks(max_age_hours=max_age_hours)
+        background_task_processor.task_service.cleanup_old_tasks(
+            max_age_hours=max_age_hours
+        )
 
         # Count tasks after cleanup
         after_count = len(background_task_processor.task_service.tasks)
@@ -204,7 +206,7 @@ async def cleanup_old_tasks(
             "tasks_before": before_count,
             "tasks_after": after_count,
             "tasks_cleaned": cleaned_count,
-            "max_age_hours": max_age_hours
+            "max_age_hours": max_age_hours,
         }
 
     except Exception as e:
@@ -229,9 +231,12 @@ async def get_task_statistics() -> Dict[str, Any]:
         return {
             "success": True,
             "statistics": stats,
-            "timestamp": background_task_processor.task_service.tasks and max(
-                task["created_at"] for task in background_task_processor.task_service.tasks.values()
-            ) or None
+            "timestamp": background_task_processor.task_service.tasks
+            and max(
+                task["created_at"]
+                for task in background_task_processor.task_service.tasks.values()
+            )
+            or None,
         }
 
     except Exception as e:
@@ -249,12 +254,19 @@ async def get_task_types() -> Dict[str, Any]:
     """
     return {
         "success": True,
-        "task_types": ["process_textbook", "process_cv", "create_embeddings", "generate_lesson_plan"],
+        "task_types": [
+            "process_textbook",
+            "process_textbook_auto",
+            "process_cv",
+            "create_embeddings",
+            "generate_lesson_plan",
+        ],
         "task_statuses": ["pending", "processing", "completed", "failed"],
         "descriptions": {
-            "process_textbook": "Xử lý sách giáo khoa PDF với OCR và embeddings",
+            "process_textbook": "Xử lý sách giáo khoa PDF với metadata từ người dùng",
+            "process_textbook_auto": "Xử lý sách giáo khoa PDF với tự động phân tích metadata",
             "process_cv": "Xử lý CV/Resume với OCR",
             "create_embeddings": "Tạo embeddings cho RAG search",
-            "generate_lesson_plan": "Tạo giáo án từ nội dung sách"
-        }
+            "generate_lesson_plan": "Tạo giáo án từ nội dung sách",
+        },
     }

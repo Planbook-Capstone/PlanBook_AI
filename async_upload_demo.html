@@ -168,44 +168,26 @@
 
         <div class="upload-section">
             <h3>📤 Upload PDF Textbook</h3>
+            <div class="info-box" style="background: #e8f5e8; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                <h4>🤖 Tự động phân tích metadata</h4>
+                <p>Hệ thống sẽ tự động phân tích và trích xuất thông tin từ PDF:</p>
+                <ul style="margin: 10px 0; padding-left: 20px;">
+                    <li>📚 Tên sách</li>
+                    <li>📖 Môn học</li>
+                    <li>🎓 Lớp</li>
+                    <li>✍️ Tác giả</li>
+                    <li>🏢 Nhà xuất bản</li>
+                </ul>
+                <p><em>Không cần nhập thông tin thủ công!</em></p>
+            </div>
+
             <form id="uploadForm">
                 <div class="form-group">
                     <label for="pdfFile">Chọn file PDF:</label>
                     <input type="file" id="pdfFile" accept=".pdf" required>
                 </div>
 
-                <div class="form-group">
-                    <label for="bookId">Book ID:</label>
-                    <input type="text" id="bookId" placeholder="vd: hoa12_async" required>
-                </div>
-
-                <div class="form-group">
-                    <label for="bookTitle">Tiêu đề sách:</label>
-                    <input type="text" id="bookTitle" placeholder="vd: Hóa học 12" required>
-                </div>
-
-                <div class="form-group">
-                    <label for="subject">Môn học:</label>
-                    <select id="subject" required>
-                        <option value="">Chọn môn học</option>
-                        <option value="Hóa học">Hóa học</option>
-                        <option value="Vật lý">Vật lý</option>
-                        <option value="Sinh học">Sinh học</option>
-                        <option value="Toán học">Toán học</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label for="grade">Lớp:</label>
-                    <select id="grade" required>
-                        <option value="">Chọn lớp</option>
-                        <option value="10">Lớp 10</option>
-                        <option value="11">Lớp 11</option>
-                        <option value="12">Lớp 12</option>
-                    </select>
-                </div>
-
-                <button type="submit" id="uploadBtn">🚀 Upload & Process (Async)</button>
+                <button type="submit" id="uploadBtn">🚀 Upload & Auto Process</button>
             </form>
         </div>
 
@@ -262,15 +244,8 @@
                 return;
             }
 
-            const metadata = {
-                id: document.getElementById('bookId').value,
-                title: document.getElementById('bookTitle').value,
-                subject: document.getElementById('subject').value,
-                grade: document.getElementById('grade').value
-            };
-
             log(`🚀 Starting upload: ${file.name}`);
-            log(`📚 Metadata: ${JSON.stringify(metadata)}`);
+            log(`🤖 Auto metadata detection enabled`);
 
             // Disable upload button
             document.getElementById('uploadBtn').disabled = true;
@@ -279,7 +254,6 @@
             try {
                 const formData = new FormData();
                 formData.append('file', file);
-                formData.append('metadata', JSON.stringify(metadata));
                 formData.append('create_embeddings', 'true'); // Bật embeddings để lưu vào Qdrant
 
                 log(`📡 Sending request to: ${API_BASE}/process-textbook-async`);
@@ -316,7 +290,7 @@
             } finally {
                 // Re-enable upload button
                 document.getElementById('uploadBtn').disabled = false;
-                document.getElementById('uploadBtn').textContent = '🚀 Upload & Process (Async)';
+                document.getElementById('uploadBtn').textContent = '🚀 Upload & Auto Process';
             }
         });
 
@@ -364,14 +338,29 @@
             const resultSection = document.getElementById('resultSection');
             const resultContent = document.getElementById('resultContent');
 
+            const metadata = result.auto_detected_metadata || {};
+
             resultContent.innerHTML = `
-                <p><strong>Book ID:</strong> ${result.book_id}</p>
-                <p><strong>Filename:</strong> ${result.filename}</p>
-                <p><strong>Total Pages:</strong> ${result.statistics.total_pages}</p>
-                <p><strong>Chapters:</strong> ${result.statistics.total_chapters}</p>
-                <p><strong>Lessons:</strong> ${result.statistics.total_lessons}</p>
-                <p><strong>Embeddings Created:</strong> ${result.embeddings_created ? '✅ Yes' : '❌ No'}</p>
-                <p><strong>Vector Count:</strong> ${result.embeddings_info.vector_count}</p>
+                <div style="background: #f0f8ff; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                    <h4>🤖 Auto-detected Metadata:</h4>
+                    <p><strong>📚 Title:</strong> ${metadata.title || 'N/A'}</p>
+                    <p><strong>📖 Subject:</strong> ${metadata.subject || 'N/A'}</p>
+                    <p><strong>🎓 Grade:</strong> ${metadata.grade || 'N/A'}</p>
+                    <p><strong>✍️ Author:</strong> ${metadata.author || 'N/A'}</p>
+                    <p><strong>🏢 Publisher:</strong> ${metadata.publisher || 'N/A'}</p>
+                    <p><strong>🌐 Language:</strong> ${metadata.language || 'N/A'}</p>
+                </div>
+
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">
+                    <h4>📊 Processing Statistics:</h4>
+                    <p><strong>Book ID:</strong> ${result.book_id}</p>
+                    <p><strong>Filename:</strong> ${result.filename}</p>
+                    <p><strong>Total Pages:</strong> ${result.statistics.total_pages}</p>
+                    <p><strong>Chapters:</strong> ${result.statistics.total_chapters}</p>
+                    <p><strong>Lessons:</strong> ${result.statistics.total_lessons}</p>
+                    <p><strong>Embeddings Created:</strong> ${result.embeddings_created ? '✅ Yes' : '❌ No'}</p>
+                    <p><strong>Vector Count:</strong> ${result.embeddings_info ? result.embeddings_info.vector_count : 0}</p>
+                </div>
             `;
 
             resultSection.style.display = 'block';

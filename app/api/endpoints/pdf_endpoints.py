@@ -307,18 +307,16 @@ async def parse_cv_text(request: FormatTextRequest) -> Dict[str, Any]:
 @router.post("/process-textbook-async", response_model=Dict[str, Any])
 async def process_textbook_async(
     file: UploadFile = File(...),
-    metadata: str = Form(...),
     create_embeddings: bool = Form(True),
 ) -> Dict[str, Any]:
     """
-    Xử lý sách giáo khoa bất đồng bộ (Async Processing)
+    Xử lý sách giáo khoa bất đồng bộ với tự động phân tích metadata
 
     Upload PDF và nhận task_id ngay lập tức, không cần đợi xử lý hoàn thành.
-    Sử dụng endpoint /task-status/{task_id} để theo dõi tiến độ.
+    Hệ thống sẽ tự động phân tích và trích xuất metadata từ nội dung PDF.
 
     Args:
         file: File PDF sách giáo khoa
-        metadata: JSON metadata của sách (id, title, subject, grade)
         create_embeddings: Có tạo embeddings cho RAG search không
 
     Returns:
@@ -334,25 +332,6 @@ async def process_textbook_async(
         if not file.filename or not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
-        # Parse metadata
-        try:
-            import json
-
-            book_metadata = json.loads(metadata)
-        except json.JSONDecodeError:
-            raise HTTPException(
-                status_code=400, detail="Invalid JSON in metadata field"
-            )
-
-        # Validate required metadata fields
-        required_fields = ["id", "title"]
-        for field in required_fields:
-            if field not in book_metadata:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Missing required field in metadata: {field}",
-                )
-
         # Read file content
         file_content = await file.read()
 
@@ -363,16 +342,16 @@ async def process_textbook_async(
             f"Received async PDF upload: {file.filename} ({len(file_content)} bytes)"
         )
 
-        # Tạo background task
+        # Tạo background task với auto metadata detection
         task_data = {
             "file_content": file_content,
             "filename": file.filename,
-            "metadata": book_metadata,
+            "auto_detect_metadata": True,  # Flag để tự động phân tích metadata
             "create_embeddings": create_embeddings,
         }
 
         task_id = background_task_processor.create_task(
-            task_type="process_textbook", task_data=task_data
+            task_type="process_textbook_auto", task_data=task_data
         )
 
         # Bắt đầu xử lý bất đồng bộ trong background
@@ -386,7 +365,7 @@ async def process_textbook_async(
             asyncio.set_event_loop(loop)
             try:
                 loop.run_until_complete(
-                    background_task_processor.process_pdf_task(task_id)
+                    background_task_processor.process_pdf_auto_task(task_id)
                 )
             finally:
                 loop.close()
@@ -399,11 +378,11 @@ async def process_textbook_async(
             "success": True,
             "task_id": task_id,
             "status": "pending",
-            "message": f"PDF processing started. Use /task-status/{task_id} to check progress.",
-            "book_id": book_metadata.get("id"),
+            "message": f"PDF processing started with auto metadata detection. Use /task-status/{task_id} to check progress.",
             "filename": file.filename,
             "estimated_time": "2-5 minutes",
             "check_status_url": f"/api/v1/tasks/status/{task_id}",
+            "auto_metadata": True,
         }
 
     except HTTPException:
