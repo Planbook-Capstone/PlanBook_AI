@@ -2,6 +2,7 @@
 Enhanced Textbook Service - Cải tiến xử lý sách giáo khoa với OCR và LLM
 Trả về cấu trúc: Sách → Chương → Bài → Nội dung
 """
+
 import logging
 import asyncio
 import json
@@ -17,176 +18,203 @@ from app.services.llm_service import llm_service
 
 logger = logging.getLogger(__name__)
 
+
 class EnhancedTextbookService:
     """Service cải tiến để xử lý sách giáo khoa với OCR và LLM"""
-    
+
     def __init__(self):
         self.executor = ThreadPoolExecutor(max_workers=4)
-    
+
     async def process_textbook_to_structure(
         self,
         pdf_content: bytes,
         filename: str,
-        book_metadata: Optional[Dict[str, Any]] = None
+        book_metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Xử lý PDF sách giáo khoa và trả về cấu trúc hoàn chỉnh
-        
+
         Args:
             pdf_content: Nội dung PDF
             filename: Tên file
             book_metadata: Metadata sách (title, subject, grade, etc.)
-            
+
         Returns:
             Dict với cấu trúc: book -> chapters -> lessons -> content
         """
         try:
             logger.info(f"🚀 Starting enhanced textbook processing: {filename}")
-            
+
             # Step 1: Extract all pages with OCR
             logger.info("📄 Extracting pages with OCR...")
             pages_data = await self._extract_pages_with_ocr(pdf_content)
             logger.info(f"✅ Extracted {len(pages_data)} pages")
-            
+
             # Step 2: Analyze book structure with LLM
             logger.info("🧠 Analyzing book structure...")
-            book_structure = await self._analyze_book_structure_enhanced(pages_data, book_metadata)
-            logger.info(f"📚 Detected {len(book_structure.get('chapters', []))} chapters")
-            
+            book_structure = await self._analyze_book_structure_enhanced(
+                pages_data, book_metadata
+            )
+            logger.info(
+                f"📚 Detected {len(book_structure.get('chapters', []))} chapters"
+            )
+
             # Step 3: Process content for each lesson
             logger.info("🔄 Processing lesson content...")
-            processed_book = await self._process_lessons_content(book_structure, pages_data)
-            
+            processed_book = await self._process_lessons_content(
+                book_structure, pages_data
+            )
+
             logger.info("✅ Textbook processing completed successfully")
-            
+
             return {
                 "success": True,
                 "book": processed_book,
                 "total_pages": len(pages_data),
-                "total_chapters": len(processed_book.get('chapters', [])),
-                "total_lessons": sum(len(ch.get('lessons', [])) for ch in processed_book.get('chapters', [])),
-                "message": "Textbook processed successfully"
+                "total_chapters": len(processed_book.get("chapters", [])),
+                "total_lessons": sum(
+                    len(ch.get("lessons", []))
+                    for ch in processed_book.get("chapters", [])
+                ),
+                "message": "Textbook processed successfully",
             }
-            
+
         except Exception as e:
             logger.error(f"❌ Error processing textbook: {e}")
             return {
                 "success": False,
                 "error": str(e),
-                "message": "Failed to process textbook"
+                "message": "Failed to process textbook",
             }
-    
+
     async def _extract_pages_with_ocr(self, pdf_content: bytes) -> List[Dict[str, Any]]:
         """Extract tất cả pages với OCR nếu cần"""
-        
+
         def extract_page_data():
             doc = fitz.open(stream=pdf_content, filetype="pdf")
             pages_data = []
-            
+
             for page_num in range(doc.page_count):
                 page = doc[page_num]
-                
+
                 # Extract text normally first
                 text = page.get_text("text")  # type: ignore
-                
+
                 # Extract images
                 images = []
                 image_list = page.get_images()
-                
+
                 for img_index, img in enumerate(image_list):
                     try:
                         xref = img[0]
                         pix = fitz.Pixmap(doc, xref)
-                        
+
                         if pix.n - pix.alpha < 4:  # GRAY or RGB
                             img_data = pix.tobytes("png")
                             img_base64 = base64.b64encode(img_data).decode()
-                            
-                            images.append({
-                                "index": img_index,
-                                "data": img_base64,
-                                "format": "png",
-                                "page": page_num + 1
-                            })
-                        
+
+                            images.append(
+                                {
+                                    "index": img_index,
+                                    "data": img_base64,
+                                    "format": "png",
+                                    "page": page_num + 1,
+                                }
+                            )
+
                         pix = None
                     except Exception as e:
-                        logger.warning(f"Error extracting image {img_index} from page {page_num}: {e}")
-                
-                pages_data.append({
-                    "page_number": page_num + 1,
-                    "text": text,
-                    "images": images,
-                    "has_text": len(text.strip()) > 50
-                })
-            
+                        logger.warning(
+                            f"Error extracting image {img_index} from page {page_num}: {e}"
+                        )
+
+                pages_data.append(
+                    {
+                        "page_number": page_num + 1,
+                        "text": text,
+                        "images": images,
+                        "has_text": len(text.strip()) > 50,
+                    }
+                )
+
             doc.close()
             return pages_data
-        
+
         # Extract pages in background thread
         pages_data = await asyncio.get_event_loop().run_in_executor(
             self.executor, extract_page_data
         )
-        
+
         # Apply OCR to pages with insufficient text
         ocr_tasks = []
         for page in pages_data:
-            if not page['has_text']:
+            if not page["has_text"]:
                 ocr_tasks.append(self._apply_ocr_to_page(page, pdf_content))
-        
+
         if ocr_tasks:
-            logger.info(f"🔍 Applying OCR to {len(ocr_tasks)} pages with insufficient text")
+            logger.info(
+                f"🔍 Applying OCR to {len(ocr_tasks)} pages with insufficient text"
+            )
             ocr_results = await asyncio.gather(*ocr_tasks, return_exceptions=True)
-            
+
             # Update pages with OCR results
             ocr_index = 0
             for page in pages_data:
-                if not page['has_text'] and ocr_index < len(ocr_results):
+                if not page["has_text"] and ocr_index < len(ocr_results):
                     if not isinstance(ocr_results[ocr_index], Exception):
-                        page['text'] = ocr_results[ocr_index]
-                        page['ocr_applied'] = True
+                        page["text"] = ocr_results[ocr_index]
+                        page["ocr_applied"] = True
                     ocr_index += 1
-        
+
         return pages_data
-    
-    async def _apply_ocr_to_page(self, page_data: Dict[str, Any], pdf_content: bytes) -> str:
+
+    async def _apply_ocr_to_page(
+        self, page_data: Dict[str, Any], pdf_content: bytes
+    ) -> str:
         """Apply OCR to a specific page"""
         try:
             # Use existing OCR service for this page
-            page_num = page_data['page_number']
-            
+            page_num = page_data["page_number"]
+
             # Extract just this page as bytes
             def extract_single_page():
                 doc = fitz.open(stream=pdf_content, filetype="pdf")
                 page = doc[page_num - 1]
-                
+
                 # Convert page to image
                 mat = fitz.Matrix(2.0, 2.0)  # 2x zoom for better OCR
                 pix = page.get_pixmap(matrix=mat)
                 img_data = pix.tobytes("png")
                 pix = None
                 doc.close()
-                
+
                 return img_data
-            
+
             img_data = await asyncio.get_event_loop().run_in_executor(
                 self.executor, extract_single_page
             )
-            
+
             # Apply OCR using PIL and simple_ocr_service logic
             image = Image.open(io.BytesIO(img_data))
-            
+
             # Use simple OCR service's OCR logic
-            if hasattr(simple_ocr_service, 'easyocr_reader') and simple_ocr_service.easyocr_reader:
+            if (
+                hasattr(simple_ocr_service, "easyocr_reader")
+                and simple_ocr_service.easyocr_reader
+            ):
                 import numpy as np
+
                 results = simple_ocr_service.easyocr_reader.readtext(np.array(image))
                 text_parts = [str(result[1]) for result in results if len(result) >= 2]
-                return ' '.join(text_parts)
+                return " ".join(text_parts)
             else:
                 # Fallback to Tesseract
                 import pytesseract
-                return pytesseract.image_to_string(image, config=simple_ocr_service.tesseract_config)
-                
+
+                return pytesseract.image_to_string(
+                    image, config=simple_ocr_service.tesseract_config
+                )
+
         except Exception as e:
             logger.error(f"OCR failed for page {page_data['page_number']}: {e}")
             return ""
@@ -194,18 +222,20 @@ class EnhancedTextbookService:
     async def _analyze_book_structure_enhanced(
         self,
         pages_data: List[Dict[str, Any]],
-        book_metadata: Optional[Dict[str, Any]] = None
+        book_metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Phân tích cấu trúc sách với LLM cải tiến"""
 
         if not llm_service.is_available():
             logger.warning("LLM not available, using pattern-based analysis")
-            return await self._pattern_based_structure_analysis(pages_data, book_metadata)
+            return await self._pattern_based_structure_analysis(
+                pages_data, book_metadata
+            )
 
         # Tạo text sample từ các trang để phân tích
         sample_text = ""
         for i, page in enumerate(pages_data[:20]):  # Lấy 20 trang đầu để phân tích
-            if page['text'].strip():
+            if page["text"].strip():
                 sample_text += f"\n--- Trang {page['page_number']} ---\n{page['text'][:500]}"  # 500 chars per page
 
         prompt = f"""
@@ -260,32 +290,62 @@ Trả về JSON:"""
             response = llm_service.model.generate_content(prompt)
             json_text = response.text.strip()
 
-            # Clean JSON
-            if json_text.startswith('```json'):
+            # Clean JSON - cải thiện việc xử lý
+            if json_text.startswith("```json"):
                 json_text = json_text[7:]
-            if json_text.startswith('```'):
+            if json_text.startswith("```"):
                 json_text = json_text[3:]
-            if json_text.endswith('```'):
+            if json_text.endswith("```"):
                 json_text = json_text[:-3]
 
-            structure = json.loads(json_text)
+            # Tìm JSON hợp lệ trong response
+            json_text = json_text.strip()
+
+            # Tìm vị trí bắt đầu và kết thúc của JSON
+            start_idx = json_text.find("{")
+            if start_idx == -1:
+                raise ValueError("No JSON object found in response")
+
+            # Tìm vị trí kết thúc JSON bằng cách đếm dấu ngoặc
+            brace_count = 0
+            end_idx = start_idx
+            for i, char in enumerate(json_text[start_idx:], start_idx):
+                if char == "{":
+                    brace_count += 1
+                elif char == "}":
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end_idx = i + 1
+                        break
+
+            # Extract JSON hợp lệ
+            clean_json = json_text[start_idx:end_idx]
+
+            structure = json.loads(clean_json)
 
             # Validate structure
-            if 'chapters' in structure and len(structure['chapters']) > 0:
+            if "chapters" in structure and len(structure["chapters"]) > 0:
                 logger.info(f"LLM detected {len(structure['chapters'])} chapters")
                 return structure
             else:
                 logger.warning("LLM returned invalid structure, using fallback")
-                return await self._pattern_based_structure_analysis(pages_data, book_metadata)
+                return await self._pattern_based_structure_analysis(
+                    pages_data, book_metadata
+                )
 
         except Exception as e:
             logger.error(f"LLM structure analysis failed: {e}")
-            return await self._pattern_based_structure_analysis(pages_data, book_metadata)
+            logger.debug(
+                f"Raw LLM response: {response.text[:500] if 'response' in locals() else 'No response'}"
+            )
+            return await self._pattern_based_structure_analysis(
+                pages_data, book_metadata
+            )
 
     async def _pattern_based_structure_analysis(
         self,
         pages_data: List[Dict[str, Any]],
-        book_metadata: Optional[Dict[str, Any]] = None
+        book_metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Phân tích cấu trúc dựa trên pattern matching"""
 
@@ -293,10 +353,16 @@ Trả về JSON:"""
 
         # Extract book info from metadata or first pages
         book_info = {
-            "title": book_metadata.get('title', 'Sách giáo khoa') if book_metadata else 'Sách giáo khoa',
-            "subject": book_metadata.get('subject', 'Chưa xác định') if book_metadata else 'Chưa xác định',
-            "grade": book_metadata.get('grade', 'Chưa xác định') if book_metadata else 'Chưa xác định',
-            "total_pages": total_pages
+            "title": book_metadata.get("title", "Sách giáo khoa")
+            if book_metadata
+            else "Sách giáo khoa",
+            "subject": book_metadata.get("subject", "Chưa xác định")
+            if book_metadata
+            else "Chưa xác định",
+            "grade": book_metadata.get("grade", "Chưa xác định")
+            if book_metadata
+            else "Chưa xác định",
+            "total_pages": total_pages,
         }
 
         # Find chapters and lessons using pattern matching
@@ -305,17 +371,17 @@ Trả về JSON:"""
         current_lesson = None
 
         for page in pages_data:
-            lines = page['text'].split('\n')
+            lines = page["text"].split("\n")
 
             # Look for chapter patterns
             for line in lines:
                 line_clean = line.strip()
                 if len(line_clean) > 5 and len(line_clean) < 100:
-
                     # Chapter detection
-                    if any(pattern in line_clean.lower() for pattern in [
-                        'chương', 'chapter', 'phần', 'bài tập chương'
-                    ]):
+                    if any(
+                        pattern in line_clean.lower()
+                        for pattern in ["chương", "chapter", "phần", "bài tập chương"]
+                    ):
                         # Save previous chapter
                         if current_chapter:
                             chapters.append(current_chapter)
@@ -325,38 +391,42 @@ Trả về JSON:"""
                         current_chapter = {
                             "chapter_id": f"chapter_{chapter_num:02d}",
                             "chapter_title": line_clean,
-                            "start_page": page['page_number'],
-                            "end_page": page['page_number'],
-                            "lessons": []
+                            "start_page": page["page_number"],
+                            "end_page": page["page_number"],
+                            "lessons": [],
                         }
                         current_lesson = None
 
                     # Lesson detection
-                    elif any(pattern in line_clean.lower() for pattern in [
-                        'bài', 'lesson', 'tiết'
-                    ]) and current_chapter:
+                    elif (
+                        any(
+                            pattern in line_clean.lower()
+                            for pattern in ["bài", "lesson", "tiết"]
+                        )
+                        and current_chapter
+                    ):
                         # Save previous lesson
                         if current_lesson:
-                            current_chapter['lessons'].append(current_lesson)
+                            current_chapter["lessons"].append(current_lesson)
 
                         # Start new lesson
-                        lesson_num = len(current_chapter['lessons']) + 1
+                        lesson_num = len(current_chapter["lessons"]) + 1
                         current_lesson = {
                             "lesson_id": f"lesson_{len(chapters)+1:02d}_{lesson_num:02d}",
                             "lesson_title": line_clean,
-                            "start_page": page['page_number'],
-                            "end_page": page['page_number']
+                            "start_page": page["page_number"],
+                            "end_page": page["page_number"],
                         }
 
             # Update end pages
             if current_chapter:
-                current_chapter['end_page'] = page['page_number']
+                current_chapter["end_page"] = page["page_number"]
             if current_lesson:
-                current_lesson['end_page'] = page['page_number']
+                current_lesson["end_page"] = page["page_number"]
 
         # Add final chapter and lesson
         if current_lesson and current_chapter:
-            current_chapter['lessons'].append(current_lesson)
+            current_chapter["lessons"].append(current_lesson)
         if current_chapter:
             chapters.append(current_chapter)
 
@@ -364,10 +434,7 @@ Trả về JSON:"""
         if not chapters:
             chapters = self._create_default_structure(total_pages)
 
-        return {
-            "book_info": book_info,
-            "chapters": chapters
-        }
+        return {"book_info": book_info, "chapters": chapters}
 
     def _create_default_structure(self, total_pages: int) -> List[Dict[str, Any]]:
         """Tạo cấu trúc mặc định khi không detect được"""
@@ -388,80 +455,80 @@ Trả về JSON:"""
 
             for lesson_num in range(1, 4):  # 3 bài mỗi chương
                 lesson_start = start_page + (lesson_num - 1) * pages_per_lesson
-                lesson_end = min(start_page + lesson_num * pages_per_lesson - 1, end_page)
+                lesson_end = min(
+                    start_page + lesson_num * pages_per_lesson - 1, end_page
+                )
 
                 if lesson_start > end_page:
                     break
 
-                lessons.append({
-                    "lesson_id": f"lesson_{chapter_num:02d}_{lesson_num:02d}",
-                    "lesson_title": f"Bài {lesson_num}",
-                    "start_page": lesson_start,
-                    "end_page": lesson_end
-                })
+                lessons.append(
+                    {
+                        "lesson_id": f"lesson_{chapter_num:02d}_{lesson_num:02d}",
+                        "lesson_title": f"Bài {lesson_num}",
+                        "start_page": lesson_start,
+                        "end_page": lesson_end,
+                    }
+                )
 
-            chapters.append({
-                "chapter_id": f"chapter_{chapter_num:02d}",
-                "chapter_title": f"Chương {chapter_num}",
-                "start_page": start_page,
-                "end_page": end_page,
-                "lessons": lessons
-            })
+            chapters.append(
+                {
+                    "chapter_id": f"chapter_{chapter_num:02d}",
+                    "chapter_title": f"Chương {chapter_num}",
+                    "start_page": start_page,
+                    "end_page": end_page,
+                    "lessons": lessons,
+                }
+            )
 
         return chapters
 
     async def _process_lessons_content(
-        self,
-        book_structure: Dict[str, Any],
-        pages_data: List[Dict[str, Any]]
+        self, book_structure: Dict[str, Any], pages_data: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """Xử lý nội dung chi tiết cho từng bài học"""
 
         processed_book = {
-            "book_info": book_structure.get('book_info', {}),
-            "chapters": []
+            "book_info": book_structure.get("book_info", {}),
+            "chapters": [],
         }
 
-        for chapter in book_structure.get('chapters', []):
+        for chapter in book_structure.get("chapters", []):
             processed_chapter = {
-                "chapter_id": chapter['chapter_id'],
-                "chapter_title": chapter['chapter_title'],
-                "start_page": chapter['start_page'],
-                "end_page": chapter['end_page'],
-                "lessons": []
+                "chapter_id": chapter["chapter_id"],
+                "chapter_title": chapter["chapter_title"],
+                "start_page": chapter["start_page"],
+                "end_page": chapter["end_page"],
+                "lessons": [],
             }
 
-            for lesson in chapter.get('lessons', []):
+            for lesson in chapter.get("lessons", []):
                 logger.info(f"Processing lesson: {lesson['lesson_title']}")
 
                 # Extract content for this lesson
-                lesson_content = await self._extract_lesson_content(
-                    lesson, pages_data
-                )
+                lesson_content = await self._extract_lesson_content(lesson, pages_data)
 
                 processed_lesson = {
-                    "lesson_id": lesson['lesson_id'],
-                    "lesson_title": lesson['lesson_title'],
-                    "start_page": lesson['start_page'],
-                    "end_page": lesson['end_page'],
-                    "content": lesson_content
+                    "lesson_id": lesson["lesson_id"],
+                    "lesson_title": lesson["lesson_title"],
+                    "start_page": lesson["start_page"],
+                    "end_page": lesson["end_page"],
+                    "content": lesson_content,
                 }
 
-                processed_chapter['lessons'].append(processed_lesson)
+                processed_chapter["lessons"].append(processed_lesson)
 
-            processed_book['chapters'].append(processed_chapter)
+            processed_book["chapters"].append(processed_chapter)
 
         return processed_book
 
     async def _extract_lesson_content(
-        self,
-        lesson: Dict[str, Any],
-        pages_data: List[Dict[str, Any]]
+        self, lesson: Dict[str, Any], pages_data: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """Extract nội dung chi tiết của một bài học"""
 
-        start_page = lesson['start_page']
-        end_page = lesson['end_page']
+        start_page = lesson["start_page"]
+        end_page = lesson["end_page"]
 
         # Collect all text and images for this lesson
         lesson_text = ""
@@ -472,7 +539,7 @@ Trả về JSON:"""
             # Find page data (pages_data is 0-indexed but page_number is 1-indexed)
             page_data = None
             for page in pages_data:
-                if page['page_number'] == page_num:
+                if page["page_number"] == page_num:
                     page_data = page
                     break
 
@@ -482,30 +549,32 @@ Trả về JSON:"""
             lesson_pages.append(page_num)
 
             # Add text content
-            if page_data['text'].strip():
+            if page_data["text"].strip():
                 # Clean text with LLM if available
-                cleaned_text = await self._clean_text_with_llm(page_data['text'])
+                cleaned_text = await self._clean_text_with_llm(page_data["text"])
                 lesson_text += f"\n--- Trang {page_num} ---\n{cleaned_text}\n"
 
             # Add images with LLM descriptions only
-            for img in page_data.get('images', []):
+            for img in page_data.get("images", []):
                 # Describe image with LLM using base64 data
-                img_description = await self._describe_image_with_llm(img['data'])
+                img_description = await self._describe_image_with_llm(img["data"])
 
-                lesson_images.append({
-                    "page": page_num,
-                    "index": img['index'],
-                    "format": img['format'],
-                    "description": img_description
-                    # Note: Removed base64 data to reduce response size
-                })
+                lesson_images.append(
+                    {
+                        "page": page_num,
+                        "index": img["index"],
+                        "format": img["format"],
+                        "description": img_description,
+                        # Note: Removed base64 data to reduce response size
+                    }
+                )
 
         return {
             "text": lesson_text.strip(),
             "images": lesson_images,
             "pages": lesson_pages,
             "total_pages": len(lesson_pages),
-            "has_images": len(lesson_images) > 0
+            "has_images": len(lesson_images) > 0,
         }
 
     async def _clean_text_with_llm(self, raw_text: str) -> str:
@@ -588,14 +657,14 @@ Hãy mô tả hình ảnh:"""
 
                 # Convert back to base64
                 buffer = io.BytesIO()
-                image.save(buffer, format='PNG')
+                image.save(buffer, format="PNG")
                 img_data = buffer.getvalue()
                 image_base64 = base64.b64encode(img_data).decode()
 
             # Tạo content với image để Gemini phân tích
             image_part = {
                 "mime_type": "image/png",
-                "data": base64.b64decode(image_base64)
+                "data": base64.b64decode(image_base64),
             }
 
             response = llm_service.model.generate_content([prompt, image_part])
@@ -619,9 +688,10 @@ Hãy mô tả hình ảnh:"""
                 "Công thức toán học hoặc phương trình hóa học",
                 "Bảng biểu thống kê hoặc dữ liệu khoa học",
                 "Hình minh họa cấu trúc hoặc quy trình tự nhiên",
-                "Sơ đồ tư duy hoặc bản đồ khái niệm"
+                "Sơ đồ tư duy hoặc bản đồ khái niệm",
             ]
             import random
+
             return random.choice(fallback_descriptions)
 
 

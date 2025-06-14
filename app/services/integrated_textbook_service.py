@@ -1,6 +1,7 @@
 """
 Service tích hợp: OCR → LLM Format + Metadata cùng lúc
 """
+
 import json
 import logging
 import uuid
@@ -12,20 +13,19 @@ from app.services.llm_service import llm_service
 
 logger = logging.getLogger(__name__)
 
+
 class IntegratedTextbookService:
     """Service xử lý PDF một lần: OCR + LLM Format + Metadata"""
-    
+
     def __init__(self):
         self.llm_service = llm_service
-    
+
     async def process_pdf_complete(
-        self, 
-        pdf_content: bytes, 
-        filename: str
+        self, pdf_content: bytes, filename: str
     ) -> Dict[str, Any]:
         """
         Xử lý PDF hoàn chỉnh: OCR + LLM Format + Metadata extraction
-        
+
         Returns:
             {
                 "success": bool,
@@ -37,20 +37,20 @@ class IntegratedTextbookService:
         """
         try:
             logger.info(f"Starting integrated processing for: {filename}")
-            
+
             # Step 1: OCR extraction
             raw_text, ocr_metadata = await simple_ocr_service.extract_text_from_pdf(
                 pdf_content, filename
             )
-            
+
             if not raw_text.strip():
                 raise Exception("No text extracted from PDF")
-            
+
             # Step 2: LLM analysis - Format + Extract Metadata cùng lúc
             llm_result = await self._llm_format_and_extract_metadata(
                 raw_text, filename, ocr_metadata
             )
-            
+
             # Step 3: Combine results
             result = {
                 "success": True,
@@ -62,13 +62,13 @@ class IntegratedTextbookService:
                     "ocr_info": ocr_metadata,
                     "llm_processing": True,
                     "processing_timestamp": datetime.now().isoformat(),
-                    "text_length": len(raw_text)
-                }
+                    "text_length": len(raw_text),
+                },
             }
-            
+
             logger.info(f"Integrated processing completed for: {filename}")
             return result
-            
+
         except Exception as e:
             logger.error(f"Integrated processing failed: {e}")
             return {
@@ -76,30 +76,27 @@ class IntegratedTextbookService:
                 "error": str(e),
                 "extracted_metadata": self._generate_fallback_metadata(filename),
                 "formatted_structure": None,
-                "raw_text": raw_text if 'raw_text' in locals() else "",
+                "raw_text": raw_text if "raw_text" in locals() else "",
                 "processing_info": {
                     "filename": filename,
                     "error": str(e),
-                    "processing_timestamp": datetime.now().isoformat()
-                }
+                    "processing_timestamp": datetime.now().isoformat(),
+                },
             }
-    
+
     async def _llm_format_and_extract_metadata(
-        self, 
-        raw_text: str, 
-        filename: str,
-        ocr_metadata: Dict[str, Any]
+        self, raw_text: str, filename: str, ocr_metadata: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
         Sử dụng LLM để vừa format structure vừa extract metadata
         """
-        
+
         # Truncate text nếu quá dài (để tránh token limit)
         max_chars = 8000
         text_sample = raw_text[:max_chars]
         if len(raw_text) > max_chars:
             text_sample += "\n...[text truncated]"
-        
+
         prompt = f"""
 Bạn là chuyên gia phân tích sách giáo khoa. Hãy phân tích văn bản sau và trả về JSON với 2 phần:
 
@@ -171,55 +168,87 @@ LƯU Ý:
             # Sử dụng model trực tiếp thay vì qua service
             if not self.llm_service.model:
                 raise Exception("LLM service not available")
-                
+
             response = self.llm_service.model.generate_content(prompt)
-            response_text = response.text
-            
+            response_text = response.text.strip()
+
+            # Clean JSON - cải thiện việc xử lý
+            if response_text.startswith("```json"):
+                response_text = response_text[7:]
+            if response_text.startswith("```"):
+                response_text = response_text[3:]
+            if response_text.endswith("```"):
+                response_text = response_text[:-3]
+
+            # Tìm JSON hợp lệ trong response
+            response_text = response_text.strip()
+
+            # Tìm vị trí bắt đầu và kết thúc của JSON
+            start_idx = response_text.find("{")
+            if start_idx == -1:
+                raise ValueError("No JSON object found in response")
+
+            # Tìm vị trí kết thúc JSON bằng cách đếm dấu ngoặc
+            brace_count = 0
+            end_idx = start_idx
+            for i, char in enumerate(response_text[start_idx:], start_idx):
+                if char == "{":
+                    brace_count += 1
+                elif char == "}":
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end_idx = i + 1
+                        break
+
+            # Extract JSON hợp lệ
+            clean_json = response_text[start_idx:end_idx]
+
             # Parse JSON response
-            llm_result = json.loads(response_text.strip())
-            
+            llm_result = json.loads(clean_json)
+
             # Validate and enhance
             llm_result = self._validate_and_enhance_llm_result(
                 llm_result, filename, ocr_metadata
             )
-            
+
             return llm_result
-            
+
         except json.JSONDecodeError as e:
             logger.error(f"LLM returned invalid JSON: {e}")
-            logger.error(f"LLM Response: {response_text if 'response_text' in locals() else 'No response'}")
+            logger.error(
+                f"LLM Response: {response_text if 'response_text' in locals() else 'No response'}"
+            )
             return self._generate_fallback_result(filename, raw_text, ocr_metadata)
-        
+
         except Exception as e:
             logger.error(f"LLM processing failed: {e}")
             return self._generate_fallback_result(filename, raw_text, ocr_metadata)
-    
+
     def _validate_and_enhance_llm_result(
-        self, 
-        llm_result: Dict[str, Any], 
-        filename: str,
-        ocr_metadata: Dict[str, Any]
+        self, llm_result: Dict[str, Any], filename: str, ocr_metadata: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Validate và enhance kết quả từ LLM"""
-        
+
         # Ensure required fields in metadata
         metadata = llm_result.get("metadata", {})
-        
+
         if not metadata.get("id"):
             metadata["id"] = f"book_{uuid.uuid4().hex[:8]}"
-        
+
         if not metadata.get("title"):
-            metadata["title"] = filename.replace('.pdf', '').replace('_', ' ').title()
-        
+            metadata["title"] = filename.replace(".pdf", "").replace("_", " ").title()
+
         # Add technical metadata
-        metadata.update({
-            "filename": filename,
-            "created_at": datetime.now().isoformat(),
-            "file_size": ocr_metadata.get("total_pages", 0),
-            "ocr_method": ocr_metadata.get("extraction_method", "unknown"),
-            "processing_method": "integrated_ocr_llm"
-        })
-        
+        metadata.update(
+            {
+                "filename": filename,
+                "created_at": datetime.now().isoformat(),
+                "file_size": ocr_metadata.get("total_pages", 0),
+                "ocr_method": ocr_metadata.get("extraction_method", "unknown"),
+                "processing_method": "integrated_ocr_llm",
+            }
+        )
+
         # Ensure structure has book_info
         structure = llm_result.get("structure", {})
         if not structure.get("book_info"):
@@ -227,28 +256,22 @@ LƯU Ý:
                 "id": metadata["id"],
                 "title": metadata["title"],
                 "subject": metadata.get("subject", "chưa xác định"),
-                "grade": metadata.get("grade", "chưa xác định")
+                "grade": metadata.get("grade", "chưa xác định"),
             }
-        
-        return {
-            "metadata": metadata,
-            "structure": structure
-        }
-    
+
+        return {"metadata": metadata, "structure": structure}
+
     def _generate_fallback_result(
-        self, 
-        filename: str, 
-        raw_text: str,
-        ocr_metadata: Dict[str, Any]
+        self, filename: str, raw_text: str, ocr_metadata: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Tạo kết quả fallback khi LLM thất bại"""
-        
+
         book_id = f"book_{uuid.uuid4().hex[:8]}"
-        title = filename.replace('.pdf', '').replace('_', ' ').title()
-        
+        title = filename.replace(".pdf", "").replace("_", " ").title()
+
         # Simple text analysis for fallback
         text_lower = raw_text.lower()
-        
+
         # Detect subject (basic)
         subject = "chưa xác định"
         if any(word in text_lower for word in ["toán", "math", "số", "phép"]):
@@ -257,12 +280,13 @@ LƯU Ý:
             subject = "văn"
         elif any(word in text_lower for word in ["english", "tiếng anh"]):
             subject = "anh"
-        
+
         # Detect grade (basic)
         import re
+
         grade_matches = re.findall(r"lớp\s*(\d+)", text_lower)
         grade = grade_matches[0] if grade_matches else "chưa xác định"
-        
+
         metadata = {
             "id": book_id,
             "title": title,
@@ -274,16 +298,16 @@ LƯU Ý:
             "confidence": 0.3,
             "fallback_mode": True,
             "filename": filename,
-            "created_at": datetime.now().isoformat()
+            "created_at": datetime.now().isoformat(),
         }
-        
+
         # Simple structure
         structure = {
             "book_info": {
                 "id": book_id,
                 "title": title,
                 "subject": subject,
-                "grade": grade
+                "grade": grade,
             },
             "chapters": [
                 {
@@ -298,27 +322,26 @@ LƯU Ý:
                             "content": [
                                 {
                                     "type": "text",
-                                    "text": raw_text[:1000] + "..." if len(raw_text) > 1000 else raw_text,
+                                    "text": raw_text[:1000] + "..."
+                                    if len(raw_text) > 1000
+                                    else raw_text,
                                     "page": 1,
-                                    "section": "content"
+                                    "section": "content",
                                 }
-                            ]
+                            ],
                         }
-                    ]
+                    ],
                 }
-            ]
+            ],
         }
-        
-        return {
-            "metadata": metadata,
-            "structure": structure
-        }
-    
+
+        return {"metadata": metadata, "structure": structure}
+
     def _generate_fallback_metadata(self, filename: str) -> Dict[str, Any]:
         """Generate basic fallback metadata"""
         return {
             "id": f"book_{uuid.uuid4().hex[:8]}",
-            "title": filename.replace('.pdf', '').replace('_', ' ').title(),
+            "title": filename.replace(".pdf", "").replace("_", " ").title(),
             "subject": "chưa xác định",
             "grade": "chưa xác định",
             "publisher": "chưa xác định",
@@ -327,8 +350,9 @@ LƯU Ý:
             "confidence": 0.1,
             "fallback_mode": True,
             "filename": filename,
-            "created_at": datetime.now().isoformat()
+            "created_at": datetime.now().isoformat(),
         }
+
 
 # Global instance
 integrated_textbook_service = IntegratedTextbookService()
