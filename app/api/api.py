@@ -26,7 +26,7 @@ app.add_middleware(
 api_router = APIRouter()
 
 # Include routers from endpoints
-api_router.include_router(pdf_endpoints.router, prefix="/pdf", tags=["PDF Services"])
+api_router.include_router(pdf_endpoints.router, prefix="/pdf", tags=["Books Services"])
 api_router.include_router(tasks.router, prefix="/tasks", tags=["Task Management"])
 
 # Add API router to app

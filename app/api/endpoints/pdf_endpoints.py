@@ -320,83 +320,22 @@ async def quick_textbook_analysis(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.get("/textbooks", response_model=Dict[str, Any])
-async def list_all_textbooks() -> Dict[str, Any]:
-    """
-    Lấy danh sách tất cả sách giáo khoa đã được xử lý
-
-    Returns:
-        Dict chứa danh sách tất cả textbooks với ID và metadata
-    """
-    try:
-        from app.services.qdrant_service import qdrant_service
-
-        # Lấy danh sách từ Qdrant collections
-        textbooks = []
-
-        if qdrant_service.qdrant_client:
-            collections = qdrant_service.qdrant_client.get_collections().collections
-
-            for collection in collections:
-                if collection.name.startswith("textbook_"):
-                    book_id = collection.name.replace("textbook_", "")
-
-                    # Lấy metadata từ collection
-                    try:
-                        # Lấy một point bất kỳ để lấy metadata
-                        search_result = qdrant_service.qdrant_client.scroll(
-                            collection_name=collection.name, limit=1, with_payload=True
-                        )
-
-                        if search_result[0]:  # Có points
-                            point = search_result[0][0]
-                            payload = point.payload or {}
-
-                            textbooks.append(
-                                {
-                                    "book_id": book_id,
-                                    "title": payload.get("book_title", "Unknown"),
-                                    "subject": payload.get("subject", "Unknown"),
-                                    "grade": payload.get("grade", "Unknown"),
-                                    "collection_name": collection.name,
-                                    "vector_count": getattr(
-                                        collection, "vectors_count", 0
-                                    ),
-                                    "status": "available",
-                                }
-                            )
-                    except Exception as e:
-                        logger.warning(f"Error getting metadata for {book_id}: {e}")
-                        textbooks.append(
-                            {
-                                "book_id": book_id,
-                                "title": "Unknown",
-                                "collection_name": collection.name,
-                                "vector_count": getattr(collection, "vectors_count", 0),
-                                "status": "available",
-                                "error": str(e),
-                            }
-                        )
-
-        return {
-            "success": True,
-            "total_textbooks": len(textbooks),
-            "textbooks": textbooks,
-            "message": f"Found {len(textbooks)} textbooks",
-        }
-
-    except Exception as e:
-        logger.error(f"Error listing textbooks: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@router.get("/textbooks-full", response_model=Dict[str, Any])
-async def list_all_textbooks_full_format() -> Dict[str, Any]:
+@router.get("/getAllTextBook", response_model=Dict[str, Any])
+async def get_all_textbook() -> Dict[str, Any]:
     """
     Lấy danh sách tất cả sách giáo khoa với format đầy đủ như /process-textbook
 
+    Endpoint này trả về tất cả textbooks đã được xử lý với format chuẩn:
+    - book_structure với book_info, chapters, lessons
+    - content đầy đủ với text, images, pages
+    - statistics và processing_info
+    - embeddings_info
+
     Returns:
         Dict chứa danh sách tất cả textbooks với format đầy đủ
+
+    Example:
+        GET /api/v1/pdf/getAllTextBook
     """
     try:
         from app.services.qdrant_service import qdrant_service
@@ -442,7 +381,7 @@ async def list_all_textbooks_full_format() -> Dict[str, Any]:
                                 textbook_data = {
                                     "success": True,
                                     "book_id": book_id,
-                                    "filename": f"{book_id}.pdf",  # Không có filename gốc
+                                    "filename": f"{book_id}.pdf",
                                     "book_structure": original_structure,
                                     "statistics": {
                                         "total_pages": payload.get(
@@ -470,31 +409,175 @@ async def list_all_textbooks_full_format() -> Dict[str, Any]:
                                         "vector_count": getattr(
                                             collection, "vectors_count", 0
                                         ),
-                                        "vector_dimension": 384,  # Default dimension
+                                        "vector_dimension": 384,
                                     },
                                     "message": "Textbook retrieved successfully from Qdrant vector database",
                                 }
                                 textbooks.append(textbook_data)
                             else:
-                                # Fallback format nếu không có original_structure
-                                logger.warning(
-                                    f"No original_book_structure found for {book_id}"
+                                # Fallback: Tạo structure từ chunks nếu không có original_structure
+                                logger.info(
+                                    f"Creating structure from chunks for {book_id}"
                                 )
 
+                                # Lấy tất cả chunks để tái tạo structure
+                                all_chunks = qdrant_service.qdrant_client.scroll(
+                                    collection_name=collection.name,
+                                    limit=1000,
+                                    with_payload=True,
+                                )
+
+                                if all_chunks[0]:
+                                    chapters = {}
+                                    book_info = {
+                                        "title": payload.get("book_title", "Unknown"),
+                                        "subject": payload.get(
+                                            "book_subject", "Unknown"
+                                        ),
+                                        "grade": payload.get("book_grade", "Unknown"),
+                                        "total_pages": payload.get(
+                                            "book_total_pages", 0
+                                        ),
+                                    }
+
+                                    # Tái tạo structure từ chunks
+                                    for point in all_chunks[0]:
+                                        chunk_payload = point.payload or {}
+                                        if chunk_payload.get("type") in [
+                                            "title",
+                                            "content",
+                                        ]:
+                                            chapter_id = chunk_payload.get("chapter_id")
+                                            lesson_id = chunk_payload.get("lesson_id")
+
+                                            if (
+                                                chapter_id
+                                                and chapter_id not in chapters
+                                            ):
+                                                chapters[chapter_id] = {
+                                                    "chapter_id": chapter_id,
+                                                    "chapter_title": chunk_payload.get(
+                                                        "chapter_title", "Unknown"
+                                                    ),
+                                                    "start_page": chunk_payload.get(
+                                                        "chapter_start_page"
+                                                    ),
+                                                    "end_page": chunk_payload.get(
+                                                        "chapter_end_page"
+                                                    ),
+                                                    "lessons": [],
+                                                }
+
+                                            if lesson_id:
+                                                # Kiểm tra lesson đã tồn tại chưa
+                                                existing_lesson = next(
+                                                    (
+                                                        l
+                                                        for l in chapters[chapter_id][
+                                                            "lessons"
+                                                        ]
+                                                        if l["lesson_id"] == lesson_id
+                                                    ),
+                                                    None,
+                                                )
+
+                                                if not existing_lesson:
+                                                    chapters[chapter_id][
+                                                        "lessons"
+                                                    ].append(
+                                                        {
+                                                            "lesson_id": lesson_id,
+                                                            "lesson_title": chunk_payload.get(
+                                                                "lesson_title",
+                                                                "Unknown",
+                                                            ),
+                                                            "start_page": chunk_payload.get(
+                                                                "lesson_start_page"
+                                                            ),
+                                                            "end_page": chunk_payload.get(
+                                                                "lesson_end_page"
+                                                            ),
+                                                            "content": {
+                                                                "text": "Content available via lesson endpoint",
+                                                                "images": chunk_payload.get(
+                                                                    "lesson_images", []
+                                                                ),
+                                                                "pages": chunk_payload.get(
+                                                                    "lesson_pages", []
+                                                                ),
+                                                                "total_pages": chunk_payload.get(
+                                                                    "lesson_total_pages",
+                                                                    0,
+                                                                ),
+                                                                "has_images": chunk_payload.get(
+                                                                    "lesson_has_images",
+                                                                    False,
+                                                                ),
+                                                            },
+                                                        }
+                                                    )
+
+                                    # Tạo book_structure
+                                    book_structure = {
+                                        "book_info": book_info,
+                                        "chapters": list(chapters.values()),
+                                    }
+
+                                    textbook_data = {
+                                        "success": True,
+                                        "book_id": book_id,
+                                        "filename": f"{book_id}.pdf",
+                                        "book_structure": book_structure,
+                                        "statistics": {
+                                            "total_pages": book_info.get(
+                                                "total_pages", 0
+                                            ),
+                                            "total_chapters": len(chapters),
+                                            "total_lessons": sum(
+                                                len(ch["lessons"])
+                                                for ch in chapters.values()
+                                            ),
+                                        },
+                                        "processing_info": {
+                                            "ocr_applied": True,
+                                            "llm_analysis": True,
+                                            "processing_method": "reconstructed_from_chunks",
+                                            "processed_at": payload.get("processed_at"),
+                                        },
+                                        "embeddings_created": True,
+                                        "embeddings_info": {
+                                            "collection_name": collection.name,
+                                            "vector_count": getattr(
+                                                collection, "vectors_count", 0
+                                            ),
+                                            "vector_dimension": 384,
+                                        },
+                                        "message": "Textbook structure reconstructed from vector chunks",
+                                    }
+                                    textbooks.append(textbook_data)
+
                     except Exception as e:
-                        logger.warning(
-                            f"Error getting full metadata for {book_id}: {e}"
+                        logger.warning(f"Error processing textbook {book_id}: {e}")
+                        # Thêm basic info nếu có lỗi
+                        textbooks.append(
+                            {
+                                "success": False,
+                                "book_id": book_id,
+                                "error": str(e),
+                                "collection_name": collection.name,
+                                "status": "error",
+                            }
                         )
 
         return {
             "success": True,
             "total_textbooks": len(textbooks),
             "textbooks": textbooks,
-            "message": f"Found {len(textbooks)} textbooks with full format",
+            "message": f"Retrieved {len(textbooks)} textbooks successfully",
         }
 
     except Exception as e:
-        logger.error(f"Error listing textbooks with full format: {e}")
+        logger.error(f"Error in getAllTextBook: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
@@ -614,181 +697,247 @@ async def get_textbook_structure(book_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.get("/textbook/{book_id}/lesson/{lesson_id}", response_model=Dict[str, Any])
-async def get_lesson_content(book_id: str, lesson_id: str) -> Dict[str, Any]:
+@router.get("/lesson/{lesson_id}", response_model=Dict[str, Any])
+async def get_lesson_content_by_id(lesson_id: str) -> Dict[str, Any]:
     """
-    Lấy nội dung chi tiết của một bài học từ Qdrant hoặc file system
+    Lấy nội dung chi tiết của một bài học chỉ bằng lesson_id
+
+    API này tìm kiếm lesson trong tất cả textbooks và trả về nội dung đầy đủ
+    với format giống như /process-textbook.
 
     Args:
-        book_id: ID của sách
-        lesson_id: ID của bài học
+        lesson_id: ID của bài học cần lấy
 
     Returns:
-        Dict containing lesson content
+        Dict chứa nội dung đầy đủ của bài học với format chuẩn
+
+    Example:
+        GET /api/v1/pdf/lesson/lesson_01_01
     """
     try:
-        # Thử lấy từ file system trước (legacy data)
-        lesson_content = await textbook_parser_service.get_lesson_content(
-            book_id, lesson_id
-        )
-
-        if lesson_content:
-            return {
-                "success": True,
-                "book_id": book_id,
-                "lesson_id": lesson_id,
-                "content": lesson_content,
-                "source": "file_system",
-            }
-
-        # Nếu không tìm thấy trong file system, thử lấy từ Qdrant
         from app.services.qdrant_service import qdrant_service
         from qdrant_client import models as qdrant_models
 
-        collection_name = f"textbook_{book_id}"
+        if not qdrant_service.qdrant_client:
+            raise HTTPException(status_code=503, detail="Qdrant service not available")
 
-        try:
-            if not qdrant_service.qdrant_client:
-                raise Exception("Qdrant client not available")
+        # Tìm kiếm lesson trong tất cả collections
+        collections = qdrant_service.qdrant_client.get_collections().collections
+        lesson_found = False
+        lesson_data = None
+        book_id = None
 
-            # Tìm tất cả chunks của lesson này
-            search_result = qdrant_service.qdrant_client.scroll(
-                collection_name=collection_name,
-                scroll_filter=qdrant_models.Filter(
-                    must=[
-                        qdrant_models.FieldCondition(
-                            key="lesson_id",
-                            match=qdrant_models.MatchValue(value=lesson_id),
+        for collection in collections:
+            if collection.name.startswith("textbook_"):
+                try:
+                    # Tìm lesson trong collection này
+                    search_result = qdrant_service.qdrant_client.scroll(
+                        collection_name=collection.name,
+                        scroll_filter=qdrant_models.Filter(
+                            must=[
+                                qdrant_models.FieldCondition(
+                                    key="lesson_id",
+                                    match=qdrant_models.MatchValue(value=lesson_id),
+                                )
+                            ]
+                        ),
+                        limit=100,  # Lấy nhiều chunks của lesson
+                        with_payload=True,
+                    )
+
+                    if search_result[0]:  # Tìm thấy lesson
+                        lesson_found = True
+                        book_id = collection.name.replace("textbook_", "")
+
+                        # Tổng hợp nội dung từ các chunks
+                        lesson_chunks = []
+                        lesson_info = {}
+
+                        for point in search_result[0]:
+                            payload = point.payload or {}
+
+                            # Lấy thông tin lesson từ chunk đầu tiên
+                            if not lesson_info:
+                                lesson_info = {
+                                    "lesson_id": lesson_id,
+                                    "lesson_title": payload.get(
+                                        "lesson_title", "Unknown"
+                                    ),
+                                    "chapter_id": payload.get("chapter_id", "Unknown"),
+                                    "chapter_title": payload.get(
+                                        "chapter_title", "Unknown"
+                                    ),
+                                    "book_title": payload.get("book_title", "Unknown"),
+                                    "subject": payload.get("subject", "Unknown"),
+                                    "grade": payload.get("grade", "Unknown"),
+                                    # Lấy thông tin pages và images từ payload
+                                    "lesson_start_page": payload.get(
+                                        "lesson_start_page"
+                                    ),
+                                    "lesson_end_page": payload.get("lesson_end_page"),
+                                    "lesson_images": payload.get("lesson_images", []),
+                                    "lesson_pages": payload.get("lesson_pages", []),
+                                    "lesson_total_pages": payload.get(
+                                        "lesson_total_pages", 0
+                                    ),
+                                    "lesson_has_images": payload.get(
+                                        "lesson_has_images", False
+                                    ),
+                                }
+
+                            # Chỉ lấy content chunks, bỏ qua title chunks
+                            if payload.get("type") == "content":
+                                lesson_chunks.append(
+                                    {
+                                        "text": payload.get("text", ""),
+                                        "chunk_index": payload.get("chunk_index", 0),
+                                        "type": payload.get("type", "content"),
+                                    }
+                                )
+
+                        # Sắp xếp chunks theo thứ tự
+                        lesson_chunks.sort(key=lambda x: x.get("chunk_index", 0))
+
+                        # Ghép nội dung text
+                        content_text = "\n\n".join(
+                            [chunk["text"] for chunk in lesson_chunks]
                         )
-                    ]
-                ),
-                limit=100,
-                with_payload=True,
-            )
 
-            if not search_result[0]:  # Không có points
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Lesson '{lesson_id}' not found in textbook '{book_id}'",
-                )
-
-            # Tổng hợp nội dung từ các chunks
-            lesson_chunks = []
-            lesson_info = {}
-
-            for point in search_result[0]:
-                payload = point.payload or {}
-
-                # Lấy thông tin lesson từ chunk đầu tiên
-                if not lesson_info:
-                    lesson_info = {
-                        "lesson_id": lesson_id,
-                        "lesson_title": payload.get("lesson_title", "Unknown"),
-                        "chapter_id": payload.get("chapter_id", "Unknown"),
-                        "chapter_title": payload.get("chapter_title", "Unknown"),
-                        "book_title": payload.get("book_title", "Unknown"),
-                        "subject": payload.get("subject", "Unknown"),
-                        "grade": payload.get("grade", "Unknown"),
-                        # Lấy thông tin pages và images từ payload
-                        "lesson_start_page": payload.get("lesson_start_page"),
-                        "lesson_end_page": payload.get("lesson_end_page"),
-                        "lesson_images": payload.get("lesson_images", []),
-                        "lesson_pages": payload.get("lesson_pages", []),
-                        "lesson_total_pages": payload.get("lesson_total_pages", 0),
-                        "lesson_has_images": payload.get("lesson_has_images", False),
-                    }
-
-                lesson_chunks.append(
-                    {
-                        "type": payload.get("type", "content"),
-                        "text": payload.get("text", ""),
-                        "chunk_id": str(point.id),
-                    }
-                )
-
-            # Sắp xếp chunks theo type (title trước, content sau)
-            lesson_chunks.sort(key=lambda x: 0 if x["type"] == "title" else 1)
-
-            # Tạo content text từ các chunks
-            content_text_parts = []
-            for chunk in lesson_chunks:
-                if chunk.get("type") == "title":
-                    content_text_parts.append(f"\n=== {chunk.get('text', '')} ===\n")
-                else:
-                    content_text_parts.append(chunk.get("text", ""))
-
-            content_text = "\n\n".join(content_text_parts).strip()
-
-            # Tạo cấu trúc giống /process-textbook
-            book_structure = {
-                "book_info": {
-                    "title": lesson_info.get("book_title", "Unknown"),
-                    "subject": lesson_info.get("subject", "Unknown"),
-                    "grade": lesson_info.get("grade", "Unknown"),
-                    "book_id": book_id,
-                    "total_pages": "Unknown",  # Không có thông tin pages từ Qdrant
-                },
-                "chapters": [
-                    {
-                        "chapter_id": lesson_info.get("chapter_id"),
-                        "chapter_title": lesson_info.get("chapter_title"),
-                        "lessons": [
-                            {
-                                "lesson_id": lesson_id,
-                                "lesson_title": lesson_info.get("lesson_title"),
-                                "start_page": lesson_info.get("lesson_start_page"),
-                                "end_page": lesson_info.get("lesson_end_page"),
-                                "content": {
-                                    "text": content_text,
-                                    "images": lesson_info.get("lesson_images", []),
-                                    "pages": lesson_info.get("lesson_pages", []),
+                        # Tạo response với format đầy đủ như /process-textbook
+                        lesson_data = {
+                            "success": True,
+                            "book_id": book_id,
+                            "lesson_id": lesson_id,
+                            "book_structure": {
+                                "book_info": {
+                                    "title": lesson_info.get("book_title", "Unknown"),
+                                    "subject": lesson_info.get("subject", "Unknown"),
+                                    "grade": lesson_info.get("grade", "Unknown"),
                                     "total_pages": lesson_info.get(
                                         "lesson_total_pages", 0
                                     ),
-                                    "has_images": lesson_info.get(
-                                        "lesson_has_images", False
-                                    ),
-                                    "chunks_info": {
-                                        "total_chunks": len(lesson_chunks),
-                                        "chunk_types": list(
-                                            set(
-                                                chunk.get("type", "content")
-                                                for chunk in lesson_chunks
-                                            )
-                                        ),
-                                    },
                                 },
-                            }
-                        ],
-                    }
-                ],
-            }
+                                "chapters": [
+                                    {
+                                        "chapter_id": lesson_info.get("chapter_id"),
+                                        "chapter_title": lesson_info.get(
+                                            "chapter_title"
+                                        ),
+                                        "start_page": lesson_info.get(
+                                            "lesson_start_page"
+                                        ),
+                                        "end_page": lesson_info.get("lesson_end_page"),
+                                        "lessons": [
+                                            {
+                                                "lesson_id": lesson_id,
+                                                "lesson_title": lesson_info.get(
+                                                    "lesson_title"
+                                                ),
+                                                "start_page": lesson_info.get(
+                                                    "lesson_start_page"
+                                                ),
+                                                "end_page": lesson_info.get(
+                                                    "lesson_end_page"
+                                                ),
+                                                "content": {
+                                                    "text": content_text,
+                                                    "images": lesson_info.get(
+                                                        "lesson_images", []
+                                                    ),
+                                                    "pages": lesson_info.get(
+                                                        "lesson_pages", []
+                                                    ),
+                                                    "total_pages": lesson_info.get(
+                                                        "lesson_total_pages", 0
+                                                    ),
+                                                    "has_images": lesson_info.get(
+                                                        "lesson_has_images", False
+                                                    ),
+                                                    "chunks_info": {
+                                                        "total_chunks": len(
+                                                            lesson_chunks
+                                                        ),
+                                                        "chunk_types": list(
+                                                            set(
+                                                                chunk.get(
+                                                                    "type", "content"
+                                                                )
+                                                                for chunk in lesson_chunks
+                                                            )
+                                                        ),
+                                                    },
+                                                },
+                                            }
+                                        ],
+                                    }
+                                ],
+                            },
+                            "statistics": {
+                                "total_pages": lesson_info.get("lesson_total_pages", 0),
+                                "total_chapters": 1,
+                                "total_lessons": 1,
+                            },
+                            "processing_info": {
+                                "ocr_applied": True,
+                                "llm_analysis": True,
+                                "processing_method": "retrieved_from_qdrant_by_lesson_id",
+                            },
+                            "embeddings_created": True,
+                            "embeddings_info": {
+                                "collection_name": collection.name,
+                                "vector_count": len(search_result[0]),
+                                "vector_dimension": 384,
+                            },
+                            "message": f"Lesson content retrieved successfully from {collection.name}",
+                        }
+                        break  # Đã tìm thấy, thoát khỏi loop
 
-            return {
-                "success": True,
-                "book_id": book_id,
-                "lesson_id": lesson_id,
-                "book_structure": book_structure,
-                "source": "qdrant",
-                "statistics": {
-                    "total_chapters": 1,
-                    "total_lessons": 1,
-                    "total_chunks": len(lesson_chunks),
-                },
-                "navigation": {
-                    "book_structure": f"/api/v1/pdf/textbook/{book_id}/structure",
-                    "search_in_book": f"/api/v1/pdf/textbook/{book_id}/search?query=<your_query>",
-                    "global_search": "/api/v1/pdf/search?query=<your_query>",
-                },
-                "message": f"Lesson '{lesson_id}' retrieved successfully from vector database",
-            }
+                except Exception as e:
+                    logger.warning(f"Error searching lesson in {collection.name}: {e}")
+                    continue
 
-        except Exception as e:
-            logger.warning(f"Error getting lesson from Qdrant: {e}")
+        if not lesson_found:
             raise HTTPException(
                 status_code=404,
-                detail=f"Lesson '{lesson_id}' not found in textbook '{book_id}'",
+                detail=f"Lesson with ID '{lesson_id}' not found in any textbook",
             )
+
+        return lesson_data
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting lesson content for {lesson_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/textbook/{book_id}/lesson/{lesson_id}", response_model=Dict[str, Any])
+async def get_lesson_content(book_id: str, lesson_id: str) -> Dict[str, Any]:
+    """
+    [DEPRECATED] Lấy nội dung chi tiết của một bài học từ Qdrant hoặc file system
+
+    ⚠️ API này đã deprecated. Sử dụng /lesson/{lesson_id} thay thế.
+
+    API này redirect đến endpoint mới /lesson/{lesson_id} vì không cần book_id nữa.
+    Endpoint mới sẽ tự động tìm lesson trong tất cả textbooks.
+
+    Args:
+        book_id: ID của sách (không cần thiết nữa)
+        lesson_id: ID của bài học
+
+    Returns:
+        Dict chứa nội dung chi tiết của bài học
+
+    Example:
+        GET /api/v1/pdf/textbook/book_001/lesson/lesson_01_01
+        -> Redirect to: GET /api/v1/pdf/lesson/lesson_01_01
+    """
+    try:
+        # Redirect đến endpoint mới
+        logger.info(
+            f"Redirecting /textbook/{book_id}/lesson/{lesson_id} to /lesson/{lesson_id}"
+        )
+        return await get_lesson_content_by_id(lesson_id)
 
     except HTTPException:
         raise
@@ -915,6 +1064,283 @@ async def search_all_textbooks(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+@router.get("/search-books", response_model=Dict[str, Any])
+async def search_books_metadata(
+    query: str = Query(..., description="Search query for books"),
+    limit: int = Query(10, ge=1, le=50, description="Maximum number of results"),
+) -> Dict[str, Any]:
+    """
+    Tìm kiếm sách và trả về metadata đơn giản
+
+    Endpoint này tìm kiếm trong tất cả textbooks và trả về thông tin metadata
+    cơ bản của sách thay vì nội dung chi tiết.
+
+    Args:
+        query: Từ khóa tìm kiếm (title, author, subject, etc.)
+        limit: Số lượng kết quả tối đa (1-50, mặc định 10)
+
+    Returns:
+        Dict chứa danh sách sách với metadata đơn giản
+
+    Example:
+        GET /api/v1/pdf/search-books?query=hóa học&limit=5
+    """
+    try:
+        from app.services.qdrant_service import qdrant_service
+        from qdrant_client import models as qdrant_models
+
+        logger.info(f"Searching books with query: '{query}' limit: {limit}")
+
+        if not qdrant_service.qdrant_client:
+            raise HTTPException(status_code=503, detail="Qdrant service not available")
+
+        # Lấy danh sách tất cả collections
+        collections = qdrant_service.qdrant_client.get_collections().collections
+        books_found = []
+
+        for collection in collections:
+            if collection.name.startswith("textbook_"):
+                book_id = collection.name.replace("textbook_", "")
+
+                try:
+                    # Tìm metadata point để lấy thông tin sách
+                    search_result = qdrant_service.qdrant_client.scroll(
+                        collection_name=collection.name,
+                        scroll_filter=qdrant_models.Filter(
+                            must=[
+                                qdrant_models.FieldCondition(
+                                    key="type",
+                                    match=qdrant_models.MatchValue(value="metadata"),
+                                )
+                            ]
+                        ),
+                        limit=1,
+                        with_payload=True,
+                    )
+
+                    if search_result[0]:  # Có metadata point
+                        metadata_point = search_result[0][0]
+                        payload = metadata_point.payload or {}
+
+                        # Lấy original_book_structure nếu có
+                        original_structure = payload.get("original_book_structure")
+                        book_info = {}
+
+                        if original_structure:
+                            book_info = original_structure.get("book_info", {})
+                        else:
+                            # Fallback từ payload
+                            book_info = {
+                                "title": payload.get("book_title", "Unknown"),
+                                "subject": payload.get("book_subject", "Unknown"),
+                                "grade": payload.get("book_grade", "Unknown"),
+                                "total_pages": payload.get("book_total_pages", 0),
+                            }
+
+                        # Tạo metadata theo format yêu cầu
+                        book_metadata = {
+                            "id": book_id,
+                            "title": book_info.get("title", "Unknown"),
+                            "author": book_info.get("author", "Bộ Giáo dục và Đào tạo"),
+                            "publisher": book_info.get(
+                                "publisher", "Nhà xuất bản Giáo dục Việt Nam"
+                            ),
+                            "published_year": book_info.get("published_year", 2024),
+                            "isbn": book_info.get(
+                                "isbn",
+                                f"978-604-{book_id[:3]}-{book_id[3:6]}-{book_id[6:]}",
+                            ),
+                            "language": book_info.get("language", "vi"),
+                            "categories": [
+                                book_info.get("subject", "Giáo dục"),
+                                f"Lớp {book_info.get('grade', 'Chưa xác định')}",
+                            ],
+                            "description": f"Sách giáo khoa {book_info.get('subject', 'Unknown')} - {book_info.get('title', 'Unknown')}",
+                            "pages": book_info.get("total_pages", 0),
+                            "format": "PDF",
+                        }
+
+                        # Kiểm tra xem sách có match với query không
+                        searchable_text = " ".join(
+                            [
+                                book_metadata["title"].lower(),
+                                book_metadata["author"].lower(),
+                                book_metadata["publisher"].lower(),
+                                " ".join(book_metadata["categories"]).lower(),
+                                book_metadata["description"].lower(),
+                            ]
+                        )
+
+                        if query.lower() in searchable_text:
+                            books_found.append(book_metadata)
+
+                except Exception as e:
+                    logger.warning(
+                        f"Error processing collection {collection.name}: {e}"
+                    )
+                    continue
+
+        # Sắp xếp theo relevance (title match trước)
+        def relevance_score(book):
+            score = 0
+            query_lower = query.lower()
+            if query_lower in book["title"].lower():
+                score += 10
+            if query_lower in book["description"].lower():
+                score += 5
+            if query_lower in " ".join(book["categories"]).lower():
+                score += 3
+            if query_lower in book["author"].lower():
+                score += 2
+            return score
+
+        books_found.sort(key=relevance_score, reverse=True)
+
+        # Áp dụng limit
+        books_found = books_found[:limit]
+
+        return {
+            "success": True,
+            "query": query,
+            "total_results": len(books_found),
+            "books": books_found,
+            "message": f"Found {len(books_found)} books matching '{query}'",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in search-books: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/search-textbooks-simple", response_model=Dict[str, Any])
+async def search_textbooks_simple(
+    query: str = Query(..., description="Search query for textbooks"),
+    limit: int = Query(10, ge=1, le=20, description="Maximum number of results"),
+) -> Dict[str, Any]:
+    """
+    Tìm kiếm sách giáo khoa đơn giản và trả về format đầy đủ như /process-textbook
+
+    Endpoint này sử dụng getAllTextBook rồi filter theo query để đảm bảo
+    trả về đúng format với content đầy đủ.
+
+    Args:
+        query: Từ khóa tìm kiếm (title, subject, content, etc.)
+        limit: Số lượng kết quả tối đa (1-20, mặc định 10)
+
+    Returns:
+        Dict chứa danh sách textbooks với format đầy đủ như /process-textbook
+
+    Example:
+        GET /api/v1/pdf/search-textbooks-simple?query=hóa học&limit=5
+    """
+    try:
+        logger.info(f"Simple search textbooks with query: '{query}' limit: {limit}")
+
+        # Lấy tất cả textbooks từ getAllTextBook
+        all_textbooks_response = await get_all_textbook()
+
+        if not all_textbooks_response.get("success"):
+            raise HTTPException(status_code=500, detail="Failed to get textbooks")
+
+        all_textbooks = all_textbooks_response.get("textbooks", [])
+        matched_textbooks = []
+
+        for textbook in all_textbooks:
+            # Tạo searchable text từ textbook data
+            book_structure = textbook.get("book_structure", {})
+            book_info = book_structure.get("book_info", {})
+            chapters = book_structure.get("chapters", [])
+
+            searchable_texts = [
+                str(textbook.get("book_id", "")).lower(),
+                str(book_info.get("title", "")).lower(),
+                str(book_info.get("subject", "")).lower(),
+                str(book_info.get("grade", "")).lower(),
+            ]
+
+            # Thêm text từ chapters và lessons
+            for chapter in chapters:
+                searchable_texts.append(str(chapter.get("chapter_title", "")).lower())
+                for lesson in chapter.get("lessons", []):
+                    searchable_texts.append(str(lesson.get("lesson_title", "")).lower())
+                    content = lesson.get("content", {})
+                    if isinstance(content, dict):
+                        lesson_text = str(content.get("text", ""))
+                        # Lấy một phần text để search (không quá dài)
+                        searchable_texts.append(lesson_text[:500].lower())
+
+            searchable_text = " ".join(searchable_texts)
+
+            # Kiểm tra match
+            if query.lower() in searchable_text:
+                # Tạo response với format đầy đủ như /process-textbook
+                textbook_data = {
+                    "success": True,
+                    "book_id": textbook.get("book_id"),
+                    "filename": f"{textbook.get('book_id')}.pdf",
+                    "book_structure": book_structure,  # Giữ nguyên structure từ getAllTextBook
+                    "statistics": {
+                        "total_pages": book_info.get("total_pages", 0),
+                        "total_chapters": len(chapters),
+                        "total_lessons": sum(
+                            len(ch.get("lessons", [])) for ch in chapters
+                        ),
+                    },
+                    "processing_info": {
+                        "ocr_applied": True,
+                        "llm_analysis": True,
+                        "processing_method": "simple_search_from_getAllTextBook",
+                        "processed_at": textbook.get("processed_at"),
+                    },
+                    "embeddings_created": True,
+                    "embeddings_info": {
+                        "collection_name": f"textbook_{textbook.get('book_id')}",
+                        "vector_count": 0,  # Will be updated if needed
+                        "vector_dimension": 384,
+                    },
+                    "message": f"Textbook found matching '{query}' with full content structure",
+                }
+                matched_textbooks.append(textbook_data)
+
+        # Sắp xếp theo relevance (title match trước)
+        def relevance_score(textbook):
+            score = 0
+            query_lower = query.lower()
+            book_info = textbook.get("book_structure", {}).get("book_info", {})
+
+            if query_lower in str(textbook.get("book_id", "")).lower():
+                score += 15
+            if query_lower in str(book_info.get("title", "")).lower():
+                score += 10
+            if query_lower in str(book_info.get("subject", "")).lower():
+                score += 8
+            if query_lower in str(book_info.get("grade", "")).lower():
+                score += 5
+
+            return score
+
+        matched_textbooks.sort(key=relevance_score, reverse=True)
+
+        # Áp dụng limit
+        matched_textbooks = matched_textbooks[:limit]
+
+        return {
+            "success": True,
+            "query": query,
+            "total_results": len(matched_textbooks),
+            "textbooks": matched_textbooks,
+            "message": f"Found {len(matched_textbooks)} textbooks matching '{query}' with full structure",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in search-textbooks-simple: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
 @router.get("/health")
 async def health_check():
     """
@@ -946,19 +1372,24 @@ async def health_check():
                 "/process-textbook-async",
                 "/process-textbook",
                 "/quick-textbook-analysis",
-                "/textbooks",  # NEW: List all textbooks
+                "/getAllTextBook",  # Enhanced textbook list
                 "/textbook/{book_id}/structure",
-                "/textbook/{book_id}/lesson/{lesson_id}",
+                "/lesson/{lesson_id}",  # Get lesson by ID only
+                "/textbook/{book_id}/lesson/{lesson_id}",  # DEPRECATED: Redirects to /lesson/{lesson_id}
                 "/textbook/{book_id}/search",
-                "/search",
+                "/search",  # Content search
+                "/search-books",  # Book metadata search
+                "/search-textbooks-simple",  # Full textbook structure search (Simple)
                 "/health",
             ],
             "usage_flow": {
-                "1": "Upload PDF: POST /process-textbook-async",
-                "2": "List textbooks: GET /textbooks",
-                "3": "Get structure: GET /textbook/{book_id}/structure",
-                "4": "Get lesson: GET /textbook/{book_id}/lesson/{lesson_id}",
-                "5": "Search: GET /search?query=your_query",
+                "1": "Upload PDF: POST /quick-textbook-analysis",
+                "2": "List textbooks: GET /getAllTextBook",
+                "3": "Search textbooks: GET /search-textbooks-simple?query=your_query",  # RECOMMENDED: Full structure
+                "4": "Search books (metadata): GET /search-books?query=your_query",  # Metadata only
+                "5": "Get structure: GET /textbook/{book_id}/structure",
+                "6": "Get lesson: GET /lesson/{lesson_id}",  # No book_id needed
+                "7": "Search content: GET /search?query=your_query",
             },
         }
     except Exception as e:

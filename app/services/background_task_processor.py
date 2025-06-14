@@ -7,7 +7,7 @@ import logging
 import json
 from typing import Dict, Any
 
-from app.services.task_service import task_service, TaskType
+from app.services.mongodb_task_service import mongodb_task_service, TaskType
 
 logger = logging.getLogger(__name__)
 
@@ -16,48 +16,50 @@ class BackgroundTaskProcessor:
     """Service xử lý background tasks sử dụng TaskService"""
 
     def __init__(self):
-        self.task_service = task_service
+        self.task_service = mongodb_task_service
 
-    def create_task(self, task_type: str, task_data: Dict[str, Any]) -> str:
+    async def create_task(self, task_type: str, task_data: Dict[str, Any]) -> str:
         """Tạo task mới"""
         # Convert string to TaskType enum
         task_type_enum = TaskType(task_type)
-        return self.task_service.create_task(task_type_enum, task_data)
+        return await self.task_service.create_task(task_type_enum, task_data)
 
-    def get_task_status(self, task_id: str) -> Dict[str, Any]:
+    async def get_task_status(self, task_id: str) -> Dict[str, Any]:
         """Lấy trạng thái task"""
-        return self.task_service.get_task_status(task_id)
+        return await self.task_service.get_task_status(task_id)
 
-    def get_all_tasks(self) -> Dict[str, Any]:
+    async def get_all_tasks(self) -> Dict[str, Any]:
         """Lấy tất cả tasks"""
-        return self.task_service.get_all_tasks()
+        return await self.task_service.get_all_tasks()
 
-    def update_task_progress(self, task_id: str, progress: int, message: str = None):
+    async def update_task_progress(
+        self, task_id: str, progress: int, message: str = None
+    ):
         """Cập nhật tiến độ task"""
-        self.task_service.update_task_progress(task_id, progress, message)
+        await self.task_service.update_task_progress(task_id, progress, message)
 
-    def mark_task_processing(self, task_id: str):
+    async def mark_task_processing(self, task_id: str):
         """Đánh dấu task đang xử lý"""
-        self.task_service.mark_task_processing(task_id)
+        await self.task_service.mark_task_processing(task_id)
 
-    def mark_task_completed(self, task_id: str, result: Dict[str, Any]):
+    async def mark_task_completed(self, task_id: str, result: Dict[str, Any]):
         """Đánh dấu task hoàn thành"""
-        self.task_service.mark_task_completed(task_id, result)
+        await self.task_service.mark_task_completed(task_id, result)
 
-    def mark_task_failed(self, task_id: str, error: str):
+    async def mark_task_failed(self, task_id: str, error: str):
         """Đánh dấu task thất bại"""
-        self.task_service.mark_task_failed(task_id, error)
+        await self.task_service.mark_task_failed(task_id, error)
 
     async def process_pdf_task(self, task_id: str):
         """Xử lý PDF task bất đồng bộ"""
 
-        task = self.task_service.get_task_status(task_id)
+        task = await self.task_service.get_task_status(task_id)
         if not task:
             logger.error(f"Task {task_id} not found")
             return
 
         try:
-            self.mark_task_processing(task_id)
+            await self.mark_task_processing(task_id)
 
             # Lấy dữ liệu task
             file_content = task["data"]["file_content"]
@@ -65,14 +67,14 @@ class BackgroundTaskProcessor:
             metadata = task["data"]["metadata"]
             create_embeddings = task["data"].get("create_embeddings", True)
 
-            self.update_task_progress(task_id, 10, "Starting PDF processing...")
+            await self.update_task_progress(task_id, 10, "Starting PDF processing...")
 
             # Import services
             from app.services.enhanced_textbook_service import enhanced_textbook_service
             from app.services.qdrant_service import qdrant_service
 
             # Bước 1: OCR và phân tích cấu trúc
-            self.update_task_progress(task_id, 20, "Extracting text with OCR...")
+            await self.update_task_progress(task_id, 20, "Extracting text with OCR...")
 
             enhanced_result = (
                 await enhanced_textbook_service.process_textbook_to_structure(
@@ -85,12 +87,14 @@ class BackgroundTaskProcessor:
                     f"PDF processing failed: {enhanced_result.get('error')}"
                 )
 
-            self.update_task_progress(task_id, 60, "PDF structure analysis completed")
+            await self.update_task_progress(
+                task_id, 60, "PDF structure analysis completed"
+            )
 
             # Bước 2: Tạo embeddings nếu được yêu cầu
             embeddings_result = None
             if create_embeddings:
-                self.update_task_progress(task_id, 70, "Creating embeddings...")
+                await self.update_task_progress(task_id, 70, "Creating embeddings...")
 
                 book_structure_dict = enhanced_result["book"]
                 if isinstance(book_structure_dict, str):
@@ -101,7 +105,7 @@ class BackgroundTaskProcessor:
                 )
 
                 if embeddings_result.get("success"):
-                    self.update_task_progress(
+                    await self.update_task_progress(
                         task_id, 90, "Embeddings created successfully"
                     )
                 else:
@@ -141,11 +145,11 @@ class BackgroundTaskProcessor:
                 },
             }
 
-            self.mark_task_completed(task_id, result)
+            await self.mark_task_completed(task_id, result)
 
         except Exception as e:
             logger.error(f"Error processing PDF task {task_id}: {e}")
-            self.mark_task_failed(task_id, str(e))
+            await self.mark_task_failed(task_id, str(e))
 
     async def process_cv_task(self, task_id: str):
         """Xử lý CV task bất đồng bộ"""
@@ -254,7 +258,7 @@ class BackgroundTaskProcessor:
             "create_embeddings": create_embeddings,
         }
 
-        task_id = self.create_task("quick_analysis", task_data)
+        task_id = await self.create_task("quick_analysis", task_data)
 
         # Bắt đầu xử lý task bất đồng bộ
         asyncio.create_task(self.process_quick_analysis_task(task_id))
@@ -264,20 +268,20 @@ class BackgroundTaskProcessor:
     async def process_quick_analysis_task(self, task_id: str):
         """Xử lý task phân tích nhanh sách giáo khoa"""
 
-        task = self.task_service.get_task_status(task_id)
+        task = await self.task_service.get_task_status(task_id)
         if not task:
             logger.error(f"Task {task_id} not found")
             return
 
         try:
-            self.mark_task_processing(task_id)
+            await self.mark_task_processing(task_id)
 
             # Lấy dữ liệu task
             file_content = task["data"]["file_content"]
             filename = task["data"]["filename"]
             create_embeddings = task["data"].get("create_embeddings", True)
 
-            self.update_task_progress(
+            await self.update_task_progress(
                 task_id, 10, "Starting quick textbook analysis..."
             )
 
@@ -287,13 +291,13 @@ class BackgroundTaskProcessor:
             import uuid
 
             # Bước 1: OCR và phân tích cấu trúc
-            self.update_task_progress(task_id, 20, "Extracting pages with OCR...")
+            await self.update_task_progress(task_id, 20, "Extracting pages with OCR...")
 
             pages_data = await enhanced_textbook_service._extract_pages_with_ocr(
                 file_content
             )
 
-            self.update_task_progress(task_id, 40, "Analyzing book structure...")
+            await self.update_task_progress(task_id, 40, "Analyzing book structure...")
 
             # Tạo metadata tự động
             book_metadata = {
@@ -314,19 +318,21 @@ class BackgroundTaskProcessor:
             if not book_structure:
                 raise Exception("Failed to analyze textbook structure")
 
-            self.update_task_progress(task_id, 60, "Book structure analysis completed")
+            await self.update_task_progress(
+                task_id, 60, "Book structure analysis completed"
+            )
 
             # Bước 2: Tạo embeddings nếu được yêu cầu
             embeddings_result = None
             if create_embeddings:
-                self.update_task_progress(task_id, 70, "Creating embeddings...")
+                await self.update_task_progress(task_id, 70, "Creating embeddings...")
 
                 embeddings_result = await qdrant_service.process_textbook(
                     book_id=book_metadata.get("id"), book_structure=book_structure
                 )
 
                 if embeddings_result.get("success"):
-                    self.update_task_progress(
+                    await self.update_task_progress(
                         task_id, 90, "Embeddings created successfully"
                     )
                 else:
@@ -372,11 +378,11 @@ class BackgroundTaskProcessor:
                 else None,
             }
 
-            self.mark_task_completed(task_id, result)
+            await self.mark_task_completed(task_id, result)
 
         except Exception as e:
             logger.error(f"Error processing quick analysis task {task_id}: {e}")
-            self.mark_task_failed(task_id, str(e))
+            await self.mark_task_failed(task_id, str(e))
 
     async def process_pdf_auto_task(self, task_id: str):
         """Xử lý task PDF với tự động phân tích metadata"""

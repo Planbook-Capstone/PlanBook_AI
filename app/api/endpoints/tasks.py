@@ -37,7 +37,7 @@ async def get_task_status(task_id: str) -> Dict[str, Any]:
         }
     """
     try:
-        task = background_task_processor.get_task_status(task_id)
+        task = await background_task_processor.get_task_status(task_id)
 
         if not task:
             raise HTTPException(
@@ -109,7 +109,7 @@ async def get_task_result(task_id: str) -> Dict[str, Any]:
         GET /api/v1/tasks/result/abc-123
     """
     try:
-        task = background_task_processor.get_task_status(task_id)
+        task = await background_task_processor.get_task_status(task_id)
 
         if not task:
             raise HTTPException(
@@ -177,7 +177,8 @@ async def get_all_tasks(
     """
     try:
         # Get all tasks
-        result = background_task_processor.get_all_tasks()
+        result = await background_task_processor.get_all_tasks()
+        tasks = result["tasks"]
 
         # Filter by status if provided
         if status:
@@ -189,21 +190,106 @@ async def get_all_tasks(
                 )
 
             # Filter tasks by status
-            filtered_tasks = [t for t in result["tasks"] if t["status"] == status]
-            result["tasks"] = filtered_tasks[:limit]
-        else:
-            result["tasks"] = result["tasks"][:limit]
+            tasks = [t for t in tasks if t["status"] == status]
+
+        # Apply limit
+        tasks = tasks[:limit]
+
+        # Thêm thông tin chi tiết cho mỗi task
+        enhanced_tasks = []
+        for task in tasks:
+            enhanced_task = {
+                "task_id": task["task_id"],
+                "task_type": task["task_type"],
+                "status": task["status"],
+                "progress": task["progress"],
+                "message": task["message"],
+                "created_at": task["created_at"],
+                "started_at": task["started_at"],
+                "completed_at": task["completed_at"],
+                "estimated_duration": task.get("estimated_duration", "Unknown"),
+            }
+
+            # Thêm quick info cho completed tasks
+            if task["status"] == "completed" and task.get("result"):
+                task_result = task["result"]
+                enhanced_task["quick_info"] = {
+                    "success": task_result.get("success", False),
+                    "book_id": task_result.get("book_id"),
+                    "filename": task_result.get("filename"),
+                    "embeddings_created": task_result.get("embeddings_created", False),
+                    "total_pages": task_result.get("statistics", {}).get(
+                        "total_pages", 0
+                    ),
+                    "total_chapters": task_result.get("statistics", {}).get(
+                        "total_chapters", 0
+                    ),
+                    "total_lessons": task_result.get("statistics", {}).get(
+                        "total_lessons", 0
+                    ),
+                }
+
+            # Thêm error info cho failed tasks
+            if task["status"] == "failed":
+                enhanced_task["error"] = task.get("error", "Unknown error")
+
+            enhanced_tasks.append(enhanced_task)
+
+        # Tính toán thống kê
+        all_tasks = result["tasks"]
+        total_tasks = len(all_tasks)
+        processing_tasks = len([t for t in all_tasks if t["status"] == "processing"])
+        completed_tasks = len([t for t in all_tasks if t["status"] == "completed"])
+        failed_tasks = len([t for t in all_tasks if t["status"] == "failed"])
+        pending_tasks = len([t for t in all_tasks if t["status"] == "pending"])
 
         return {
             "success": True,
-            "data": result,
+            "data": {
+                "tasks": enhanced_tasks,
+                "total_tasks": total_tasks,
+                "processing_tasks": processing_tasks,
+                "completed_tasks": completed_tasks,
+                "failed_tasks": failed_tasks,
+                "pending_tasks": pending_tasks,
+            },
             "filters": {"limit": limit, "status": status},
+            "summary": {
+                "most_recent_task": enhanced_tasks[0] if enhanced_tasks else None,
+                "success_rate": f"{(completed_tasks / total_tasks * 100):.1f}%"
+                if total_tasks > 0
+                else "0%",
+                "active_tasks": processing_tasks + pending_tasks,
+            },
         }
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting tasks: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/getAllTask", response_model=Dict[str, Any])
+async def get_all_task() -> Dict[str, Any]:
+    """
+    Lấy danh sách tất cả tasks (alias cho endpoint chính)
+
+    Endpoint này tương đương với GET /api/v1/tasks/ nhưng với tên gọi khác
+    để phù hợp với naming convention của bạn.
+
+    Returns:
+        Dict chứa danh sách tất cả tasks với thông tin chi tiết
+
+    Example:
+        GET /api/v1/tasks/getAllTask
+    """
+    try:
+        # Gọi lại function chính với default parameters
+        return await get_all_tasks(limit=100, status=None)
+
+    except Exception as e:
+        logger.error(f"Error in getAllTask: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
