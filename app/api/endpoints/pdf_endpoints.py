@@ -56,14 +56,13 @@ async def process_textbook_async(
         )
 
         # Tạo background task với auto metadata detection
-        task_data = {
-            "file_content": file_content,
+        task_data = {            "file_content": file_content,
             "filename": file.filename,
             "auto_detect_metadata": True,  # Flag để tự động phân tích metadata
             "create_embeddings": create_embeddings,
         }
 
-        task_id = background_task_processor.create_task(
+        task_id = await background_task_processor.create_task(
             task_type="process_textbook_auto", task_data=task_data
         )
 
@@ -889,16 +888,21 @@ async def get_lesson_content_by_id(lesson_id: str) -> Dict[str, Any]:
                             },
                             "message": f"Lesson content retrieved successfully from {collection.name}",
                         }
-                        break  # Đã tìm thấy, thoát khỏi loop
-
+                        break  # Đã tìm thấy, thoát khỏi loop                except Exception as e:
                 except Exception as e:
-                    logger.warning(f"Error searching lesson in {collection.name}: {e}")
-                    continue
+                 logger.warning(f"Error searching lesson in {collection.name}: {e}")
+                 continue
 
         if not lesson_found:
             raise HTTPException(
                 status_code=404,
                 detail=f"Lesson with ID '{lesson_id}' not found in any textbook",
+            )
+
+        if lesson_data is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Lesson data is None - internal error",
             )
 
         return lesson_data

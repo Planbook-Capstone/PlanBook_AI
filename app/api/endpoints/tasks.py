@@ -2,6 +2,7 @@
 Task Endpoints - API endpoints riêng cho quản lý tasks
 """
 
+import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, Query
 from typing import Dict, Any
@@ -34,10 +35,12 @@ async def get_task_status(task_id: str) -> Dict[str, Any]:
             "progress": 45,
             "message": "Creating embeddings...",
             "result": null  // Chỉ có khi completed
-        }
-    """
-    try:
-        task = await background_task_processor.get_task_status(task_id)
+        }"""
+    try:  # Sử dụng method tối ưu hơn nếu có
+        if hasattr(background_task_processor, "get_task_status_optimized"):
+            task = await background_task_processor.get_task_status_optimized(task_id)
+        else:
+            task = await background_task_processor.get_task_status(task_id)
 
         if not task:
             raise HTTPException(

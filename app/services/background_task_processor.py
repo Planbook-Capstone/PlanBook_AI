@@ -5,7 +5,10 @@ Background Task Processor - Xử lý các task bất đồng bộ sử dụng Ta
 import asyncio
 import logging
 import json
-from typing import Dict, Any
+import time
+from typing import Dict, Any, Optional
+from datetime import datetime, timedelta
+import concurrent.futures
 
 from app.services.mongodb_task_service import mongodb_task_service, TaskType
 
@@ -17,6 +20,62 @@ class BackgroundTaskProcessor:
 
     def __init__(self):
         self.task_service = mongodb_task_service
+        # ThreadPoolExecutor để chạy OCR operations không block event loop
+        self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        
+        # Task status cache để tránh query MongoDB liên tục
+        self._task_cache: Dict[str, Dict[str, Any]] = {}
+        self._cache_timeout = 3  # seconds - cache ngắn hạn
+        self._cache_lock = asyncio.Lock()
+
+    async def _get_cached_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Lấy task từ cache nếu còn hợp lệ"""
+        async with self._cache_lock:
+            cached = self._task_cache.get(task_id)
+            if cached and time.time() - cached.get("cached_at", 0) < self._cache_timeout:
+                return cached.get("data")
+        return None
+
+    async def _cache_task(self, task_id: str, task_data: Dict[str, Any]):
+        """Cache task data"""
+        async with self._cache_lock:
+            self._task_cache[task_id] = {
+                "data": task_data.copy(),
+                "cached_at": time.time()
+            }
+
+    async def get_task_status_optimized(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Lấy trạng thái task tối ưu với caching và timeout"""
+        # Kiểm tra cache trước
+        cached = await self._get_cached_task(task_id)
+        if cached:
+            return cached
+            
+        # Nếu không có cache, query MongoDB với timeout
+        try:
+            task = await asyncio.wait_for(
+                self.task_service.get_task_status(task_id),
+                timeout=2.0  # Timeout 2 giây
+            )
+            if task:
+                await self._cache_task(task_id, task)
+            return task
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout getting task {task_id}")
+            return None
+
+    async def get_task_status_fast(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Lấy trạng thái task với caching để tránh chậm trễ"""
+        # Kiểm tra cache trước
+        cached = self._get_cached_task(task_id)
+        if cached:
+            return cached
+            
+        # Nếu không có cache, query MongoDB
+        task = await self.task_service.get_task_status(task_id)
+        if task:
+            self._cache_task(task_id, task)
+        return task
 
     async def create_task(self, task_type: str, task_data: Dict[str, Any]) -> str:
         """Tạo task mới"""
@@ -76,20 +135,14 @@ class BackgroundTaskProcessor:
             # Bước 1: OCR và phân tích cấu trúc
             await self.update_task_progress(task_id, 20, "Extracting text with OCR...")
 
-            enhanced_result = (
-                await enhanced_textbook_service.process_textbook_to_structure(
-                    pdf_content=file_content, filename=filename, book_metadata=metadata
-                )
+            enhanced_result = await enhanced_textbook_service.process_textbook_to_structure(
+                pdf_content=file_content, filename=filename, book_metadata=metadata
             )
 
             if not enhanced_result.get("success"):
-                raise Exception(
-                    f"PDF processing failed: {enhanced_result.get('error')}"
-                )
+                raise Exception(f"PDF processing failed: {enhanced_result.get('error')}")
 
-            await self.update_task_progress(
-                task_id, 60, "PDF structure analysis completed"
-            )
+            await self.update_task_progress(task_id, 60, "PDF structure analysis completed")
 
             # Bước 2: Tạo embeddings nếu được yêu cầu
             embeddings_result = None
@@ -105,13 +158,9 @@ class BackgroundTaskProcessor:
                 )
 
                 if embeddings_result.get("success"):
-                    await self.update_task_progress(
-                        task_id, 90, "Embeddings created successfully"
-                    )
+                    await self.update_task_progress(task_id, 90, "Embeddings created successfully")
                 else:
-                    logger.warning(
-                        f"Embeddings creation failed: {embeddings_result.get('error')}"
-                    )
+                    logger.warning(f"Embeddings creation failed: {embeddings_result.get('error')}")
 
             # Tạo kết quả cuối cùng
             result = {
@@ -129,22 +178,15 @@ class BackgroundTaskProcessor:
                     "llm_analysis": True,
                     "processing_method": "enhanced_ocr_async",
                 },
-                "embeddings_created": embeddings_result.get("success", False)
-                if embeddings_result
-                else False,
+                "embeddings_created": embeddings_result.get("success", False) if embeddings_result else False,
                 "embeddings_info": {
-                    "collection_name": embeddings_result.get("collection_name")
-                    if embeddings_result
-                    else None,
-                    "vector_count": embeddings_result.get("total_chunks", 0)
-                    if embeddings_result
-                    else 0,
-                    "vector_dimension": embeddings_result.get("vector_dimension")
-                    if embeddings_result
-                    else None,
+                    "collection_name": embeddings_result.get("collection_name") if embeddings_result else None,
+                    "vector_count": embeddings_result.get("total_chunks", 0) if embeddings_result else 0,
+                    "vector_dimension": embeddings_result.get("vector_dimension") if embeddings_result else None,
                 },
             }
 
+            # ✅ Hoàn tất task
             await self.mark_task_completed(task_id, result)
 
         except Exception as e:
@@ -154,13 +196,13 @@ class BackgroundTaskProcessor:
     async def process_cv_task(self, task_id: str):
         """Xử lý CV task bất đồng bộ"""
 
-        task = self.task_service.get_task_status(task_id)
+        task = await self.task_service.get_task_status(task_id)
         if not task:
             logger.error(f"Task {task_id} not found")
             return
 
         try:
-            self.mark_task_processing(task_id)
+            await self.mark_task_processing(task_id)
 
             # Lấy dữ liệu task
             file_content = task["data"]["file_content"]
@@ -508,6 +550,69 @@ class BackgroundTaskProcessor:
         except Exception as e:
             logger.error(f"Error processing auto PDF task {task_id}: {e}")
             await self.mark_task_failed(task_id, str(e))
+
+    async def get_task_with_polling(self, task_id: str, timeout: int = 300, poll_interval: int = 2) -> Dict[str, Any]:
+        """
+        Lấy task với polling cho đến khi hoàn thành hoặc timeout
+        
+        Args:
+            task_id: ID của task
+            timeout: Thời gian timeout (giây) - mặc định 5 phút
+            poll_interval: Khoảng cách giữa các lần poll (giây)
+        
+        Returns:
+            Task data khi hoàn thành
+            
+        Raises:
+            TimeoutError: Khi task không hoàn thành trong thời gian cho phép
+        """
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            task = await self.task_service.get_task_status(task_id)
+            
+            if task and task.get("status") in ["completed", "failed"]:
+                return task
+                
+            # Log progress nếu có
+            if task and task.get("progress"):
+                logger.info(f"Task {task_id} progress: {task.get('progress')}% - {task.get('message', '')}")
+                
+            await asyncio.sleep(poll_interval)
+        
+        raise TimeoutError(f"Task {task_id} không hoàn thành trong {timeout} giây")
+
+    async def get_task_progress(self, task_id: str) -> Dict[str, Any]:
+        """Lấy progress của task một cách nhanh chóng"""
+        task = await self.task_service.get_task_status(task_id)
+        
+        if not task:
+            return {"error": "Task not found"}
+            
+        return {
+            "task_id": task_id,
+            "status": task.get("status"),
+            "progress": task.get("progress", 0),
+            "message": task.get("message", ""),
+            "created_at": task.get("created_at"),
+            "updated_at": task.get("updated_at"),
+            "estimated_completion": self._estimate_completion_time(task)
+        }
+    
+    def _estimate_completion_time(self, task: Dict[str, Any]) -> str:
+        """Ước tính thời gian hoàn thành dựa trên progress"""
+        progress = task.get("progress", 0)
+        created_at = task.get("created_at")
+        
+        if progress > 0 and created_at:
+            elapsed = time.time() - created_at
+            estimated_total = (elapsed / progress) * 100
+            remaining = estimated_total - elapsed
+            
+            if remaining > 0:
+                return f"~{int(remaining)} giây"
+                
+        return "Đang tính toán..."
 
 
 # Singleton instance

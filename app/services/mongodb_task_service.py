@@ -6,6 +6,7 @@ import asyncio
 import logging
 import uuid
 import threading
+import time
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from enum import Enum
@@ -49,13 +50,51 @@ class MongoDBTaskService:
         self._lock = threading.Lock()
         self._initialized = False
 
+        # Task status cache để tránh query liên tục
+        self._task_cache: Dict[str, Dict[str, Any]] = {}
+        self._cache_timeout = 3  # seconds - cache ngắn hạn
+        self._cache_lock = threading.Lock()
+
+    def _get_cached_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Lấy task từ cache nếu còn hợp lệ"""
+        with self._cache_lock:
+            cached = self._task_cache.get(task_id)
+            if (
+                cached
+                and time.time() - cached.get("cached_at", 0) < self._cache_timeout
+            ):
+                return cached.get("data")
+        return None
+
+    def _cache_task(self, task_id: str, task_data: Dict[str, Any]):
+        """Cache task data"""
+        with self._cache_lock:
+            self._task_cache[task_id] = {
+                "data": task_data.copy(),
+                "cached_at": time.time(),
+            }
+
+    def _clear_task_cache(self, task_id: str):
+        """Xóa cache của task khi có update"""
+        with self._cache_lock:
+            self._task_cache.pop(task_id, None)
+
     async def initialize(self):
         """Khởi tạo kết nối MongoDB"""
         if self._initialized:
             return
 
         try:
-            self.client = AsyncIOMotorClient(settings.MONGODB_URL)
+            # Tối ưu connection pooling
+            self.client = AsyncIOMotorClient(
+                settings.MONGODB_URL,
+                maxPoolSize=20,  # Tăng connection pool
+                minPoolSize=5,
+                maxIdleTimeMS=30000,  # 30 seconds
+                waitQueueTimeoutMS=5000,  # 5 seconds timeout
+                connectTimeoutMS=5000,  # 5 seconds connect timeout
+                serverSelectionTimeoutMS=5000,  # 5 seconds server selection timeout
+            )
             self.db = self.client[settings.MONGODB_DATABASE]
             self.tasks_collection = self.db.tasks
 
@@ -113,6 +152,11 @@ class MongoDBTaskService:
         """Lấy trạng thái task từ MongoDB"""
         await self.initialize()
 
+        # Kiểm tra cache trước
+        cached_task = self._get_cached_task(task_id)
+        if cached_task:
+            return cached_task
+
         try:
             task = await self.tasks_collection.find_one({"task_id": task_id})
             if task:
@@ -124,6 +168,10 @@ class MongoDBTaskService:
                     task["started_at"] = task["started_at"].isoformat()
                 if task["completed_at"]:
                     task["completed_at"] = task["completed_at"].isoformat()
+
+                # Cache task status
+                self._cache_task(task_id, task)
+
             return task
         except Exception as e:
             logger.error(f"Error getting task {task_id}: {e}")
@@ -194,7 +242,7 @@ class MongoDBTaskService:
             }
 
     async def update_task_progress(
-        self, task_id: str, progress: int, message: str = None
+        self, task_id: str, progress: int, message: Optional[str] = None
     ):
         """Cập nhật tiến độ task trong MongoDB"""
         await self.initialize()
@@ -207,6 +255,10 @@ class MongoDBTaskService:
             await self.tasks_collection.update_one(
                 {"task_id": task_id}, {"$set": update_data}
             )
+
+            # Clear cache để force refresh lần query sau
+            self._clear_task_cache(task_id)
+
             logger.info(f"Task {task_id}: {progress}% - {message}")
         except Exception as e:
             logger.error(f"Error updating task progress {task_id}: {e}")
@@ -253,6 +305,9 @@ class MongoDBTaskService:
             with self._lock:
                 self.processing_tasks.discard(task_id)
 
+            # Xóa cache khi task hoàn thành
+            self._clear_task_cache(task_id)
+
         except Exception as e:
             logger.error(f"Error marking task completed {task_id}: {e}")
 
@@ -275,6 +330,9 @@ class MongoDBTaskService:
 
             with self._lock:
                 self.processing_tasks.discard(task_id)
+
+            # Xóa cache khi task thất bại
+            self._clear_task_cache(task_id)
 
         except Exception as e:
             logger.error(f"Error marking task failed {task_id}: {e}")
