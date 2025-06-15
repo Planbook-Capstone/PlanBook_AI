@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
+
 class Settings(BaseSettings):
     # API Configuration
     API_PREFIX: str = os.getenv("API_PREFIX", "/api/v1")
@@ -39,7 +40,7 @@ class Settings(BaseSettings):
     MAX_CHUNK_SIZE: int = int(os.getenv("MAX_CHUNK_SIZE", "500"))
     CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "50"))
     TOP_K_DOCUMENTS: int = int(os.getenv("TOP_K_DOCUMENTS", "5"))
-    
+
     # Qdrant Settings
     QDRANT_URL: str = os.getenv("QDRANT_URL", "http://localhost:6333")
     QDRANT_API_KEY: Optional[str] = os.getenv("QDRANT_API_KEY")
@@ -49,6 +50,10 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "1048576"))  # 1MB
     ALLOWED_EXTENSIONS: list = [".pdf", ".txt"]
     UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", "temp_uploads")
+
+    # Data Processing Settings
+    DATA_DIR: str = os.getenv("DATA_DIR", "data")
+    CONCURRENT_WORKERS: int = int(os.getenv("CONCURRENT_WORKERS", "4"))
 
     # OCR Settings
     TESSERACT_CONFIG: str = os.getenv("TESSERACT_CONFIG", "--oem 3 --psm 6")
@@ -76,5 +81,6 @@ class Settings(BaseSettings):
                 print("⚠️ Warning: GEMINI_API_KEY not set")
             if not self.SECRET_KEY or self.SECRET_KEY == "your_secret_key_here":
                 print("⚠️ Warning: SECRET_KEY not set or using default")
+
 
 settings = Settings()

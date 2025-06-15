@@ -7,8 +7,8 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Query
 from typing import Dict, Any
 
 from app.services.llm_service import llm_service
-from app.services.textbook_parser_service import textbook_parser_service
-from app.services.enhanced_textbook_service import enhanced_textbook_service
+# Sử dụng service mới thống nhất
+from app.services.textbook_service import textbook_service
 from app.services.background_task_processor import background_task_processor
 
 logger = logging.getLogger(__name__)
@@ -152,7 +152,7 @@ async def process_textbook(
         logger.info(f"Processing textbook: {file.filename} ({len(file_content)} bytes)")
 
         # Process textbook with enhanced service for better structure
-        enhanced_result = await enhanced_textbook_service.process_textbook_to_structure(
+        enhanced_result = await textbook_service.process_textbook_to_structure(
             pdf_content=file_content,
             filename=file.filename,
             book_metadata=book_metadata,
@@ -161,7 +161,7 @@ async def process_textbook(
         if not enhanced_result.get("success", False):
             # Fallback to old service if enhanced fails
             logger.warning("Enhanced processing failed, falling back to old service")
-            result = await textbook_parser_service.process_textbook(
+            result = await textbook_service.process_textbook(
                 pdf_content=file_content,
                 filename=file.filename,
                 book_metadata=book_metadata,
@@ -594,7 +594,7 @@ async def get_textbook_structure(book_id: str) -> Dict[str, Any]:
     """
     try:
         # Thử lấy từ file system trước (legacy data)
-        structure = await textbook_parser_service.get_book_structure(book_id)
+        structure = await textbook_service.get_book_structure(book_id)
 
         if structure:
             return {"success": True, "book_id": book_id, "structure": structure}

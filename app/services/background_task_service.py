@@ -121,7 +121,7 @@ class BackgroundTaskService:
             self.update_task_progress(task_id, 20, "Extracting text with OCR...")
 
             enhanced_result = (
-                await enhanced_textbook_service.process_textbook_to_structure(
+                await textbook_service.process_textbook_to_structure(
                     pdf_content=file_content, filename=filename, book_metadata=metadata
                 )
             )
