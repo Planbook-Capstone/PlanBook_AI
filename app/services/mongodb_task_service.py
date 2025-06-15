@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 class TaskStatus(str, Enum):
     """Trạng thái của task"""
+
     PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
@@ -28,6 +29,7 @@ class TaskStatus(str, Enum):
 
 class TaskType(str, Enum):
     """Loại task"""
+
     PROCESS_TEXTBOOK = "process_textbook"
     PROCESS_TEXTBOOK_AUTO = "process_textbook_auto"
     QUICK_ANALYSIS = "quick_analysis"
@@ -56,16 +58,16 @@ class MongoDBTaskService:
             self.client = AsyncIOMotorClient(settings.MONGODB_URL)
             self.db = self.client[settings.MONGODB_DATABASE]
             self.tasks_collection = self.db.tasks
-            
+
             # Tạo indexes để tối ưu performance
             await self.tasks_collection.create_index("task_id", unique=True)
             await self.tasks_collection.create_index("status")
             await self.tasks_collection.create_index("task_type")
             await self.tasks_collection.create_index("created_at")
-            
+
             self._initialized = True
             logger.info("MongoDB Task Service initialized successfully")
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize MongoDB Task Service: {e}")
             raise
@@ -79,7 +81,7 @@ class MongoDBTaskService:
     ) -> str:
         """Tạo task mới và lưu vào MongoDB"""
         await self.initialize()
-        
+
         if not task_id:
             task_id = str(uuid.uuid4())
 
@@ -110,7 +112,7 @@ class MongoDBTaskService:
     async def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Lấy trạng thái task từ MongoDB"""
         await self.initialize()
-        
+
         try:
             task = await self.tasks_collection.find_one({"task_id": task_id})
             if task:
@@ -132,7 +134,7 @@ class MongoDBTaskService:
     ) -> Dict[str, Any]:
         """Lấy danh sách tất cả tasks từ MongoDB"""
         await self.initialize()
-        
+
         try:
             # Build query filter
             query = {}
@@ -140,7 +142,11 @@ class MongoDBTaskService:
                 query["status"] = status_filter.value
 
             # Get tasks with pagination and sorting
-            cursor = self.tasks_collection.find(query).sort("created_at", DESCENDING).limit(limit)
+            cursor = (
+                self.tasks_collection.find(query)
+                .sort("created_at", DESCENDING)
+                .limit(limit)
+            )
             tasks = await cursor.to_list(length=limit)
 
             # Convert MongoDB documents to JSON-serializable format
@@ -155,10 +161,18 @@ class MongoDBTaskService:
 
             # Get statistics
             total_tasks = await self.tasks_collection.count_documents({})
-            processing_tasks = await self.tasks_collection.count_documents({"status": TaskStatus.PROCESSING.value})
-            completed_tasks = await self.tasks_collection.count_documents({"status": TaskStatus.COMPLETED.value})
-            failed_tasks = await self.tasks_collection.count_documents({"status": TaskStatus.FAILED.value})
-            pending_tasks = await self.tasks_collection.count_documents({"status": TaskStatus.PENDING.value})
+            processing_tasks = await self.tasks_collection.count_documents(
+                {"status": TaskStatus.PROCESSING.value}
+            )
+            completed_tasks = await self.tasks_collection.count_documents(
+                {"status": TaskStatus.COMPLETED.value}
+            )
+            failed_tasks = await self.tasks_collection.count_documents(
+                {"status": TaskStatus.FAILED.value}
+            )
+            pending_tasks = await self.tasks_collection.count_documents(
+                {"status": TaskStatus.PENDING.value}
+            )
 
             return {
                 "tasks": tasks,
@@ -179,18 +193,19 @@ class MongoDBTaskService:
                 "pending_tasks": 0,
             }
 
-    async def update_task_progress(self, task_id: str, progress: int, message: str = None):
+    async def update_task_progress(
+        self, task_id: str, progress: int, message: str = None
+    ):
         """Cập nhật tiến độ task trong MongoDB"""
         await self.initialize()
-        
+
         try:
             update_data = {"progress": progress}
             if message:
                 update_data["message"] = message
-                
+
             await self.tasks_collection.update_one(
-                {"task_id": task_id},
-                {"$set": update_data}
+                {"task_id": task_id}, {"$set": update_data}
             )
             logger.info(f"Task {task_id}: {progress}% - {message}")
         except Exception as e:
@@ -199,115 +214,108 @@ class MongoDBTaskService:
     async def mark_task_processing(self, task_id: str):
         """Đánh dấu task đang xử lý"""
         await self.initialize()
-        
+
         try:
             await self.tasks_collection.update_one(
                 {"task_id": task_id},
-                {"$set": {
-                    "status": TaskStatus.PROCESSING.value,
-                    "started_at": datetime.now()
-                }}
+                {
+                    "$set": {
+                        "status": TaskStatus.PROCESSING.value,
+                        "started_at": datetime.now(),
+                    }
+                },
             )
-            
+
             with self._lock:
                 self.processing_tasks.add(task_id)
-                
+
         except Exception as e:
             logger.error(f"Error marking task processing {task_id}: {e}")
 
     async def mark_task_completed(self, task_id: str, result: Dict[str, Any]):
         """Đánh dấu task hoàn thành"""
         await self.initialize()
-        
+
         try:
             await self.tasks_collection.update_one(
                 {"task_id": task_id},
-                {"$set": {
-                    "status": TaskStatus.COMPLETED.value,
-                    "completed_at": datetime.now(),
-                    "progress": 100,
-                    "message": "Task completed successfully",
-                    "result": result
-                }}
+                {
+                    "$set": {
+                        "status": TaskStatus.COMPLETED.value,
+                        "completed_at": datetime.now(),
+                        "progress": 100,
+                        "message": "Task completed successfully",
+                        "result": result,
+                    }
+                },
             )
-            
+
             with self._lock:
                 self.processing_tasks.discard(task_id)
-                
+
         except Exception as e:
             logger.error(f"Error marking task completed {task_id}: {e}")
 
     async def mark_task_failed(self, task_id: str, error: str):
         """Đánh dấu task thất bại"""
         await self.initialize()
-        
+
         try:
             await self.tasks_collection.update_one(
                 {"task_id": task_id},
-                {"$set": {
-                    "status": TaskStatus.FAILED.value,
-                    "completed_at": datetime.now(),
-                    "message": f"Task failed: {error}",
-                    "error": error
-                }}
+                {
+                    "$set": {
+                        "status": TaskStatus.FAILED.value,
+                        "completed_at": datetime.now(),
+                        "message": f"Task failed: {error}",
+                        "error": error,
+                    }
+                },
             )
-            
+
             with self._lock:
                 self.processing_tasks.discard(task_id)
-                
+
         except Exception as e:
             logger.error(f"Error marking task failed {task_id}: {e}")
 
     async def cancel_task(self, task_id: str) -> bool:
         """Hủy task (chỉ có thể hủy task pending)"""
         await self.initialize()
-        
+
         try:
             result = await self.tasks_collection.update_one(
                 {"task_id": task_id, "status": TaskStatus.PENDING.value},
-                {"$set": {
-                    "status": TaskStatus.FAILED.value,
-                    "completed_at": datetime.now(),
-                    "message": "Task cancelled by user",
-                    "error": "Cancelled"
-                }}
+                {
+                    "$set": {
+                        "status": TaskStatus.FAILED.value,
+                        "completed_at": datetime.now(),
+                        "message": "Task cancelled by user",
+                        "error": "Cancelled",
+                    }
+                },
             )
             return result.modified_count > 0
         except Exception as e:
             logger.error(f"Error cancelling task {task_id}: {e}")
             return False
 
-    async def delete_task(self, task_id: str) -> bool:
-        """Xóa task (chỉ có thể xóa task completed hoặc failed)"""
-        await self.initialize()
-        
-        try:
-            result = await self.tasks_collection.delete_one({
-                "task_id": task_id,
-                "status": {"$in": [TaskStatus.COMPLETED.value, TaskStatus.FAILED.value]}
-            })
-            
-            if result.deleted_count > 0:
-                with self._lock:
-                    self.processing_tasks.discard(task_id)
-                return True
-            return False
-        except Exception as e:
-            logger.error(f"Error deleting task {task_id}: {e}")
-            return False
-
     async def cleanup_old_tasks(self, max_age_hours: int = 24):
         """Dọn dẹp tasks cũ"""
         await self.initialize()
-        
+
         try:
             cutoff_time = datetime.now() - timedelta(hours=max_age_hours)
-            
-            result = await self.tasks_collection.delete_many({
-                "created_at": {"$lt": cutoff_time},
-                "status": {"$in": [TaskStatus.COMPLETED.value, TaskStatus.FAILED.value]}
-            })
-            
+
+            result = await self.tasks_collection.delete_many(
+                {
+                    "created_at": {"$lt": cutoff_time},
+                    "status": {
+                        "$in": [TaskStatus.COMPLETED.value, TaskStatus.FAILED.value]
+                    },
+                }
+            )
+
             logger.info(f"Cleaned up {result.deleted_count} old tasks")
             return result.deleted_count
         except Exception as e:
@@ -344,32 +352,18 @@ class MongoDBTaskService:
     async def get_task_statistics(self) -> Dict[str, Any]:
         """Lấy thống kê tasks"""
         await self.initialize()
-        
+
         try:
             # Aggregate statistics
-            pipeline = [
-                {
-                    "$group": {
-                        "_id": "$status",
-                        "count": {"$sum": 1}
-                    }
-                }
-            ]
-            
+            pipeline = [{"$group": {"_id": "$status", "count": {"$sum": 1}}}]
+
             status_stats = {}
             async for doc in self.tasks_collection.aggregate(pipeline):
                 status_stats[doc["_id"]] = doc["count"]
 
             # Type distribution
-            type_pipeline = [
-                {
-                    "$group": {
-                        "_id": "$task_type",
-                        "count": {"$sum": 1}
-                    }
-                }
-            ]
-            
+            type_pipeline = [{"$group": {"_id": "$task_type", "count": {"$sum": 1}}}]
+
             type_stats = {}
             async for doc in self.tasks_collection.aggregate(type_pipeline):
                 type_stats[doc["_id"]] = doc["count"]
@@ -379,24 +373,17 @@ class MongoDBTaskService:
                 {
                     "$match": {
                         "started_at": {"$ne": None},
-                        "completed_at": {"$ne": None}
+                        "completed_at": {"$ne": None},
                     }
                 },
                 {
                     "$project": {
-                        "duration": {
-                            "$subtract": ["$completed_at", "$started_at"]
-                        }
+                        "duration": {"$subtract": ["$completed_at", "$started_at"]}
                     }
                 },
-                {
-                    "$group": {
-                        "_id": None,
-                        "avg_duration": {"$avg": "$duration"}
-                    }
-                }
+                {"$group": {"_id": None, "avg_duration": {"$avg": "$duration"}}},
             ]
-            
+
             avg_duration = 0
             async for doc in self.tasks_collection.aggregate(avg_pipeline):
                 avg_duration = doc["avg_duration"] / 1000  # Convert to seconds
