@@ -7,8 +7,8 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Query
 from typing import Dict, Any
 
 from app.services.llm_service import llm_service
-# Sử dụng service mới thống nhất
-from app.services.textbook_service import textbook_service
+from app.services.enhanced_textbook_service import enhanced_textbook_service
+from app.services.textbook_parser_service import textbook_parser_service
 from app.services.background_task_processor import background_task_processor
 
 logger = logging.getLogger(__name__)
@@ -149,10 +149,10 @@ async def process_textbook(
         if len(file_content) == 0:
             raise HTTPException(status_code=400, detail="Empty file uploaded")
 
-        logger.info(f"Processing textbook: {file.filename} ({len(file_content)} bytes)")
-
-        # Process textbook with enhanced service for better structure
-        enhanced_result = await textbook_service.process_textbook_to_structure(
+        logger.info(
+            f"Processing textbook: {file.filename} ({len(file_content)} bytes)"
+        )  # Process textbook with enhanced service for better structure
+        enhanced_result = await enhanced_textbook_service.process_textbook_to_structure(
             pdf_content=file_content,
             filename=file.filename,
             book_metadata=book_metadata,
@@ -161,7 +161,7 @@ async def process_textbook(
         if not enhanced_result.get("success", False):
             # Fallback to old service if enhanced fails
             logger.warning("Enhanced processing failed, falling back to old service")
-            result = await textbook_service.process_textbook(
+            result = await textbook_parser_service.process_textbook(
                 pdf_content=file_content,
                 filename=file.filename,
                 book_metadata=book_metadata,
@@ -592,9 +592,8 @@ async def get_textbook_structure(book_id: str) -> Dict[str, Any]:
     Returns:
         Dict containing book structure
     """
-    try:
-        # Thử lấy từ file system trước (legacy data)
-        structure = await textbook_service.get_book_structure(book_id)
+    try:  # Thử lấy từ file system trước (legacy data)
+        structure = await textbook_parser_service.get_book_structure(book_id)
 
         if structure:
             return {"success": True, "book_id": book_id, "structure": structure}
@@ -1023,12 +1022,64 @@ async def search_all_textbooks(
     try:
         from app.services.qdrant_service import qdrant_service
 
-        logger.info(f"Global search query: '{query}' with limit: {limit}")
+        logger.info(
+            f"Global search query: '{query}' with limit: {limit}"
+        )  # Implement global search logic here since the method was removed
+        # Get all collections starting with "textbook_"
+        try:
+            if not qdrant_service.qdrant_client:
+                raise HTTPException(
+                    status_code=500, detail="Qdrant service not available"
+                )
 
-        # Tìm kiếm trong tất cả textbooks
-        search_result = await qdrant_service.search_all_textbooks(
-            query=query, limit=limit
-        )
+            collections = qdrant_service.qdrant_client.get_collections().collections
+            textbook_collections = [
+                c.name for c in collections if c.name.startswith("textbook_")
+            ]
+
+            if not textbook_collections:
+                return {
+                    "success": True,
+                    "query": query,
+                    "results": [],
+                    "total_collections_searched": 0,
+                    "message": "No textbooks have been processed yet. Please upload and process textbooks first.",
+                }
+
+            # Search each textbook collection
+            all_results = []
+            for collection_name in textbook_collections:
+                book_id = collection_name.replace("textbook_", "")
+                book_search_result = await qdrant_service.search_textbook(
+                    book_id=book_id, query=query, limit=limit
+                )
+
+                if book_search_result.get("success") and book_search_result.get(
+                    "results"
+                ):
+                    for result in book_search_result["results"]:
+                        result["book_id"] = book_id
+                        result["collection_name"] = collection_name
+                        all_results.append(result)
+
+            # Sort by score and limit results
+            all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
+            top_results = all_results[:limit]
+
+            search_result = {
+                "success": True,
+                "query": query,
+                "results": top_results,
+                "total_collections_searched": len(textbook_collections),
+                "message": f"Found {len(top_results)} results from {len(textbook_collections)} textbooks",
+            }
+
+        except Exception as e:
+            logger.error(f"Error in global search implementation: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Search failed: {str(e)}",
+            )
 
         if not search_result.get("success", False):
             error_msg = search_result.get("error", "Unknown error")
