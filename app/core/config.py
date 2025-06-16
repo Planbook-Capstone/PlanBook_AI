@@ -18,17 +18,19 @@ class Settings(BaseSettings):
 
     # MongoDB Configuration
     MONGODB_URL: str = os.getenv("MONGODB_URL", "mongodb://localhost:27017/planbook_db")
-    MONGODB_DATABASE: str = os.getenv("MONGODB_DATABASE", "planbook_db")
-
-    # Redis Configuration
+    MONGODB_DATABASE: str = os.getenv(
+        "MONGODB_DATABASE", "planbook_db"
+    )  # Redis Configuration
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
     REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
-    REDIS_DB: int = int(os.getenv("REDIS_DB", "0"))
-
-    # Celery Configuration
-    CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-    CELERY_RESULT_BACKEND: str = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
+    REDIS_DB: int = int(
+        os.getenv("REDIS_DB", "0")
+    )  # Celery Configuration (sử dụng DB riêng để tránh conflict)
+    CELERY_BROKER_URL: str = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/1")
+    CELERY_RESULT_BACKEND: str = os.getenv(
+        "CELERY_RESULT_BACKEND", "redis://localhost:6379/1"
+    )
     CELERY_TASK_SERIALIZER: str = "json"
     CELERY_RESULT_SERIALIZER: str = "json"
     CELERY_ACCEPT_CONTENT: list = ["json"]
@@ -36,7 +38,9 @@ class Settings(BaseSettings):
     CELERY_ENABLE_UTC: bool = True
 
     # RAG Settings
-    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+    EMBEDDING_MODEL: str = os.getenv(
+        "EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+    )
     MAX_CHUNK_SIZE: int = int(os.getenv("MAX_CHUNK_SIZE", "500"))
     CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "50"))
     TOP_K_DOCUMENTS: int = int(os.getenv("TOP_K_DOCUMENTS", "5"))
@@ -58,7 +62,9 @@ class Settings(BaseSettings):
     # OCR Settings
     TESSERACT_CONFIG: str = os.getenv("TESSERACT_CONFIG", "--oem 3 --psm 6")
     IMAGE_DPI: int = int(os.getenv("IMAGE_DPI", "300"))
-    PREPROCESSING_ENABLED: bool = os.getenv("PREPROCESSING_ENABLED", "True").lower() == "true"
+    PREPROCESSING_ENABLED: bool = (
+        os.getenv("PREPROCESSING_ENABLED", "True").lower() == "true"
+    )
 
     # AI Agent Settings
     GEMINI_TEMPERATURE: float = float(os.getenv("GEMINI_TEMPERATURE", "0.1"))
@@ -68,7 +74,9 @@ class Settings(BaseSettings):
     # Security
     SECRET_KEY: Optional[str] = os.getenv("SECRET_KEY")
     ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(
+        os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
+    )
 
     class Config:
         case_sensitive = True
@@ -76,7 +84,8 @@ class Settings(BaseSettings):
     def __post_init__(self):
         # Only validate API keys for main application, not for Celery workers
         import sys
-        if 'celery' not in ' '.join(sys.argv).lower():
+
+        if "celery" not in " ".join(sys.argv).lower():
             if not self.GEMINI_API_KEY:
                 print("⚠️ Warning: GEMINI_API_KEY not set")
             if not self.SECRET_KEY or self.SECRET_KEY == "your_secret_key_here":

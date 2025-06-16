@@ -56,35 +56,19 @@ async def process_textbook_async(
         )
 
         # Tạo background task với auto metadata detection
-        task_data = {            "file_content": file_content,
+        task_data = {
+            "file_content": file_content,
             "filename": file.filename,
             "auto_detect_metadata": True,  # Flag để tự động phân tích metadata
             "create_embeddings": create_embeddings,
         }
 
-        task_id = await background_task_processor.create_task(
+        # Sử dụng Celery thay vì threading
+        from app.services.celery_task_service import celery_task_service
+
+        task_id = await celery_task_service.create_and_dispatch_task(
             task_type="process_textbook_auto", task_data=task_data
         )
-
-        # Bắt đầu xử lý bất đồng bộ trong background
-        import threading
-
-        def run_background_task():
-            """Chạy task trong thread riêng biệt"""
-            import asyncio
-
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(
-                    background_task_processor.process_pdf_auto_task(task_id)
-                )
-            finally:
-                loop.close()
-
-        # Chạy trong thread riêng để không block response
-        thread = threading.Thread(target=run_background_task, daemon=True)
-        thread.start()
 
         return {
             "success": True,
@@ -890,8 +874,8 @@ async def get_lesson_content_by_id(lesson_id: str) -> Dict[str, Any]:
                         }
                         break  # Đã tìm thấy, thoát khỏi loop                except Exception as e:
                 except Exception as e:
-                 logger.warning(f"Error searching lesson in {collection.name}: {e}")
-                 continue
+                    logger.warning(f"Error searching lesson in {collection.name}: {e}")
+                    continue
 
         if not lesson_found:
             raise HTTPException(

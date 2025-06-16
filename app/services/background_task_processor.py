@@ -22,7 +22,7 @@ class BackgroundTaskProcessor:
         self.task_service = mongodb_task_service
         # ThreadPoolExecutor để chạy OCR operations không block event loop
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
-        
+
         # Task status cache để tránh query MongoDB liên tục
         self._task_cache: Dict[str, Dict[str, Any]] = {}
         self._cache_timeout = 3  # seconds - cache ngắn hạn
@@ -32,7 +32,10 @@ class BackgroundTaskProcessor:
         """Lấy task từ cache nếu còn hợp lệ"""
         async with self._cache_lock:
             cached = self._task_cache.get(task_id)
-            if cached and time.time() - cached.get("cached_at", 0) < self._cache_timeout:
+            if (
+                cached
+                and time.time() - cached.get("cached_at", 0) < self._cache_timeout
+            ):
                 return cached.get("data")
         return None
 
@@ -41,7 +44,7 @@ class BackgroundTaskProcessor:
         async with self._cache_lock:
             self._task_cache[task_id] = {
                 "data": task_data.copy(),
-                "cached_at": time.time()
+                "cached_at": time.time(),
             }
 
     async def get_task_status_optimized(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -50,12 +53,12 @@ class BackgroundTaskProcessor:
         cached = await self._get_cached_task(task_id)
         if cached:
             return cached
-            
+
         # Nếu không có cache, query MongoDB với timeout
         try:
             task = await asyncio.wait_for(
                 self.task_service.get_task_status(task_id),
-                timeout=2.0  # Timeout 2 giây
+                timeout=2.0,  # Timeout 2 giây
             )
             if task:
                 await self._cache_task(task_id, task)
@@ -70,7 +73,7 @@ class BackgroundTaskProcessor:
         cached = self._get_cached_task(task_id)
         if cached:
             return cached
-            
+
         # Nếu không có cache, query MongoDB
         task = await self.task_service.get_task_status(task_id)
         if task:
@@ -135,14 +138,20 @@ class BackgroundTaskProcessor:
             # Bước 1: OCR và phân tích cấu trúc
             await self.update_task_progress(task_id, 20, "Extracting text with OCR...")
 
-            enhanced_result = await enhanced_textbook_service.process_textbook_to_structure(
-                pdf_content=file_content, filename=filename, book_metadata=metadata
+            enhanced_result = (
+                await enhanced_textbook_service.process_textbook_to_structure(
+                    pdf_content=file_content, filename=filename, book_metadata=metadata
+                )
             )
 
             if not enhanced_result.get("success"):
-                raise Exception(f"PDF processing failed: {enhanced_result.get('error')}")
+                raise Exception(
+                    f"PDF processing failed: {enhanced_result.get('error')}"
+                )
 
-            await self.update_task_progress(task_id, 60, "PDF structure analysis completed")
+            await self.update_task_progress(
+                task_id, 60, "PDF structure analysis completed"
+            )
 
             # Bước 2: Tạo embeddings nếu được yêu cầu
             embeddings_result = None
@@ -158,9 +167,13 @@ class BackgroundTaskProcessor:
                 )
 
                 if embeddings_result.get("success"):
-                    await self.update_task_progress(task_id, 90, "Embeddings created successfully")
+                    await self.update_task_progress(
+                        task_id, 90, "Embeddings created successfully"
+                    )
                 else:
-                    logger.warning(f"Embeddings creation failed: {embeddings_result.get('error')}")
+                    logger.warning(
+                        f"Embeddings creation failed: {embeddings_result.get('error')}"
+                    )
 
             # Tạo kết quả cuối cùng
             result = {
@@ -178,11 +191,19 @@ class BackgroundTaskProcessor:
                     "llm_analysis": True,
                     "processing_method": "enhanced_ocr_async",
                 },
-                "embeddings_created": embeddings_result.get("success", False) if embeddings_result else False,
+                "embeddings_created": embeddings_result.get("success", False)
+                if embeddings_result
+                else False,
                 "embeddings_info": {
-                    "collection_name": embeddings_result.get("collection_name") if embeddings_result else None,
-                    "vector_count": embeddings_result.get("total_chunks", 0) if embeddings_result else 0,
-                    "vector_dimension": embeddings_result.get("vector_dimension") if embeddings_result else None,
+                    "collection_name": embeddings_result.get("collection_name")
+                    if embeddings_result
+                    else None,
+                    "vector_count": embeddings_result.get("total_chunks", 0)
+                    if embeddings_result
+                    else 0,
+                    "vector_dimension": embeddings_result.get("vector_dimension")
+                    if embeddings_result
+                    else None,
                 },
             }
 
@@ -303,7 +324,7 @@ class BackgroundTaskProcessor:
     async def create_quick_analysis_task(
         self, pdf_content: bytes, filename: str, create_embeddings: bool = True
     ) -> str:
-        """Tạo task phân tích nhanh sách giáo khoa"""
+        """Tạo task phân tích nhanh sách giáo khoa - sử dụng Celery"""
 
         task_data = {
             "file_content": pdf_content,
@@ -311,131 +332,32 @@ class BackgroundTaskProcessor:
             "create_embeddings": create_embeddings,
         }
 
-        task_id = await self.create_task("quick_analysis", task_data)
+        # Sử dụng Celery thay vì asyncio.create_task
+        from app.services.celery_task_service import celery_task_service
 
-        # Bắt đầu xử lý task bất đồng bộ
-        asyncio.create_task(self.process_quick_analysis_task(task_id))
+        task_id = await celery_task_service.create_and_dispatch_task(
+            task_type="quick_analysis", task_data=task_data
+        )
 
         return task_id
 
+    # DEPRECATED: Phương thức này đã được thay thế bằng Celery task
+    # Sử dụng create_quick_analysis_task() thay thế
     async def process_quick_analysis_task(self, task_id: str):
-        """Xử lý task phân tích nhanh sách giáo khoa"""
+        """
+        DEPRECATED: Method này đã được thay thế bằng Celery task
+        Sử dụng create_quick_analysis_task() để tạo task và Celery worker sẽ xử lý
+        """
+        logger.warning(
+            f"process_quick_analysis_task() is deprecated. Task {task_id} should be processed by Celery worker."
+        )
 
-        task = await self.task_service.get_task_status(task_id)
-        if not task:
-            logger.error(f"Task {task_id} not found")
-            return
-
-        try:
-            await self.mark_task_processing(task_id)
-
-            # Lấy dữ liệu task
-            file_content = task["data"]["file_content"]
-            filename = task["data"]["filename"]
-            create_embeddings = task["data"].get("create_embeddings", True)
-
-            await self.update_task_progress(
-                task_id, 10, "Starting quick textbook analysis..."
-            )
-
-            # Import services
-            from app.services.enhanced_textbook_service import enhanced_textbook_service
-            from app.services.qdrant_service import qdrant_service
-            import uuid
-
-            # Bước 1: OCR và phân tích cấu trúc
-            await self.update_task_progress(task_id, 20, "Extracting pages with OCR...")
-
-            pages_data = await enhanced_textbook_service._extract_pages_with_ocr(
-                file_content
-            )
-
-            await self.update_task_progress(task_id, 40, "Analyzing book structure...")
-
-            # Tạo metadata tự động
-            book_metadata = {
-                "id": str(uuid.uuid4())[:8],  # Tạo ID ngắn
-                "title": filename.replace(".pdf", ""),
-                "subject": "Chưa xác định",
-                "grade": "Chưa xác định",
-                "author": "Chưa xác định",
-                "language": "vi",
-            }
-
-            book_structure = (
-                await enhanced_textbook_service._analyze_book_structure_enhanced(
-                    pages_data, book_metadata
-                )
-            )
-
-            if not book_structure:
-                raise Exception("Failed to analyze textbook structure")
-
-            await self.update_task_progress(
-                task_id, 60, "Book structure analysis completed"
-            )
-
-            # Bước 2: Tạo embeddings nếu được yêu cầu
-            embeddings_result = None
-            if create_embeddings:
-                await self.update_task_progress(task_id, 70, "Creating embeddings...")
-
-                embeddings_result = await qdrant_service.process_textbook(
-                    book_id=book_metadata.get("id"), book_structure=book_structure
-                )
-
-                if embeddings_result.get("success"):
-                    await self.update_task_progress(
-                        task_id, 90, "Embeddings created successfully"
-                    )
-                else:
-                    logger.warning(
-                        f"Embeddings creation failed: {embeddings_result.get('error')}"
-                    )
-
-            # Tạo kết quả với định dạng giống /process-textbook
-            result = {
-                "success": True,
-                "book_id": book_metadata.get("id"),
-                "filename": filename,
-                "book_structure": book_structure,
-                "statistics": {
-                    "total_pages": len(pages_data),
-                    "total_chapters": len(book_structure.get("chapters", [])),
-                    "total_lessons": sum(
-                        len(chapter.get("lessons", []))
-                        for chapter in book_structure.get("chapters", [])
-                    ),
-                },
-                "processing_info": {
-                    "ocr_applied": True,
-                    "llm_analysis": True,
-                    "processing_method": "quick_analysis_async",
-                },
-                "message": "Quick textbook analysis completed successfully with searchable embeddings in Qdrant",
-                "embeddings_created": embeddings_result.get("success", False)
-                if embeddings_result
-                else False,
-                "embeddings_info": {
-                    "collection_name": embeddings_result.get("collection_name")
-                    if embeddings_result
-                    else None,
-                    "vector_count": embeddings_result.get("total_chunks", 0)
-                    if embeddings_result
-                    else 0,
-                    "vector_dimension": embeddings_result.get("vector_dimension")
-                    if embeddings_result
-                    else None,
-                }
-                if embeddings_result
-                else None,
-            }
-
-            await self.mark_task_completed(task_id, result)
-
-        except Exception as e:
-            logger.error(f"Error processing quick analysis task {task_id}: {e}")
-            await self.mark_task_failed(task_id, str(e))
+        # Redirect to Celery task status check
+        task_status = await self.task_service.get_task_status(task_id)
+        if task_status:
+            logger.info(f"Task {task_id} status: {task_status.get('status')}")
+        else:
+            logger.error(f"Task {task_id} not found in MongoDB")
 
     async def process_pdf_auto_task(self, task_id: str):
         """Xử lý task PDF với tự động phân tích metadata"""
@@ -551,44 +473,48 @@ class BackgroundTaskProcessor:
             logger.error(f"Error processing auto PDF task {task_id}: {e}")
             await self.mark_task_failed(task_id, str(e))
 
-    async def get_task_with_polling(self, task_id: str, timeout: int = 300, poll_interval: int = 2) -> Dict[str, Any]:
+    async def get_task_with_polling(
+        self, task_id: str, timeout: int = 300, poll_interval: int = 2
+    ) -> Dict[str, Any]:
         """
         Lấy task với polling cho đến khi hoàn thành hoặc timeout
-        
+
         Args:
             task_id: ID của task
             timeout: Thời gian timeout (giây) - mặc định 5 phút
             poll_interval: Khoảng cách giữa các lần poll (giây)
-        
+
         Returns:
             Task data khi hoàn thành
-            
+
         Raises:
             TimeoutError: Khi task không hoàn thành trong thời gian cho phép
         """
         start_time = time.time()
-        
+
         while time.time() - start_time < timeout:
             task = await self.task_service.get_task_status(task_id)
-            
+
             if task and task.get("status") in ["completed", "failed"]:
                 return task
-                
+
             # Log progress nếu có
             if task and task.get("progress"):
-                logger.info(f"Task {task_id} progress: {task.get('progress')}% - {task.get('message', '')}")
-                
+                logger.info(
+                    f"Task {task_id} progress: {task.get('progress')}% - {task.get('message', '')}"
+                )
+
             await asyncio.sleep(poll_interval)
-        
+
         raise TimeoutError(f"Task {task_id} không hoàn thành trong {timeout} giây")
 
     async def get_task_progress(self, task_id: str) -> Dict[str, Any]:
         """Lấy progress của task một cách nhanh chóng"""
         task = await self.task_service.get_task_status(task_id)
-        
+
         if not task:
             return {"error": "Task not found"}
-            
+
         return {
             "task_id": task_id,
             "status": task.get("status"),
@@ -596,22 +522,22 @@ class BackgroundTaskProcessor:
             "message": task.get("message", ""),
             "created_at": task.get("created_at"),
             "updated_at": task.get("updated_at"),
-            "estimated_completion": self._estimate_completion_time(task)
+            "estimated_completion": self._estimate_completion_time(task),
         }
-    
+
     def _estimate_completion_time(self, task: Dict[str, Any]) -> str:
         """Ước tính thời gian hoàn thành dựa trên progress"""
         progress = task.get("progress", 0)
         created_at = task.get("created_at")
-        
+
         if progress > 0 and created_at:
             elapsed = time.time() - created_at
             estimated_total = (elapsed / progress) * 100
             remaining = estimated_total - elapsed
-            
+
             if remaining > 0:
                 return f"~{int(remaining)} giây"
-                
+
         return "Đang tính toán..."
 
 
