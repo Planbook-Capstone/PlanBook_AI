@@ -14,6 +14,113 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _calculate_average_step_duration(progress_history: list) -> float:
+    """Tính thời gian trung bình giữa các steps"""
+    if len(progress_history) < 2:
+        return 0.0
+
+    durations = []
+    for i in range(1, len(progress_history)):
+        current_timestamp = progress_history[i].get("timestamp", 0)
+        prev_timestamp = progress_history[i - 1].get("timestamp", 0)
+        if current_timestamp and prev_timestamp:
+            duration = current_timestamp - prev_timestamp
+            durations.append(duration)
+
+    return sum(durations) / len(durations) if durations else 0.0
+
+
+def _calculate_total_duration(progress_history: list) -> float:
+    """Tính tổng thời gian từ bắt đầu đến hiện tại"""
+    if len(progress_history) < 2:
+        return 0.0
+    
+    start_timestamp = progress_history[0].get("timestamp", 0)
+    end_timestamp = progress_history[-1].get("timestamp", 0)
+    
+    return end_timestamp - start_timestamp if end_timestamp > start_timestamp else 0.0
+
+
+def _estimate_remaining_time(task: dict) -> float:
+    """Ước tính thời gian còn lại dựa trên progress velocity"""
+    progress_history = task.get("progress_history", [])
+    current_progress = task.get("progress", 0)
+    
+    if current_progress >= 100 or len(progress_history) < 2:
+        return 0.0
+    
+    velocity = _calculate_progress_velocity(progress_history)
+    if velocity <= 0:
+        return 0.0
+    
+    remaining_progress = 100 - current_progress
+    return remaining_progress / velocity
+
+
+def _find_longest_step(progress_history: list) -> dict:
+    """Tìm step mất thời gian lâu nhất"""
+    if len(progress_history) < 2:
+        return {}
+    
+    longest_duration = 0.0
+    longest_step = {}
+    
+    for i in range(1, len(progress_history)):
+        current_timestamp = progress_history[i].get("timestamp", 0)
+        prev_timestamp = progress_history[i-1].get("timestamp", 0)
+        
+        if current_timestamp and prev_timestamp:
+            duration = current_timestamp - prev_timestamp
+            if duration > longest_duration:
+                longest_duration = duration
+                longest_step = {
+                    "step": progress_history[i],
+                    "duration": duration,
+                    "progress_gained": progress_history[i].get("progress", 0) - progress_history[i-1].get("progress", 0)
+                }
+    
+    return longest_step
+
+
+def _calculate_progress_velocity(progress_history: list) -> float:
+    """Tính velocity (progress/giây) trung bình"""
+    if len(progress_history) < 2:
+        return 0.0
+    
+    total_time = _calculate_total_duration(progress_history)
+    if total_time <= 0:
+        return 0.0
+    
+    total_progress = progress_history[-1].get("progress", 0) - progress_history[0].get("progress", 0)
+    return total_progress / total_time
+
+
+def _get_step_breakdown(progress_history: list) -> list:
+    """Phân tích chi tiết từng step"""
+    if len(progress_history) < 2:
+        return []
+    
+    breakdown = []
+    for i in range(1, len(progress_history)):
+        current_step = progress_history[i]
+        prev_step = progress_history[i-1]
+        
+        duration = current_step.get("timestamp", 0) - prev_step.get("timestamp", 0)
+        progress_gained = current_step.get("progress", 0) - prev_step.get("progress", 0)
+        
+        breakdown.append({
+            "step_number": i,
+            "message": current_step.get("message", ""),
+            "progress": current_step.get("progress", 0),
+            "progress_gained": progress_gained,
+            "duration": duration,
+            "timestamp": current_step.get("datetime", ""),
+            "velocity": progress_gained / duration if duration > 0 else 0
+        })
+    
+    return breakdown
+
+
 @router.get("/status/{task_id}", response_model=Dict[str, Any])
 async def get_task_status(task_id: str) -> Dict[str, Any]:
     """
@@ -45,19 +152,29 @@ async def get_task_status(task_id: str) -> Dict[str, Any]:
         if not task:
             raise HTTPException(
                 status_code=404, detail=f"Task with ID '{task_id}' not found"
-            )
-
-        # Tạo response với thông tin cần thiết
+            )        # Tạo response với thông tin cần thiết và progress history
+        progress_history = task.get("progress_history", [])
+        
         response = {
             "task_id": task["task_id"],
             "task_type": task["task_type"],
             "status": task["status"],
-            "progress": task["progress"],
-            "message": task["message"],
+            "current_progress": task["progress"],
+            "current_message": task["message"],
+            "progress_history": progress_history,
             "created_at": task["created_at"],
             "started_at": task["started_at"],
             "completed_at": task["completed_at"],
+            "updated_at": task.get("updated_at"),
             "estimated_duration": task.get("estimated_duration", "Unknown"),
+            # Thống kê progress
+            "progress_stats": {
+                "total_steps": len(progress_history),
+                "completion_percentage": task["progress"],
+                "started_at": progress_history[0].get("datetime") if progress_history else None,
+                "last_updated": progress_history[-1].get("datetime") if progress_history else None,
+                "average_step_duration": _calculate_average_step_duration(progress_history)
+            }
         }
 
         # Thêm result nếu task đã hoàn thành
@@ -485,4 +602,69 @@ async def debug_task(task_id: str) -> Dict[str, Any]:
         raise
     except Exception as e:
         logger.error(f"Error debugging task: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/progress/{task_id}", response_model=Dict[str, Any])
+async def get_task_progress_detailed(task_id: str) -> Dict[str, Any]:
+    """
+    Lấy chi tiết progress history của task với timeline và statistics
+
+    Args:
+        task_id: ID của task
+
+    Returns:
+        Dict chứa chi tiết progress history, timeline và statistics
+
+    Example:
+        GET /api/v1/tasks/progress/abc-123
+    """
+    try:
+        task = await background_task_processor.get_task_status_optimized(task_id)
+
+        if not task:
+            raise HTTPException(
+                status_code=404, detail=f"Task with ID '{task_id}' not found"
+            )
+
+        progress_history = task.get("progress_history", [])
+        
+        # Tính toán timeline
+        timeline = {}
+        if progress_history:
+            timeline = {
+                "created_at": task.get("created_at"),
+                "started_at": next((step["datetime"] for step in progress_history if step["progress"] > 0), None),
+                "last_update": task.get("updated_at"),
+                "total_duration": _calculate_total_duration(progress_history),
+                "estimated_remaining": _estimate_remaining_time(task)
+            }
+
+        # Tính toán statistics chi tiết
+        statistics = {
+            "total_steps": len(progress_history),
+            "completion_rate": task.get("progress", 0),
+            "average_step_duration": _calculate_average_step_duration(progress_history),
+            "longest_step": _find_longest_step(progress_history),
+            "progress_velocity": _calculate_progress_velocity(progress_history),
+            "step_breakdown": _get_step_breakdown(progress_history)
+        }
+
+        return {
+            "task_id": task_id,
+            "status": task.get("status"),
+            "current_progress": task.get("progress", 0),
+            "current_message": task.get("message", ""),
+            "progress_history": progress_history,
+            "timeline": timeline,
+            "statistics": statistics,
+            "task_type": task.get("task_type"),
+            "result": task.get("result") if task.get("status") == "completed" else None,
+            "error": task.get("error") if task.get("status") == "failed" else None
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting task progress details: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")

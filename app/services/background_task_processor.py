@@ -94,6 +94,38 @@ class BackgroundTaskProcessor:
         """Lấy tất cả tasks"""
         return await self.task_service.get_all_tasks()
 
+    async def get_task_progress_detailed(self, task_id: str) -> Dict[str, Any]:
+        """Lấy chi tiết progress với full history và analytics"""
+        task = await self.task_service.get_task_status(task_id)
+
+        if not task:
+            return {"error": "Task not found"}
+
+        progress_history = task.get("progress_history", [])
+
+        return {
+            "task_id": task_id,
+            "status": task.get("status"),
+            "current_progress": task.get("progress", 0),
+            "current_message": task.get("message", ""),
+            "progress_history": progress_history,
+            "timeline": {
+                "created_at": task.get("created_at"),
+                "started_at": next(
+                    (step["timestamp"] for step in progress_history if step["progress"] > 0),
+                    None,
+                ),
+                "last_update": task.get("updated_at"),
+                "duration": time.time() - task.get("created_at", time.time())
+                if isinstance(task.get("created_at"), (int, float))
+                else 0,
+            },
+            "statistics": {
+                "total_steps": len(progress_history),
+                "completion_rate": task.get("progress", 0),
+            },
+        }
+
     async def update_task_progress(
         self, task_id: str, progress: int, message: str = None
     ):
