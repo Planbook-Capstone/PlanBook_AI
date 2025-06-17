@@ -124,6 +124,14 @@ class MongoDBTaskService:
         if not task_id:
             task_id = str(uuid.uuid4())
 
+        # Tạo initial progress step
+        initial_progress_step = {
+            "progress": 0,
+            "message": "Task created",
+            "timestamp": time.time(),
+            "datetime": datetime.now().isoformat()
+        }
+
         task = {
             "task_id": task_id,
             "task_type": task_type.value,
@@ -131,6 +139,7 @@ class MongoDBTaskService:
             "created_at": datetime.now(),
             "started_at": None,
             "completed_at": None,
+            "updated_at": datetime.now(),
             "progress": 0,
             "message": "Task created",
             "data": task_data,
@@ -138,6 +147,7 @@ class MongoDBTaskService:
             "result": None,
             "error": None,
             "estimated_duration": self._estimate_duration(task_type, task_data),
+            "progress_history": [initial_progress_step],
         }
 
         try:
@@ -237,23 +247,38 @@ class MongoDBTaskService:
                 "total_tasks": 0,
                 "processing_tasks": 0,
                 "completed_tasks": 0,
-                "failed_tasks": 0,
-                "pending_tasks": 0,
+                "failed_tasks": 0,                "pending_tasks": 0,
             }
 
     async def update_task_progress(
         self, task_id: str, progress: int, message: Optional[str] = None
     ):
-        """Cập nhật tiến độ task trong MongoDB"""
+        """Cập nhật tiến độ task và lưu progress history"""
         await self.initialize()
 
         try:
-            update_data = {"progress": progress}
+            # Tạo progress step cho history
+            progress_step = {
+                "progress": progress,
+                "message": message or f"Progress: {progress}%",
+                "timestamp": time.time(),
+                "datetime": datetime.now().isoformat()
+            }
+            
+            update_data = {
+                "progress": progress,
+                "updated_at": datetime.now()
+            }
             if message:
                 update_data["message"] = message
 
+            # Update task và thêm vào progress_history
             await self.tasks_collection.update_one(
-                {"task_id": task_id}, {"$set": update_data}
+                {"task_id": task_id}, 
+                {
+                    "$set": update_data,
+                    "$push": {"progress_history": progress_step}
+                }
             )
 
             # Clear cache để force refresh lần query sau
@@ -264,22 +289,37 @@ class MongoDBTaskService:
             logger.error(f"Error updating task progress {task_id}: {e}")
 
     async def mark_task_processing(self, task_id: str):
-        """Đánh dấu task đang xử lý"""
+        """Đánh dấu task đang xử lý và lưu vào history"""
         await self.initialize()
 
         try:
+            # Tạo progress step cho processing
+            progress_step = {
+                "progress": 5,
+                "message": "Task started processing",
+                "timestamp": time.time(),
+                "datetime": datetime.now().isoformat()
+            }
+            
             await self.tasks_collection.update_one(
                 {"task_id": task_id},
                 {
                     "$set": {
                         "status": TaskStatus.PROCESSING.value,
                         "started_at": datetime.now(),
-                    }
+                        "updated_at": datetime.now(),
+                        "progress": 5,
+                        "message": "Processing started"
+                    },
+                    "$push": {"progress_history": progress_step}
                 },
             )
 
             with self._lock:
                 self.processing_tasks.add(task_id)
+                
+            # Clear cache
+            self._clear_task_cache(task_id)
 
         except Exception as e:
             logger.error(f"Error marking task processing {task_id}: {e}")
@@ -289,16 +329,26 @@ class MongoDBTaskService:
         await self.initialize()
 
         try:
+            # Tạo progress step cho completion
+            progress_step = {
+                "progress": 100,
+                "message": "Task completed successfully",
+                "timestamp": time.time(),
+                "datetime": datetime.now().isoformat()
+            }
+            
             await self.tasks_collection.update_one(
                 {"task_id": task_id},
                 {
                     "$set": {
                         "status": TaskStatus.COMPLETED.value,
                         "completed_at": datetime.now(),
+                        "updated_at": datetime.now(),
                         "progress": 100,
                         "message": "Task completed successfully",
                         "result": result,
-                    }
+                    },
+                    "$push": {"progress_history": progress_step}
                 },
             )
 
@@ -312,19 +362,29 @@ class MongoDBTaskService:
             logger.error(f"Error marking task completed {task_id}: {e}")
 
     async def mark_task_failed(self, task_id: str, error: str):
-        """Đánh dấu task thất bại"""
+        """Đánh dấu task thất bại và lưu vào history"""
         await self.initialize()
 
         try:
+            # Tạo progress step cho failure
+            progress_step = {
+                "progress": -1,  # -1 để đánh dấu failed
+                "message": f"Task failed: {error}",
+                "timestamp": time.time(),
+                "datetime": datetime.now().isoformat()
+            }
+            
             await self.tasks_collection.update_one(
                 {"task_id": task_id},
                 {
                     "$set": {
                         "status": TaskStatus.FAILED.value,
                         "completed_at": datetime.now(),
+                        "updated_at": datetime.now(),
                         "message": f"Task failed: {error}",
                         "error": error,
-                    }
+                    },
+                    "$push": {"progress_history": progress_step}
                 },
             )
 
