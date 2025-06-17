@@ -93,18 +93,46 @@ if errorlevel 1 (
 echo.
 echo 🎉 Setup completed successfully!
 echo.
-echo 📋 Next steps:
-echo   1. Make sure Redis and MongoDB are running
-echo   2. Run: start_planbook_system.bat (to start all services)
-echo   3. Or run individual services:
-echo      - FastAPI: start_fastapi.bat
-echo      - Celery Worker: start_celery_worker.bat  
-echo      - Celery Flower: start_celery_flower.bat
+echo � Starting PlanBook AI Services...
 echo.
-echo 📊 Access Points (after starting services):
+
+REM Set environment variables
+set PYTHONPATH=%PYTHONPATH%;%CD%
+set CELERY_BROKER_URL=redis://localhost:6379/1
+set CELERY_RESULT_BACKEND=redis://localhost:6379/1
+
+REM Start Celery Worker
+echo ⚡ Starting Celery Worker...
+start "PlanBook AI - Celery Worker" cmd /k "title PlanBook AI - Celery Worker && python -m celery -A app.core.celery_app worker --loglevel=info --pool=solo --concurrency=1 --include=app.tasks.pdf_tasks --queues=pdf_queue,default --hostname=planbook_worker@%%h"
+
+REM Wait for worker to start
+timeout /t 3 /nobreak >nul
+
+REM Start Celery Flower
+echo 🌸 Starting Celery Flower...
+start "PlanBook AI - Celery Flower" cmd /k "title PlanBook AI - Celery Flower && python -m celery -A app.core.celery_app flower --port=5555"
+
+REM Wait for flower to start
+timeout /t 3 /nobreak >nul
+
+REM Start FastAPI
+echo 🌐 Starting FastAPI Server...
+start "PlanBook AI - FastAPI Server" cmd /k "title PlanBook AI - FastAPI Server && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
+
+echo.
+echo ✅ All services started successfully!
+echo.
+echo 📊 Access Points:
 echo   - FastAPI Server: http://localhost:8000
 echo   - API Documentation: http://localhost:8000/docs
 echo   - Celery Flower: http://localhost:5555
+echo.
+echo 🎯 Service Windows:
+echo   - Celery Worker: Running in separate window
+echo   - Celery Flower: Running in separate window
+echo   - FastAPI Server: Running in separate window
+echo.
+echo 💡 To stop services: Close the respective windows or press Ctrl+C in each
 echo.
 
 pause
