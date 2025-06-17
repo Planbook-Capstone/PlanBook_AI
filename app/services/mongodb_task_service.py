@@ -52,7 +52,7 @@ class MongoDBTaskService:
 
         # Task status cache để tránh query liên tục
         self._task_cache: Dict[str, Dict[str, Any]] = {}
-        self._cache_timeout = 3  # seconds - cache ngắn hạn
+        self._cache_timeout = 0
         self._cache_lock = threading.Lock()
 
     def _get_cached_task(self, task_id: str) -> Optional[Dict[str, Any]]:

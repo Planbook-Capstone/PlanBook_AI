@@ -137,7 +137,8 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
             # Import services here to avoid circular imports
             from app.services.enhanced_textbook_service import enhanced_textbook_service
             from app.services.qdrant_service import qdrant_service
-            import uuid            # Extract pages with OCR
+            import uuid  # Extract pages with OCR
+
             pages_data = await enhanced_textbook_service._extract_pages_with_ocr(
                 file_content
             )
@@ -152,7 +153,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
             await mongodb_task_service.update_task_progress(
                 task_id, 35, "Analyzing images with AI..."
             )
-            
+
             await enhanced_textbook_service._add_image_descriptions(pages_data)
 
             # Create metadata
@@ -160,7 +161,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
                 "id": str(uuid.uuid4())[:8],
                 "title": filename.replace(".pdf", ""),
                 "subject": "Chưa xác định",
-                "grade": "Chưa xác định", 
+                "grade": "Chưa xác định",
                 "author": "Chưa xác định",
                 "language": "vi",
             }
@@ -171,10 +172,12 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
             )
 
             logger.info("🧠 Using enhanced LLM-based structure analysis...")
-            analysis_result = await enhanced_textbook_service._analyze_book_structure_enhanced(
-                pages_data, book_metadata
+            analysis_result = (
+                await enhanced_textbook_service._analyze_book_structure_enhanced(
+                    pages_data, book_metadata
+                )
             )
-            
+
             # Build final structure with content and image descriptions
             book_structure = await enhanced_textbook_service._build_final_structure(
                 analysis_result, pages_data, book_metadata
@@ -228,11 +231,13 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
                 "success": True,
                 "book_id": book_metadata.get("id"),
                 "filename": filename,
-                "book_structure": book_structure,                "statistics": {
+                "book_structure": book_structure,
+                "statistics": {
                     "total_pages": len(pages_data),
                     "total_chapters": total_chapters,
                     "total_lessons": total_lessons,
-                },                "processing_info": {
+                },
+                "processing_info": {
                     "ocr_applied": True,
                     "llm_analysis": True,  # Set to True since we used enhanced LLM analysis
                     "processing_method": "celery_enhanced_analysis",

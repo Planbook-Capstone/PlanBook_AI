@@ -710,7 +710,7 @@ Hãy mô tả hình ảnh:"""
         if image_tasks:
             logger.info(f"🖼️ Generating descriptions for {len(image_tasks)} images...")
             descriptions = await asyncio.gather(*image_tasks, return_exceptions=True)
-
+    
             # Apply descriptions back to images
             desc_index = 0
             for page in pages_data:
@@ -720,7 +720,9 @@ Hãy mô tả hình ảnh:"""
                             img["description"] = descriptions[desc_index]
                             img["description_method"] = "llm_generated"
                         else:
-                            img["description"] = "Hình ảnh minh họa trong sách giáo khoa"
+                            img["description"] = (
+                                "Hình ảnh minh họa trong sách giáo khoa"
+                            )
                             img["description_method"] = "fallback"
                         desc_index += 1
 
@@ -728,14 +730,20 @@ Hãy mô tả hình ảnh:"""
         self,
         analysis_result: Dict[str, Any],
         pages_data: List[Dict[str, Any]],
-        book_metadata: Dict[str, Any]
+        book_metadata: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Build final book structure from analysis result"""
 
         book_structure = {
-            "title": analysis_result.get("book_info", {}).get("title", book_metadata["title"]),
-            "subject": analysis_result.get("book_info", {}).get("subject", book_metadata["subject"]),
-            "grade": analysis_result.get("book_info", {}).get("grade", book_metadata["grade"]),
+            "title": analysis_result.get("book_info", {}).get(
+                "title", book_metadata["title"]
+            ),
+            "subject": analysis_result.get("book_info", {}).get(
+                "subject", book_metadata["subject"]
+            ),
+            "grade": analysis_result.get("book_info", {}).get(
+                "grade", book_metadata["grade"]
+            ),
             "chapters": [],
         }
 
@@ -743,7 +751,7 @@ Hãy mô tả hình ảnh:"""
         for chapter in analysis_result.get("chapters", []):
             chapter_obj = {
                 "title": chapter.get("chapter_title", "Chương không xác định"),
-                "lessons": []
+                "lessons": [],
             }
 
             # Extract lessons
@@ -760,11 +768,15 @@ Hãy mô tả hình ảnh:"""
                         lesson_content += page.get("text", "") + "\n"
                         # Add images with descriptions
                         for img in page.get("images", []):
-                            lesson_images.append({
-                                "page": page_num,
-                                "description": img.get("description", "Hình ảnh minh họa"),
-                                "format": img.get("format", "png")
-                            })
+                            lesson_images.append(
+                                {
+                                    "page": page_num,
+                                    "description": img.get(
+                                        "description", "Hình ảnh minh họa"
+                                    ),
+                                    "format": img.get("format", "png"),
+                                }
+                            )
 
                 lesson_obj = {
                     "title": lesson.get("lesson_title", "Bài học không xác định"),
