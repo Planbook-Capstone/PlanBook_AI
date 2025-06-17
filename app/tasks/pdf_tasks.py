@@ -137,76 +137,51 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
             # Import services here to avoid circular imports
             from app.services.enhanced_textbook_service import enhanced_textbook_service
             from app.services.qdrant_service import qdrant_service
-            import uuid
-
-            # Extract pages with OCR
+            import uuid            # Extract pages with OCR
             pages_data = await enhanced_textbook_service._extract_pages_with_ocr(
                 file_content
             )
 
-            # pages_data is List[Dict], not Dict with success key
+            # Validate OCR extraction
             if not pages_data or len(pages_data) == 0:
                 raise Exception("OCR extraction failed: No pages extracted")
 
-            pages = pages_data
-            logger.info(f"OCR completed. Extracted {len(pages)} pages")
+            logger.info(f"OCR completed. Extracted {len(pages_data)} pages")
 
-            # Update progress: Analyze structure
+            # Add image descriptions using LLM
             await mongodb_task_service.update_task_progress(
-                task_id, 40, "Analyzing book structure..."
+                task_id, 35, "Analyzing images with AI..."
             )
+            
+            await enhanced_textbook_service._add_image_descriptions(pages_data)
 
-            # Create automatic metadata
+            # Create metadata
             book_metadata = {
                 "id": str(uuid.uuid4())[:8],
                 "title": filename.replace(".pdf", ""),
                 "subject": "Chưa xác định",
-                "grade": "Chưa xác định",
+                "grade": "Chưa xác định", 
                 "author": "Chưa xác định",
                 "language": "vi",
             }
 
-            # For now, create basic structure since LLM method might not exist
-            # TODO: Implement proper LLM analysis when method is available
-            book_structure = {
-                "title": book_metadata["title"],
-                "subject": book_metadata["subject"],
-                "grade": book_metadata["grade"],
-                "chapters": [],
-            }
+            # Enhanced structure analysis with LLM
+            await mongodb_task_service.update_task_progress(
+                task_id, 50, "Analyzing book structure with AI..."
+            )
 
-            # Group pages into chapters (simple logic: every 5 pages = 1 chapter)
-            pages_per_chapter = 5
-            chapter_count = 0
-
-            for i in range(0, len(pages), pages_per_chapter):
-                chapter_count += 1
-                chapter_pages = pages[i : i + pages_per_chapter]
-
-                # Combine text from all pages in chapter
-                chapter_text = ""
-                for page in chapter_pages:
-                    chapter_text += page.get("text", "") + "\n"
-
-                chapter = {
-                    "title": f"Chương {chapter_count}",
-                    "lessons": [
-                        {
-                            "title": f"Bài học từ trang {i+1} đến {min(i+pages_per_chapter, len(pages))}",
-                            "content": chapter_text.strip(),
-                            "page_numbers": list(
-                                range(
-                                    i + 1,
-                                    min(i + pages_per_chapter + 1, len(pages) + 1),
-                                )
-                            ),
-                        }
-                    ],
-                }
-                book_structure["chapters"].append(chapter)
+            logger.info("🧠 Using enhanced LLM-based structure analysis...")
+            analysis_result = await enhanced_textbook_service._analyze_book_structure_enhanced(
+                pages_data, book_metadata
+            )
+            
+            # Build final structure with content and image descriptions
+            book_structure = await enhanced_textbook_service._build_final_structure(
+                analysis_result, pages_data, book_metadata
+            )
 
             logger.info(
-                f"Book structure analysis completed with {len(book_structure['chapters'])} chapters"
+                f"Enhanced analysis completed: {len(book_structure['chapters'])} chapters"
             )
 
             # Update progress: Structure completed
@@ -253,19 +228,17 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
                 "success": True,
                 "book_id": book_metadata.get("id"),
                 "filename": filename,
-                "book_structure": book_structure,
-                "statistics": {
-                    "total_pages": len(pages),
+                "book_structure": book_structure,                "statistics": {
+                    "total_pages": len(pages_data),
                     "total_chapters": total_chapters,
                     "total_lessons": total_lessons,
-                },
-                "processing_info": {
+                },                "processing_info": {
                     "ocr_applied": True,
-                    "llm_analysis": False,  # Set to False since we used basic logic
-                    "processing_method": "celery_quick_analysis",
+                    "llm_analysis": True,  # Set to True since we used enhanced LLM analysis
+                    "processing_method": "celery_enhanced_analysis",
                     "task_id": task_id,
                 },
-                "message": "Quick textbook analysis completed successfully",
+                "message": "Enhanced textbook analysis completed successfully with LLM",
                 "embeddings_created": embeddings_created,
                 "embeddings_info": {
                     "collection_name": embeddings_result.get("collection_name")

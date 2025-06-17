@@ -694,6 +694,90 @@ Hãy mô tả hình ảnh:"""
 
             return random.choice(fallback_descriptions)
 
+    async def _add_image_descriptions(self, pages_data: List[Dict[str, Any]]) -> None:
+        """Add LLM-generated descriptions for all images in pages_data"""
+
+        if not llm_service.is_available():
+            logger.warning("LLM not available for image descriptions")
+            return
+
+        image_tasks = []
+        for page in pages_data:
+            for img in page.get("images", []):
+                if img.get("data"):
+                    image_tasks.append(self._describe_image_with_llm(img["data"]))
+
+        if image_tasks:
+            logger.info(f"🖼️ Generating descriptions for {len(image_tasks)} images...")
+            descriptions = await asyncio.gather(*image_tasks, return_exceptions=True)
+
+            # Apply descriptions back to images
+            desc_index = 0
+            for page in pages_data:
+                for img in page.get("images", []):
+                    if img.get("data") and desc_index < len(descriptions):
+                        if not isinstance(descriptions[desc_index], Exception):
+                            img["description"] = descriptions[desc_index]
+                            img["description_method"] = "llm_generated"
+                        else:
+                            img["description"] = "Hình ảnh minh họa trong sách giáo khoa"
+                            img["description_method"] = "fallback"
+                        desc_index += 1
+
+    async def _build_final_structure(
+        self,
+        analysis_result: Dict[str, Any],
+        pages_data: List[Dict[str, Any]],
+        book_metadata: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Build final book structure from analysis result"""
+
+        book_structure = {
+            "title": analysis_result.get("book_info", {}).get("title", book_metadata["title"]),
+            "subject": analysis_result.get("book_info", {}).get("subject", book_metadata["subject"]),
+            "grade": analysis_result.get("book_info", {}).get("grade", book_metadata["grade"]),
+            "chapters": [],
+        }
+
+        # Process chapters and lessons
+        for chapter in analysis_result.get("chapters", []):
+            chapter_obj = {
+                "title": chapter.get("chapter_title", "Chương không xác định"),
+                "lessons": []
+            }
+
+            # Extract lessons
+            for lesson in chapter.get("lessons", []):
+                lesson_content = ""
+                lesson_images = []
+                start_page = lesson.get("start_page", 1)
+                end_page = lesson.get("end_page", start_page)
+
+                # Collect content and images from lesson pages
+                for page in pages_data:
+                    page_num = page.get("page_number", 0)
+                    if start_page <= page_num <= end_page:
+                        lesson_content += page.get("text", "") + "\n"
+                        # Add images with descriptions
+                        for img in page.get("images", []):
+                            lesson_images.append({
+                                "page": page_num,
+                                "description": img.get("description", "Hình ảnh minh họa"),
+                                "format": img.get("format", "png")
+                            })
+
+                lesson_obj = {
+                    "title": lesson.get("lesson_title", "Bài học không xác định"),
+                    "content": lesson_content.strip(),
+                    "page_numbers": list(range(start_page, end_page + 1)),
+                    "images": lesson_images,
+                }
+                chapter_obj["lessons"].append(lesson_obj)
+
+            book_structure["chapters"].append(chapter_obj)
+
+        return book_structure
+
 
 # Global instance
 enhanced_textbook_service = EnhancedTextbookService()
