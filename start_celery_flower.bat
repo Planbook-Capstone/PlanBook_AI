@@ -27,7 +27,7 @@ REM Start Celery Flower
 echo 🌸 Starting Celery Flower monitoring...
 echo 📊 Flower will be available at: http://localhost:5555
 echo.
-celery -A app.core.celery_app flower --port=5555
+python -m celery -A app.core.celery_app flower --port=5555
 
 echo ✅ Celery Flower stopped
 pause

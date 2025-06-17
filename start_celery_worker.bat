@@ -16,7 +16,7 @@ echo.
 
 REM Start với include tasks
 echo ⚡ Starting Celery Worker with PDF tasks...
-celery -A app.core.celery_app worker ^
+python -m celery -A app.core.celery_app worker ^
     --loglevel=info ^
     --pool=solo ^
     --concurrency=1 ^
