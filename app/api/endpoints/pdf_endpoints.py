@@ -4,7 +4,7 @@ PDF Endpoints - Endpoint đơn giản để xử lý PDF với OCR và LLM forma
 
 import logging
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Query
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from app.services.llm_service import llm_service
 from app.services.enhanced_textbook_service import enhanced_textbook_service
@@ -53,17 +53,15 @@ async def process_textbook(
             if field not in book_metadata:
                 raise HTTPException(
                     status_code=400, detail=f"Missing required metadata field: {field}"
-                )
-
-        # Read file content
+                )  # Read file content
         file_content = await file.read()
 
         if len(file_content) == 0:
             raise HTTPException(status_code=400, detail="Empty file uploaded")
 
-        logger.info(
-            f"Processing textbook: {file.filename} ({len(file_content)} bytes)"
-        )  # Process textbook with enhanced service for better structure
+        logger.info(f"Processing textbook: {file.filename} ({len(file_content)} bytes)")
+
+        # Process textbook with enhanced service
         enhanced_result = await enhanced_textbook_service.process_textbook_to_structure(
             pdf_content=file_content,
             filename=file.filename,
@@ -71,25 +69,10 @@ async def process_textbook(
         )
 
         if not enhanced_result.get("success", False):
-            # Fallback to old service if enhanced fails
-            logger.warning("Enhanced processing failed, falling back to old service")
-            result = await textbook_parser_service.process_textbook(
-                pdf_content=file_content,
-                filename=file.filename,
-                book_metadata=book_metadata,
+            raise HTTPException(
+                status_code=500,
+                detail=f"Textbook processing failed: {enhanced_result.get('error', 'Unknown error')}",
             )
-
-            return {
-                "success": result.get("success", False),
-                "book_id": result.get("book_id"),
-                "book_path": result.get("book_path"),
-                "lessons_processed": result.get("lessons_processed", 0),
-                "total_pages": result.get("total_pages", 0),
-                "processing_error": result.get("error"),
-                "message": result.get(
-                    "message", "Textbook processing completed (fallback mode)"
-                ),
-            }
 
         # Return enhanced structure with OCR results
         result = {
@@ -121,7 +104,6 @@ async def process_textbook(
                 logger.info(
                     f"Creating embeddings for book_id: {book_metadata.get('id')}"
                 )
-                logger.debug(f"Book structure type: {type(book_structure_dict)}")
 
                 # Đảm bảo book_structure_dict là dictionary
                 if isinstance(book_structure_dict, str):
@@ -174,6 +156,7 @@ async def process_textbook(
 async def quick_textbook_analysis(
     file: UploadFile = File(...),
     create_embeddings: bool = Form(True),
+    lesson_id: Optional[str] = Form(None),
 ) -> Dict[str, Any]:
     """
     Phân tích nhanh cấu trúc sách giáo khoa với xử lý bất đồng bộ
@@ -187,6 +170,7 @@ async def quick_textbook_analysis(
     Args:
         file: PDF file của sách giáo khoa
         create_embeddings: Có tạo embeddings cho RAG search không
+        lesson_id: ID bài học tùy chọn để liên kết với lesson cụ thể
 
     Returns:
         Dict chứa task_id để theo dõi tiến độ
@@ -204,13 +188,12 @@ async def quick_textbook_analysis(
 
         logger.info(
             f"Starting quick analysis task for: {file.filename} ({len(file_content)} bytes)"
-        )
-
-        # Tạo task bất đồng bộ
+        )  # Tạo task bất đồng bộ
         task_id = await background_task_processor.create_quick_analysis_task(
             pdf_content=file_content,
             filename=file.filename,
             create_embeddings=create_embeddings,
+            lesson_id=lesson_id,
         )
 
         return {

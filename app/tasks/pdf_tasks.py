@@ -125,8 +125,13 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
         file_content = task_data["file_content"]
         filename = task_data["filename"]
         create_embeddings = task_data.get("create_embeddings", True)
-
-        logger.info(f"Processing file: {filename} (size: {len(file_content)} bytes)")
+        lesson_id = task_data.get(
+            "lesson_id"
+        )  # Extract lesson_id if provided        logger.info(f"Processing file: {filename} (size: {len(file_content)} bytes)")
+        if lesson_id:
+            logger.info(f"📍 Associated with lesson_id: {lesson_id}")
+        else:
+            logger.info("📍 No lesson_id provided")
 
         # Update progress: Start OCR
         await mongodb_task_service.update_task_progress(
@@ -154,9 +159,9 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
                 task_id, 35, "Analyzing images with AI..."
             )
 
-            await enhanced_textbook_service._add_image_descriptions(pages_data)
-
-            # Create metadata
+            await enhanced_textbook_service._add_image_descriptions(
+                pages_data
+            )  # Create metadata
             book_metadata = {
                 "id": str(uuid.uuid4())[:8],
                 "title": filename.replace(".pdf", ""),
@@ -166,31 +171,43 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
                 "language": "vi",
             }
 
-            # Enhanced structure analysis with LLM
+            # Process textbook with enhanced service
             await mongodb_task_service.update_task_progress(
                 task_id, 50, "Analyzing book structure with AI..."
             )
 
-            logger.info("🧠 Using enhanced LLM-based structure analysis...")
-            analysis_result = (
-                await enhanced_textbook_service._analyze_book_structure_enhanced(
-                    pages_data, book_metadata
+            logger.info("🧠 Using enhanced textbook processing...")
+            # Use the main processing method that returns full structure
+            processing_result = (
+                await enhanced_textbook_service.process_textbook_to_structure(
+                    file_content,
+                    filename,
+                    book_metadata,
+                    lesson_id,  # Pass lesson_id
                 )
             )
 
-            # Build final structure with content and image descriptions
-            book_structure = await enhanced_textbook_service._build_final_structure(
-                analysis_result, pages_data, book_metadata
+            if not processing_result.get("success"):
+                raise Exception(
+                    f"Textbook processing failed: {processing_result.get('error', 'Unknown error')}"
+                )
+
+            # Extract the results
+            book_structure = processing_result.get("book", {})
+            clean_book_structure = processing_result.get(
+                "clean_book_structure", book_structure
             )
+            images_data = processing_result.get("images_data", [])
+            total_images = processing_result.get("total_images", 0)
 
             logger.info(
-                f"Enhanced analysis completed: {len(book_structure['chapters'])} chapters"
-            )
-
-            # Update progress: Structure completed
+                f"Enhanced analysis completed: {len(book_structure.get('chapters', []))} chapters, {total_images} images"
+            )  # Update progress: Structure completed
             await mongodb_task_service.update_task_progress(
                 task_id, 60, "Book structure analysis completed"
-            )  # Create embeddings if requested
+            )
+
+            # Create embeddings if requested
             embeddings_result = None
             embeddings_created = False
 
@@ -200,10 +217,12 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
                 )
 
                 try:
-                    # Use the correct process_textbook method
-                    embeddings_result = await qdrant_service.process_textbook(
+                    # Use the enhanced processing method that handles both embeddings and images
+                    embeddings_result = await qdrant_service.process_textbook_with_images(
                         book_id=book_metadata.get("id", "unknown"),
-                        book_structure=book_structure,
+                        book_structure=clean_book_structure,  # Use clean structure for embeddings
+                        images_data=images_data,  # Save images separately
+                        associated_lesson_id=lesson_id,
                     )
 
                     if embeddings_result and embeddings_result.get("success"):
@@ -217,9 +236,9 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
                             f"Embeddings creation failed: {embeddings_result.get('error') if embeddings_result else 'Unknown error'}"
                         )
                 except Exception as e:
-                    logger.warning(f"Embeddings creation failed: {str(e)}")
-
-            # Calculate statistics
+                    logger.warning(
+                        f"Embeddings creation failed: {str(e)}"
+                    )  # Calculate statistics
             total_chapters = len(book_structure.get("chapters", []))
             total_lessons = sum(
                 len(chapter.get("lessons", []))
@@ -232,32 +251,52 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
                 "book_id": book_metadata.get("id"),
                 "filename": filename,
                 "book_structure": book_structure,
+                "lesson_id": lesson_id,  # Include lesson_id if provided
                 "statistics": {
-                    "total_pages": len(pages_data),
+                    "total_pages": processing_result.get("total_pages", 0),
                     "total_chapters": total_chapters,
                     "total_lessons": total_lessons,
+                    "total_images": total_images,
                 },
                 "processing_info": {
                     "ocr_applied": True,
-                    "llm_analysis": True,  # Set to True since we used enhanced LLM analysis
+                    "llm_analysis": True,
                     "processing_method": "celery_enhanced_analysis",
                     "task_id": task_id,
+                    "associated_lesson_id": lesson_id,
+                    "images_processed": total_images > 0,
                 },
-                "message": "Enhanced textbook analysis completed successfully with LLM",
+                "message": "Enhanced textbook analysis completed successfully with LLM and image processing",
                 "embeddings_created": embeddings_created,
                 "embeddings_info": {
-                    "collection_name": embeddings_result.get("collection_name")
+                    "collection_name": embeddings_result.get("embeddings", {}).get(
+                        "collection_name"
+                    )
                     if embeddings_result
                     else None,
-                    "vector_count": embeddings_result.get("total_chunks", 0)
+                    "vector_count": embeddings_result.get("embeddings", {}).get(
+                        "total_chunks", 0
+                    )
                     if embeddings_result
                     else 0,
-                    "vector_dimension": embeddings_result.get("vector_dimension")
+                    "vector_dimension": embeddings_result.get("embeddings", {}).get(
+                        "vector_dimension"
+                    )
                     if embeddings_result
                     else None,
-                }
-                if embeddings_result
-                else None,
+                },
+                "images_info": {
+                    "images_saved": embeddings_result.get("images", {}).get(
+                        "images_saved", 0
+                    )
+                    if embeddings_result
+                    else 0,
+                    "storage_path": embeddings_result.get("images", {}).get(
+                        "storage_path"
+                    )
+                    if embeddings_result
+                    else None,
+                },
             }
 
         except Exception as processing_error:

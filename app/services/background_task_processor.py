@@ -112,7 +112,11 @@ class BackgroundTaskProcessor:
             "timeline": {
                 "created_at": task.get("created_at"),
                 "started_at": next(
-                    (step["timestamp"] for step in progress_history if step["progress"] > 0),
+                    (
+                        step["timestamp"]
+                        for step in progress_history
+                        if step["progress"] > 0
+                    ),
                     None,
                 ),
                 "last_update": task.get("updated_at"),
@@ -354,7 +358,11 @@ class BackgroundTaskProcessor:
             await self.mark_task_failed(task_id, str(e))
 
     async def create_quick_analysis_task(
-        self, pdf_content: bytes, filename: str, create_embeddings: bool = True
+        self,
+        pdf_content: bytes,
+        filename: str,
+        create_embeddings: bool = True,
+        lesson_id: Optional[str] = None,
     ) -> str:
         """Tạo task phân tích nhanh sách giáo khoa - sử dụng Celery"""
 
@@ -362,6 +370,7 @@ class BackgroundTaskProcessor:
             "file_content": pdf_content,
             "filename": filename,
             "create_embeddings": create_embeddings,
+            "lesson_id": lesson_id,
         }
 
         # Sử dụng Celery thay vì asyncio.create_task

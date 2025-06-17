@@ -7,6 +7,7 @@ import logging
 import asyncio
 import json
 import base64
+import uuid
 from typing import Dict, Any, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import fitz  # PyMuPDF
@@ -30,6 +31,7 @@ class EnhancedTextbookService:
         pdf_content: bytes,
         filename: str,
         book_metadata: Optional[Dict[str, Any]] = None,
+        lesson_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Xử lý PDF sách giáo khoa và trả về cấu trúc hoàn chỉnh
@@ -38,6 +40,7 @@ class EnhancedTextbookService:
             pdf_content: Nội dung PDF
             filename: Tên file
             book_metadata: Metadata sách (title, subject, grade, etc.)
+            lesson_id: ID bài học tùy chọn để liên kết với lesson cụ thể
 
         Returns:
             Dict với cấu trúc: book -> chapters -> lessons -> content
@@ -57,26 +60,37 @@ class EnhancedTextbookService:
             )
             logger.info(
                 f"📚 Detected {len(book_structure.get('chapters', []))} chapters"
-            )
-
-            # Step 3: Process content for each lesson
-            logger.info("🔄 Processing lesson content...")
-            processed_book = await self._process_lessons_content(
-                book_structure, pages_data
+            )  # Step 3: Build final structure with content and lesson IDs
+            logger.info("🔄 Building final lesson structure...")
+            processed_book = await self._build_final_structure(
+                book_structure,
+                pages_data,
+                book_metadata or {},
+                lesson_id,  # Pass lesson_id
             )
 
             logger.info("✅ Textbook processing completed successfully")
 
+            # Extract images for separate storage
+            images_data = self.extract_images_for_storage(processed_book)
+            logger.info(f"🖼️ Extracted {len(images_data)} images for storage")
+
+            # Prepare clean structure for Qdrant
+            clean_book_structure = self.prepare_structure_for_qdrant(processed_book)
+
             return {
                 "success": True,
-                "book": processed_book,
+                "book": processed_book,  # Full structure with image data
+                "clean_book_structure": clean_book_structure,  # Structure without image data for Qdrant
+                "images_data": images_data,  # Separate image data for external storage
                 "total_pages": len(pages_data),
                 "total_chapters": len(processed_book.get("chapters", [])),
                 "total_lessons": sum(
                     len(ch.get("lessons", []))
                     for ch in processed_book.get("chapters", [])
                 ),
-                "message": "Textbook processed successfully",
+                "total_images": len(images_data),
+                "message": "Textbook processed successfully with image extraction",
             }
 
         except Exception as e:
@@ -205,7 +219,11 @@ class EnhancedTextbookService:
                 import numpy as np
 
                 results = simple_ocr_service.easyocr_reader.readtext(np.array(image))
-                text_parts = [str(result[1]) for result in results if len(result) >= 2]
+                text_parts = []
+                for result in results:
+                    if isinstance(result, (list, tuple)) and len(result) >= 2:
+                        # EasyOCR returns [bbox, text, confidence]
+                        text_parts.append(str(result[1]))
                 return " ".join(text_parts)
             else:
                 # Fallback to Tesseract
@@ -484,7 +502,10 @@ Trả về JSON:"""
         return chapters
 
     async def _process_lessons_content(
-        self, book_structure: Dict[str, Any], pages_data: List[Dict[str, Any]]
+        self,
+        book_structure: Dict[str, Any],
+        pages_data: List[Dict[str, Any]],
+        external_lesson_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Xử lý nội dung chi tiết cho từng bài học"""
 
@@ -710,7 +731,7 @@ Hãy mô tả hình ảnh:"""
         if image_tasks:
             logger.info(f"🖼️ Generating descriptions for {len(image_tasks)} images...")
             descriptions = await asyncio.gather(*image_tasks, return_exceptions=True)
-    
+
             # Apply descriptions back to images
             desc_index = 0
             for page in pages_data:
@@ -731,8 +752,9 @@ Hãy mô tả hình ảnh:"""
         analysis_result: Dict[str, Any],
         pages_data: List[Dict[str, Any]],
         book_metadata: Dict[str, Any],
+        external_lesson_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Build final book structure from analysis result"""
+        """Build final book structure from analysis result with lessonID and improved image handling"""
 
         book_structure = {
             "title": analysis_result.get("book_info", {}).get(
@@ -745,11 +767,11 @@ Hãy mô tả hình ảnh:"""
                 "grade", book_metadata["grade"]
             ),
             "chapters": [],
-        }
-
-        # Process chapters and lessons
-        for chapter in analysis_result.get("chapters", []):
+        }  # Process chapters and lessons
+        lesson_counter = 0  # Track total lesson count for lesson_id variants
+        for chapter_index, chapter in enumerate(analysis_result.get("chapters", [])):
             chapter_obj = {
+                "chapter_id": f"chapter_{chapter_index:02d}",  # Add chapter_id
                 "title": chapter.get("chapter_title", "Chương không xác định"),
                 "lessons": [],
             }
@@ -765,30 +787,125 @@ Hãy mô tả hình ảnh:"""
                 for page in pages_data:
                     page_num = page.get("page_number", 0)
                     if start_page <= page_num <= end_page:
-                        lesson_content += page.get("text", "") + "\n"
-                        # Add images with descriptions
+                        lesson_content += (
+                            page.get("text", "") + "\n"
+                        )  # Add images with enhanced metadata
                         for img in page.get("images", []):
+                            image_info = {
+                                "page": page_num,
+                                "description": img.get(
+                                    "description", "Hình ảnh minh họa"
+                                ),
+                                "format": img.get("format", "png"),
+                                "description_method": img.get(
+                                    "description_method", "auto"
+                                ),
+                                "image_index": img.get(
+                                    "index", 0
+                                ),  # Original index in page
+                                "base64_data": img.get(
+                                    "data", ""
+                                ),  # Store base64 for embedding if needed
+                                "image_id": str(
+                                    uuid.uuid4()
+                                ),  # Unique ID for each image
+                                "has_data": bool(
+                                    img.get("data", "")
+                                ),  # Flag to check if image data exists
+                            }
                             lesson_images.append(
-                                {
-                                    "page": page_num,
-                                    "description": img.get(
-                                        "description", "Hình ảnh minh họa"
-                                    ),
-                                    "format": img.get("format", "png"),
-                                }
-                            )
+                                image_info
+                            )  # Generate lesson ID - use external_lesson_id if provided, otherwise create UUID
+                if external_lesson_id:
+                    if lesson_counter == 0:
+                        lesson_id = external_lesson_id
+                        logger.info(f"Using provided lesson_id: {lesson_id}")
+                    else:
+                        lesson_id = f"{external_lesson_id}_{lesson_counter}"
+                        logger.info(f"Using variant lesson_id: {lesson_id}")
+                else:
+                    lesson_id = str(uuid.uuid4())
+                    logger.debug(f"Generated new lesson_id: {lesson_id}")
+
+                lesson_counter += 1  # Increment for next lesson
 
                 lesson_obj = {
+                    "lesson_id": lesson_id,  # Add unique lesson ID
                     "title": lesson.get("lesson_title", "Bài học không xác định"),
                     "content": lesson_content.strip(),
                     "page_numbers": list(range(start_page, end_page + 1)),
                     "images": lesson_images,
+                    "image_count": len(
+                        lesson_images
+                    ),  # Add image count for easy reference
+                    "has_images": len(lesson_images) > 0,  # Boolean flag for filtering
                 }
                 chapter_obj["lessons"].append(lesson_obj)
 
             book_structure["chapters"].append(chapter_obj)
 
         return book_structure
+
+    def extract_images_for_storage(
+        self, book_structure: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Extract all images from book structure for separate storage
+
+        Since Qdrant cannot store image data directly, this method extracts
+        all images with their metadata for storage in a separate system.
+
+        Returns:
+            List of image objects with metadata and base64 data
+        """
+        images_data = []
+
+        for chapter in book_structure.get("chapters", []):
+            for lesson in chapter.get("lessons", []):
+                lesson_id = lesson.get("lesson_id", "unknown")
+
+                for image in lesson.get("images", []):
+                    if image.get("has_data", False):
+                        image_record = {
+                            "image_id": image.get("image_id"),
+                            "lesson_id": lesson_id,
+                            "lesson_title": lesson.get("title", ""),
+                            "chapter_title": chapter.get("title", ""),
+                            "page": image.get("page"),
+                            "description": image.get("description", ""),
+                            "description_method": image.get("description_method", ""),
+                            "format": image.get("format", "png"),
+                            "image_index": image.get("image_index", 0),
+                            "base64_data": image.get("base64_data", ""),
+                            "book_title": book_structure.get("title", ""),
+                            "subject": book_structure.get("subject", ""),
+                            "grade": book_structure.get("grade", ""),
+                        }
+                        images_data.append(image_record)
+
+        return images_data
+
+    def prepare_structure_for_qdrant(
+        self, book_structure: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Prepare book structure for Qdrant storage by removing image data
+
+        This method creates a clean version of the book structure without
+        base64 image data, suitable for Qdrant embedding.
+
+        Returns:
+            Clean book structure without image data
+        """
+        import copy
+
+        clean_structure = copy.deepcopy(book_structure)
+
+        for chapter in clean_structure.get("chapters", []):
+            for lesson in chapter.get("lessons", []):
+                for image in lesson.get("images", []):
+                    # Remove base64 data to reduce size for Qdrant
+                    image.pop("base64_data", None)
+
+        return clean_structure
 
 
 # Global instance
