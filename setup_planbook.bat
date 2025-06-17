@@ -81,19 +81,7 @@ if errorlevel 1 (
 
 REM Test core imports
 echo 🧪 Testing core imports...
-python -c "
-try:
-    import fastapi
-    import uvicorn
-    import celery
-    import sentence_transformers
-    import qdrant_client
-    import tf_keras
-    print('✅ All core modules imported successfully')
-except ImportError as e:
-    print(f'❌ Import error: {e}')
-    exit(1)
-"
+python -c "import fastapi, uvicorn, celery, sentence_transformers, qdrant_client, tf_keras; print('✅ All core modules imported successfully')"
 
 if errorlevel 1 (
     echo ❌ Some modules failed to import
