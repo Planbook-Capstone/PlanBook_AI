@@ -2,7 +2,7 @@ from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.api.endpoints import pdf_endpoints, tasks, celery_health
+from app.api.endpoints import pdf_endpoints, tasks, celery_health, lesson_plan
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -29,7 +29,9 @@ api_router = APIRouter()
 api_router.include_router(pdf_endpoints.router, prefix="/pdf", tags=["Books Services"])
 api_router.include_router(tasks.router, prefix="/tasks", tags=["Task Management"])
 api_router.include_router(celery_health.router, tags=["Celery Health"])
-
+api_router.include_router(
+    lesson_plan.router, prefix="/lesson", tags=["Lesson Planning"]
+)
 # Add API router to app
 app.include_router(api_router, prefix=settings.API_PREFIX)
 
