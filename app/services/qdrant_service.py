@@ -617,6 +617,142 @@ class QdrantService:
                 "error": str(e),
             }
 
+    async def delete_textbook_by_id(self, book_id: str) -> Dict[str, Any]:
+        """
+        Xóa textbook bằng book_id (xóa collection trong Qdrant)
+        
+        Args:
+            book_id: ID của textbook cần xóa
+            
+        Returns:
+            Dict chứa kết quả xóa
+        """
+        try:
+            if not self.qdrant_client:
+                return {
+                    "success": False,
+                    "error": "Qdrant client not initialized"
+                }
+
+            collection_name = f"textbook_{book_id}"
+            
+            # Kiểm tra collection có tồn tại không
+            collections = self.qdrant_client.get_collections().collections
+            existing_names = [c.name for c in collections]
+            
+            if collection_name not in existing_names:
+                return {
+                    "success": False,
+                    "error": f"Textbook with ID '{book_id}' not found",
+                    "book_id": book_id,
+                    "collection_name": collection_name
+                }
+            
+            # Lấy thông tin về collection trước khi xóa
+            collection_info = self.qdrant_client.get_collection(collection_name)
+            vector_count = getattr(collection_info, 'vectors_count', 0)
+            
+            # Xóa collection
+            self.qdrant_client.delete_collection(collection_name)
+            logger.info(f"Deleted textbook collection: {collection_name}")
+            
+            return {
+                "success": True,
+                "message": f"Textbook '{book_id}' deleted successfully",
+                "book_id": book_id,
+                "collection_name": collection_name,
+                "deleted_vectors": vector_count
+            }
+            
+        except Exception as e:
+            logger.error(f"Error deleting textbook {book_id}: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "book_id": book_id
+            }
+
+    async def delete_textbook_by_lesson_id(self, lesson_id: str) -> Dict[str, Any]:
+        """
+        Xóa textbook bằng lesson_id (tìm collection chứa lesson_id rồi xóa)
+        
+        Args:
+            lesson_id: ID của lesson để tìm textbook cần xóa
+            
+        Returns:
+            Dict chứa kết quả xóa
+        """
+        try:
+            if not self.qdrant_client:
+                return {
+                    "success": False,
+                    "error": "Qdrant client not initialized"
+                }
+
+            # Tìm collection chứa lesson_id
+            collections = self.qdrant_client.get_collections().collections
+            found_collection = None
+            found_book_id = None
+
+            for collection in collections:
+                if collection.name.startswith("textbook_"):
+                    try:
+                        # Tìm kiếm lesson_id trong collection này
+                        search_result = self.qdrant_client.scroll(
+                            collection_name=collection.name,
+                            scroll_filter=qdrant_models.Filter(
+                                must=[
+                                    qdrant_models.FieldCondition(
+                                        key="lesson_id",
+                                        match=qdrant_models.MatchValue(value=lesson_id),
+                                    )
+                                ]
+                            ),
+                            limit=1,
+                            with_payload=True,
+                        )
+
+                        if search_result[0]:  # Tìm thấy lesson
+                            found_collection = collection.name
+                            found_book_id = collection.name.replace("textbook_", "")
+                            break
+
+                    except Exception as e:
+                        logger.warning(f"Error searching in collection {collection.name}: {e}")
+                        continue
+
+            if not found_collection:
+                return {
+                    "success": False,
+                    "error": f"No textbook found containing lesson_id: {lesson_id}",
+                    "lesson_id": lesson_id
+                }
+
+            # Lấy thông tin về collection trước khi xóa
+            collection_info = self.qdrant_client.get_collection(found_collection)
+            vector_count = getattr(collection_info, 'vectors_count', 0)
+            
+            # Xóa collection
+            self.qdrant_client.delete_collection(found_collection)
+            logger.info(f"Deleted textbook collection: {found_collection} (found by lesson_id: {lesson_id})")
+            
+            return {
+                "success": True,
+                "message": f"Textbook containing lesson '{lesson_id}' deleted successfully",
+                "lesson_id": lesson_id,
+                "book_id": found_book_id,
+                "collection_name": found_collection,
+                "deleted_vectors": vector_count
+            }
+            
+        except Exception as e:
+            logger.error(f"Error deleting textbook by lesson_id {lesson_id}: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "lesson_id": lesson_id
+            }
+
 
 # Singleton instance
 qdrant_service = QdrantService()

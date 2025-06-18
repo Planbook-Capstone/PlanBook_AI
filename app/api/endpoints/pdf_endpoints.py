@@ -4,7 +4,7 @@ PDF Endpoints - Endpoint đơn giản để xử lý PDF với OCR và LLM forma
 
 import logging
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Query
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Optional
 
 from app.services.llm_service import llm_service
 from app.services.enhanced_textbook_service import enhanced_textbook_service
@@ -658,9 +658,7 @@ async def get_lesson_content_by_id(lesson_id: str) -> Dict[str, Any]:
                                         "lesson_title", "Unknown"
                                     ),
                                     "chapter_id": payload.get("chapter_id", "Unknown"),
-                                    "chapter_title": payload.get(
-                                        "chapter_title", "Unknown"
-                                    ),
+                                    "chapter_title": payload.get("chapter_title", "Unknown"),
                                     "book_title": payload.get("book_title", "Unknown"),
                                     "subject": payload.get("subject", "Unknown"),
                                     "grade": payload.get("grade", "Unknown"),
@@ -1318,12 +1316,12 @@ async def health_check():
             "supported_languages": supported_langs,
             "llm_status": "Gemini API configured"
             if llm_available
-            else "Gemini API not configured",
-            "available_endpoints": [
+            else "Gemini API not configured",            "available_endpoints": [
                 "/process-textbook-async",
                 "/process-textbook",
                 "/quick-textbook-analysis",
                 "/getAllTextBook",  # Enhanced textbook list
+                "/textbook/{lesson_id}",  # NEW: Get textbook by lesson ID
                 "/textbook/{book_id}/structure",
                 "/lesson/{lesson_id}",  # Get lesson by ID only
                 "/textbook/{book_id}/lesson/{lesson_id}",  # DEPRECATED: Redirects to /lesson/{lesson_id}
@@ -1331,18 +1329,296 @@ async def health_check():
                 "/search",  # Content search
                 "/search-books",  # Book metadata search
                 "/search-textbooks-simple",  # Full textbook structure search (Simple)
+                "/textbook",  # DELETE: Flexible textbook deletion
                 "/health",
-            ],
-            "usage_flow": {
+            ],            "usage_flow": {
                 "1": "Upload PDF: POST /quick-textbook-analysis",
                 "2": "List textbooks: GET /getAllTextBook",
-                "3": "Search textbooks: GET /search-textbooks-simple?query=your_query",  # RECOMMENDED: Full structure
-                "4": "Search books (metadata): GET /search-books?query=your_query",  # Metadata only
-                "5": "Get structure: GET /textbook/{book_id}/structure",
-                "6": "Get lesson: GET /lesson/{lesson_id}",  # No book_id needed
-                "7": "Search content: GET /search?query=your_query",
+                "3": "Get textbook by lesson: GET /textbook/{lesson_id}",  # NEW
+                "4": "Search textbooks: GET /search-textbooks-simple?query=your_query",  # RECOMMENDED: Full structure
+                "5": "Search books (metadata): GET /search-books?query=your_query",  # Metadata only
+                "6": "Get structure: GET /textbook/{book_id}/structure",
+                "7": "Get lesson: GET /lesson/{lesson_id}",  # No book_id needed
+                "8": "Search content: GET /search?query=your_query",
+                "9": "Delete textbook: DELETE /textbook?textbook_id=ID or DELETE /textbook?lesson_id=ID",  # NEW
             },
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return {"status": "unhealthy", "error": str(e)}
+
+
+@router.get("/textbook/{lesson_id}", response_model=Dict[str, Any])
+async def get_textbook_by_lesson_id(lesson_id: str) -> Dict[str, Any]:
+    """
+    Lấy textbook data dựa trên lesson ID
+
+    Endpoint này tìm kiếm trong Qdrant collections để lấy textbook chứa lesson_id cụ thể
+    và trả về:
+    - Toàn bộ book_structure
+    - Thông tin chi tiết về lesson đó  
+    - Metadata và statistics
+    - Embeddings info
+
+    Args:
+        lesson_id: ID của lesson cần tìm (ví dụ: "lesson_01_01")
+
+    Returns:
+        Dict chứa textbook data và thông tin chi tiết về lesson
+
+    Example:
+        GET /api/v1/pdf/textbook/lesson_01_01
+    """
+    try:
+        from app.services.qdrant_service import qdrant_service
+        from qdrant_client import models as qdrant_models
+
+        if not qdrant_service.qdrant_client:
+            raise HTTPException(
+                status_code=503, 
+                detail="Qdrant service is not available"
+            )
+
+        logger.info(f"Searching for textbook containing lesson_id: {lesson_id}")
+
+        # Tìm kiếm trong tất cả collections
+        collections = qdrant_service.qdrant_client.get_collections().collections
+        found_textbook = None
+        found_collection_name = None
+
+        for collection in collections:
+            if collection.name.startswith("textbook_"):
+                try:
+                    # Tìm kiếm lesson_id trong collection này
+                    search_result = qdrant_service.qdrant_client.scroll(
+                        collection_name=collection.name,
+                        scroll_filter=qdrant_models.Filter(
+                            must=[
+                                qdrant_models.FieldCondition(
+                                    key="lesson_id",
+                                    match=qdrant_models.MatchValue(value=lesson_id),
+                                )
+                            ]
+                        ),
+                        limit=1,
+                        with_payload=True,
+                    )
+
+                    if search_result[0]:  # Tìm thấy lesson
+                        found_collection_name = collection.name
+                        
+                        # Lấy metadata để có full book structure
+                        metadata_search = qdrant_service.qdrant_client.scroll(
+                            collection_name=collection.name,
+                            scroll_filter=qdrant_models.Filter(
+                                must=[
+                                    qdrant_models.FieldCondition(
+                                        key="type",
+                                        match=qdrant_models.MatchValue(value="metadata"),
+                                    )
+                                ]
+                            ),
+                            limit=1,
+                            with_payload=True,
+                        )
+
+                        if metadata_search[0]:
+                            metadata_point = metadata_search[0][0]
+                            metadata_payload = metadata_point.payload or {}
+                            original_structure = metadata_payload.get("original_book_structure")
+                            
+                            if original_structure:
+                                book_id = collection.name.replace("textbook_", "")
+                                
+                                # Tìm thông tin chi tiết về lesson trong structure
+                                lesson_info = _find_lesson_in_structure(original_structure, lesson_id)
+                                
+                                found_textbook = {
+                                    "success": True,
+                                    "book_id": book_id,
+                                    "lesson_id": lesson_id,
+                                    "collection_name": collection.name,
+                                    "book_structure": original_structure,
+                                    "lesson_details": lesson_info,
+                                    "statistics": {
+                                        "total_pages": metadata_payload.get("book_total_pages", 0),
+                                        "total_chapters": len(original_structure.get("chapters", [])),
+                                        "total_lessons": sum(
+                                            len(ch.get("lessons", []))
+                                            for ch in original_structure.get("chapters", [])
+                                        ),
+                                    },
+                                    "processing_info": {
+                                        "ocr_applied": True,
+                                        "llm_analysis": True,
+                                        "processing_method": "retrieved_by_lesson_id",
+                                        "processed_at": metadata_payload.get("processed_at"),
+                                    },
+                                    "embeddings_created": True,
+                                    "embeddings_info": {
+                                        "collection_name": collection.name,
+                                        "vector_count": getattr(collection, "vectors_count", 0),
+                                        "vector_dimension": 384,
+                                    },
+                                    "message": f"Textbook containing lesson '{lesson_id}' retrieved successfully",
+                                }
+                                break
+
+                except Exception as e:
+                    logger.warning(f"Error searching in collection {collection.name}: {e}")
+                    continue
+
+        if not found_textbook:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"No textbook found containing lesson_id: {lesson_id}"
+            )
+
+        logger.info(f"Found textbook for lesson_id {lesson_id} in collection {found_collection_name}")
+        return found_textbook
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting textbook by lesson_id {lesson_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+def _find_lesson_in_structure(book_structure: dict, target_lesson_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Tìm thông tin chi tiết về lesson trong book structure
+    
+    Args:
+        book_structure: Cấu trúc sách
+        target_lesson_id: ID lesson cần tìm
+    
+    Returns:
+        Dict chứa thông tin chi tiết về lesson hoặc None nếu không tìm thấy
+    """
+    for chapter_index, chapter in enumerate(book_structure.get("chapters", [])):
+        chapter_id = chapter.get("chapter_id", f"chapter_{chapter_index}")
+        chapter_title = chapter.get("title", f"Chương {chapter_index + 1}")
+        
+        for lesson_index, lesson in enumerate(chapter.get("lessons", [])):
+            lesson_id = lesson.get("lesson_id", f"lesson_{chapter_index:02d}_{lesson_index:02d}")
+            
+            if lesson_id == target_lesson_id:
+                return {
+                    "lesson_id": lesson_id,
+                    "lesson_title": lesson.get("title", f"Bài {lesson_index + 1}"),
+                    "lesson_content": lesson.get("content", ""),
+                    "lesson_pages": lesson.get("page_numbers", []),
+                    "lesson_images": lesson.get("images", []),
+                    "lesson_image_count": lesson.get("image_count", 0),
+                    "lesson_has_images": lesson.get("has_images", False),
+                    "chapter_info": {
+                        "chapter_id": chapter_id,
+                        "chapter_title": chapter_title,
+                        "chapter_index": chapter_index,
+                        "chapter_start_page": chapter.get("start_page"),
+                        "chapter_end_page": chapter.get("end_page"),
+                    },
+                    "position_in_book": {
+                        "chapter_number": chapter_index + 1,
+                        "lesson_number": lesson_index + 1,
+                        "total_lessons_in_chapter": len(chapter.get("lessons", [])),
+                    }                }
+    
+    return None
+
+
+@router.delete("/textbook", response_model=Dict[str, Any])
+async def delete_textbook_flexible(
+    textbook_id: Optional[str] = Query(None, description="Textbook ID to delete"),
+    lesson_id: Optional[str] = Query(None, description="Lesson ID to find and delete textbook")
+) -> Dict[str, Any]:
+    """
+    Xóa textbook linh hoạt - nhận vào textbook_id HOẶC lesson_id
+
+    Endpoint này cho phép xóa textbook bằng một trong hai cách:
+    1. Cung cấp textbook_id để xóa trực tiếp
+    2. Cung cấp lesson_id để tìm và xóa textbook chứa lesson đó
+
+    Args:
+        textbook_id: (Optional) ID của textbook cần xóa
+        lesson_id: (Optional) ID của lesson để tìm textbook cần xóa
+
+    Returns:
+        Dict chứa kết quả xóa
+
+    Examples:
+        DELETE /api/v1/pdf/textbook?textbook_id=abc123
+        DELETE /api/v1/pdf/textbook?lesson_id=lesson_01_01
+    """
+    try:
+        from app.services.qdrant_service import qdrant_service
+
+        # Validation: phải có ít nhất một trong hai parameters
+        if not textbook_id and not lesson_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Either 'textbook_id' or 'lesson_id' parameter is required"
+            )
+
+        # Validation: không được cung cấp cả hai parameters
+        if textbook_id and lesson_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot provide both 'textbook_id' and 'lesson_id'. Choose one."
+            )
+
+        if not qdrant_service.qdrant_client:
+            raise HTTPException(
+                status_code=503, 
+                detail="Qdrant service is not available"
+            )
+
+        # Xóa bằng textbook_id
+        if textbook_id:
+            logger.info(f"Deleting textbook by ID: {textbook_id}")
+            result = await qdrant_service.delete_textbook_by_id(textbook_id)
+            operation = "delete_by_textbook_id"
+            identifier = textbook_id
+
+        # Xóa bằng lesson_id
+        else:  # lesson_id
+            logger.info(f"Deleting textbook by lesson_id: {lesson_id}")
+            result = await qdrant_service.delete_textbook_by_lesson_id(lesson_id)
+            operation = "delete_by_lesson_id"
+            identifier = lesson_id
+
+        if not result.get("success"):
+            if "not found" in result.get("error", "").lower():
+                raise HTTPException(
+                    status_code=404,
+                    detail=result.get("error")
+                )
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=result.get("error", "Failed to delete textbook")
+                )
+
+        logger.info(f"Successfully deleted textbook: {identifier}")
+        return {
+            "success": True,
+            "message": result.get("message"),
+            "deleted_textbook": {
+                "book_id": result.get("book_id"),
+                "lesson_id": result.get("lesson_id") if lesson_id else None,
+                "collection_name": result.get("collection_name"),
+                "deleted_vectors": result.get("deleted_vectors", 0)
+            },
+            "operation": operation,
+            "identifier_used": {
+                "textbook_id": textbook_id,
+                "lesson_id": lesson_id
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in flexible textbook deletion: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
