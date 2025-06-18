@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.api.endpoints import pdf_endpoints, tasks, celery_health, lesson_plan
+from app.services.lesson_plan_framework_service import lesson_plan_framework_service
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -42,3 +43,13 @@ async def root():
         "message": "Welcome to PlanBook AI Service",
         "docs": f"{settings.API_PREFIX}/docs",
     }
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on startup"""
+    try:
+        await lesson_plan_framework_service.initialize()
+        print("✅ Lesson Plan Framework Service initialized successfully")
+    except Exception as e:
+        print(f"❌ Failed to initialize Lesson Plan Framework Service: {e}")

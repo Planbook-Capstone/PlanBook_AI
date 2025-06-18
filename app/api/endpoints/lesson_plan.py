@@ -2,6 +2,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Query
 from pydantic import BaseModel
 from typing import Optional, List
 import logging
+from datetime import datetime
 
 from app.services.lesson_plan_framework_service import lesson_plan_framework_service
 
@@ -19,7 +20,7 @@ class LessonPlanRequest(BaseModel):
     materials_needed: List[str]
     student_level: str
     special_requirements: Optional[str] = None
-    framework_id: Optional[str] = None  # ID của khung giáo án đã upload
+    framework_id: Optional[str] = None  # ID của khung giáo án đã upload (sử dụng _id của MongoDB)
 
 
 class LessonPlanResponse(BaseModel):
@@ -53,7 +54,7 @@ async def upload_lesson_plan_framework(
         return {
             "message": "Khung giáo án đã được upload thành công",
             "framework_name": result["name"],
-            "framework_id": result["framework_id"],
+            "framework_id": result["id"],  # Sử dụng id từ MongoDB _id
             "filename": result["filename"],
             "structure": result["structure"],
             "created_at": result["created_at"],
@@ -142,6 +143,8 @@ async def get_framework_by_id(framework_id: str):
         if not framework:
             raise HTTPException(status_code=404, detail="Không tìm thấy framework")
         return framework
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi khi lấy framework: {str(e)}")
 
@@ -156,5 +159,71 @@ async def delete_framework(framework_id: str):
         if not success:
             raise HTTPException(status_code=404, detail="Không tìm thấy framework")
         return {"message": "Framework đã được xóa thành công"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Lỗi khi xóa framework: {str(e)}")
+
+
+@router.post("/frameworks/seed")
+async def seed_sample_frameworks():
+    """
+    Tạo dữ liệu mẫu cho frameworks (dev only)
+    """
+    try:
+        await lesson_plan_framework_service._ensure_initialized()
+        
+        # Sample frameworks data (không cần framework_id)
+        sample_frameworks = [
+            {
+                "name": "Khung giáo án 5E",
+                "filename": "5E_framework.txt",
+                "original_text": "Khung giáo án 5E bao gồm 5 giai đoạn: Engage, Explore, Explain, Elaborate, Evaluate",
+                "structure": {
+                    "phases": [
+                        {"name": "Engage", "description": "Tạo hứng thú, kích thích học sinh"},
+                        {"name": "Explore", "description": "Khám phá, tìm hiểu"},
+                        {"name": "Explain", "description": "Giải thích, trình bày"},
+                        {"name": "Elaborate", "description": "Mở rộng, vận dụng"},
+                        {"name": "Evaluate", "description": "Đánh giá, kiểm tra"}
+                    ]
+                },
+                "created_at": datetime.now(datetime.timezone.utc),
+                "updated_at": datetime.now(datetime.timezone.utc),
+                "status": "active"
+            },
+            {
+                "name": "Khung giáo án truyền thống",
+                "filename": "traditional_framework.txt",
+                "original_text": "Khung giáo án truyền thống bao gồm: Kiểm tra bài cũ, Bài mới, Củng cố, Dặn dò",
+                "structure": {
+                    "phases": [
+                        {"name": "Kiểm tra bài cũ", "description": "Ôn tập kiến thức đã học"},
+                        {"name": "Bài mới", "description": "Trình bày nội dung bài học"},
+                        {"name": "Củng cố", "description": "Tóm tắt, khắc sâu kiến thức"},
+                        {"name": "Dặn dò", "description": "Giao bài tập về nhà"}
+                    ]
+                },
+                "created_at": datetime.now(datetime.timezone.utc),
+                "updated_at": datetime.now(datetime.timezone.utc),
+                "status": "active"
+            }
+        ]
+          # Insert sample data
+        if lesson_plan_framework_service.frameworks_collection is not None:
+            for framework in sample_frameworks:
+                # Check if already exists by name
+                existing = await lesson_plan_framework_service.frameworks_collection.find_one(
+                    {"name": framework["name"], "status": "active"}
+                )
+                if not existing:
+                    await lesson_plan_framework_service.frameworks_collection.insert_one(framework)
+                    
+        return {
+            "message": "Sample frameworks seeded successfully",
+            "count": len(sample_frameworks)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error seeding frameworks: {e}")
+        raise HTTPException(status_code=500, detail=f"Lỗi khi seed frameworks: {str(e)}")

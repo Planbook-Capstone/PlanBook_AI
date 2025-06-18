@@ -2,13 +2,11 @@
 Lesson Plan Framework Service - Xử lý khung giáo án template
 """
 
-import asyncio
 import logging
-import uuid
 import os
 import tempfile
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List, Union
 from motor.motor_asyncio import (
     AsyncIOMotorClient,
@@ -40,11 +38,10 @@ class LessonPlanFrameworkService:
             self.client = AsyncIOMotorClient(settings.MONGODB_URL)
             self.db = self.client[settings.MONGODB_DATABASE]
             self.frameworks_collection = self.db["lesson_plan_frameworks"]
-
-            # Create indexes
-            await self.frameworks_collection.create_index("framework_id", unique=True)
+            # Create indexes (không cần framework_id vì _id đã là unique)
             await self.frameworks_collection.create_index("name")
             await self.frameworks_collection.create_index("created_at")
+            await self.frameworks_collection.create_index("status")
 
             logger.info("LessonPlanFrameworkService initialized successfully")
         except Exception as e:
@@ -53,7 +50,7 @@ class LessonPlanFrameworkService:
 
     async def _ensure_initialized(self):
         """Ensure service is initialized"""
-        if not self.frameworks_collection:
+        if self.frameworks_collection is None:
             await self.initialize()
 
     async def process_framework_file(
@@ -72,9 +69,6 @@ class LessonPlanFrameworkService:
         try:
             # Ensure service is initialized
             await self._ensure_initialized()
-
-            # Generate framework ID
-            framework_id = str(uuid.uuid4())
 
             # Validate filename
             if not framework_file.filename:
@@ -96,19 +90,21 @@ class LessonPlanFrameworkService:
                 extracted_text
             )
 
-            # Create framework document
+            # Create framework document (không cần framework_id riêng)
             framework_doc = {
-                "framework_id": framework_id,
                 "name": framework_name,
                 "filename": framework_file.filename,
                 "original_text": extracted_text,
                 "structure": framework_structure,
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
                 "status": "active",
-            }  # Save to MongoDB
+            }
+
+            # Save to MongoDB và lấy _id
             if self.frameworks_collection is not None:
-                await self.frameworks_collection.insert_one(framework_doc)
+                result = await self.frameworks_collection.insert_one(framework_doc)
+                framework_id = str(result.inserted_id)
             else:
                 raise RuntimeError("Database not initialized")
 
@@ -117,7 +113,7 @@ class LessonPlanFrameworkService:
             )
 
             return {
-                "framework_id": framework_id,
+                "id": framework_id,  # Sử dụng _id của MongoDB
                 "name": framework_name,
                 "filename": framework_file.filename,
                 "structure": framework_structure,
@@ -332,11 +328,14 @@ Chỉ trả về JSON, không thêm text giải thích.
             await self._ensure_initialized()
 
             if self.frameworks_collection is not None:
+                from bson import ObjectId
+                # Sử dụng _id của MongoDB
                 framework = await self.frameworks_collection.find_one(
-                    {"framework_id": framework_id, "status": "active"}
+                    {"_id": ObjectId(framework_id), "status": "active"}
                 )
                 if framework:
-                    framework["_id"] = str(framework["_id"])
+                    framework["id"] = str(framework["_id"])  # Chuyển _id thành id
+                    del framework["_id"]  # Xóa _id gốc
                     framework["created_at"] = framework["created_at"].isoformat()
                     framework["updated_at"] = framework["updated_at"].isoformat()
                 return framework
@@ -370,7 +369,8 @@ Chỉ trả về JSON, không thêm text giải thích.
 
                 frameworks = []
                 async for framework in cursor:
-                    framework["_id"] = str(framework["_id"])
+                    framework["id"] = str(framework["_id"])  # Chuyển _id thành id
+                    del framework["_id"]  # Xóa _id gốc
                     framework["created_at"] = framework["created_at"].isoformat()
                     framework["updated_at"] = framework["updated_at"].isoformat()
                     frameworks.append(framework)
@@ -390,9 +390,11 @@ Chỉ trả về JSON, không thêm text giải thích.
             await self._ensure_initialized()
 
             if self.frameworks_collection is not None:
+                from bson import ObjectId
+                from datetime import timezone
                 result = await self.frameworks_collection.update_one(
-                    {"framework_id": framework_id},
-                    {"$set": {"status": "deleted", "updated_at": datetime.utcnow()}},
+                    {"_id": ObjectId(framework_id)},  # Sử dụng _id thay vì framework_id
+                    {"$set": {"status": "deleted", "updated_at": datetime.now(timezone.utc)}},
                 )
                 return result.modified_count > 0
             return False
