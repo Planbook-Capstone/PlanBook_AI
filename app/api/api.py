@@ -1,10 +1,11 @@
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.endpoints.auto_grading import auto_grading_endpoint
 from app.core.config import settings
 from app.api.endpoints import pdf_endpoints, tasks, celery_health, lesson_plan
 from app.services.lesson_plan_framework_service import lesson_plan_framework_service
-
+from app.api.endpoints import auto_grading
 # Initialize FastAPI app
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -32,6 +33,9 @@ api_router.include_router(tasks.router, prefix="/tasks", tags=["Task Management"
 api_router.include_router(celery_health.router, tags=["Celery Health"])
 api_router.include_router(
     lesson_plan.router, prefix="/lesson", tags=["Lesson Planning"]
+)
+api_router.include_router(
+    auto_grading.router, prefix="/auto_grading", tags=["Auto Grading"]
 )
 # Add API router to app
 app.include_router(api_router, prefix=settings.API_PREFIX)
