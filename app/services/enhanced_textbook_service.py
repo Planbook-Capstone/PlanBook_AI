@@ -53,14 +53,21 @@ class EnhancedTextbookService:
             pages_data = await self._extract_pages_with_ocr(pdf_content)
             logger.info(f"✅ Extracted {len(pages_data)} pages")
 
-            # Step 2: Analyze book structure with LLM
+            # Step 2: Add LLM-generated image descriptions
+            logger.info("🖼️ Adding LLM-generated image descriptions...")
+            await self._add_image_descriptions(pages_data)
+            logger.info("✅ Image descriptions completed")
+
+            # Step 3: Analyze book structure with LLM
             logger.info("🧠 Analyzing book structure...")
             book_structure = await self._analyze_book_structure_enhanced(
                 pages_data, book_metadata
             )
             logger.info(
                 f"📚 Detected {len(book_structure.get('chapters', []))} chapters"
-            )  # Step 3: Build final structure with content and lesson IDs
+            )
+
+            # Step 4: Build final structure with content and lesson IDs
             logger.info("🔄 Building final lesson structure...")
             processed_book = await self._build_final_structure(
                 book_structure,
@@ -702,6 +709,16 @@ Hãy mô tả hình ảnh:"""
 
         except Exception as e:
             logger.error(f"Image description with LLM failed: {e}")
+
+            # Kiểm tra loại lỗi để xử lý phù hợp
+            error_msg = str(e).lower()
+            if "not valid" in error_msg or "invalid" in error_msg:
+                logger.warning("Image format may be incompatible with Gemini Vision API")
+            elif "quota" in error_msg or "limit" in error_msg:
+                logger.warning("API quota exceeded or rate limit hit")
+            elif "api key" in error_msg or "authentication" in error_msg:
+                logger.warning("API key issue detected")
+
             # Fallback descriptions based on context
             fallback_descriptions = [
                 "Biểu đồ hoặc sơ đồ minh họa khái niệm trong bài học",
@@ -723,10 +740,17 @@ Hãy mô tả hình ảnh:"""
             return
 
         image_tasks = []
+        total_images = 0
+
         for page in pages_data:
             for img in page.get("images", []):
+                total_images += 1
                 if img.get("data"):
                     image_tasks.append(self._describe_image_with_llm(img["data"]))
+                else:
+                    logger.debug(f"Image on page {page.get('page_number')} has no data")
+
+        logger.info(f"🖼️ Found {total_images} total images, {len(image_tasks)} with data")
 
         if image_tasks:
             logger.info(f"🖼️ Generating descriptions for {len(image_tasks)} images...")
@@ -734,18 +758,27 @@ Hãy mô tả hình ảnh:"""
 
             # Apply descriptions back to images
             desc_index = 0
+            success_count = 0
+            fallback_count = 0
+
             for page in pages_data:
                 for img in page.get("images", []):
                     if img.get("data") and desc_index < len(descriptions):
                         if not isinstance(descriptions[desc_index], Exception):
                             img["description"] = descriptions[desc_index]
                             img["description_method"] = "llm_generated"
+                            success_count += 1
+                            logger.debug(f"✅ Generated description: {descriptions[desc_index][:50]}...")
                         else:
                             img["description"] = (
                                 "Hình ảnh minh họa trong sách giáo khoa"
                             )
                             img["description_method"] = "fallback"
+                            fallback_count += 1
+                            logger.warning(f"❌ Failed to describe image: {descriptions[desc_index]}")
                         desc_index += 1
+
+            logger.info(f"🎯 Image description results: {success_count} success, {fallback_count} fallback, {len(image_tasks)} total")
 
     async def _build_final_structure(
         self,
