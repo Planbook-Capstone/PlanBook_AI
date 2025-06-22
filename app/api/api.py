@@ -5,7 +5,8 @@ from app.api.endpoints.auto_grading import auto_grading_endpoint
 from app.core.config import settings
 from app.api.endpoints import pdf_endpoints, tasks, celery_health, lesson_plan
 from app.services.lesson_plan_framework_service import lesson_plan_framework_service
-from app.api.endpoints import auto_grading
+from app.api.endpoints import auto_grading, omr_debug, omr_viewer
+
 # Initialize FastAPI app
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -37,6 +38,8 @@ api_router.include_router(
 api_router.include_router(
     auto_grading.router, prefix="/auto_grading", tags=["Auto Grading"]
 )
+api_router.include_router(omr_debug.router, prefix="/omr_debug", tags=["OMR Debug"])
+api_router.include_router(omr_viewer.router, prefix="/omr_debug", tags=["OMR Viewer"])
 # Add API router to app
 app.include_router(api_router, prefix=settings.API_PREFIX)
 
