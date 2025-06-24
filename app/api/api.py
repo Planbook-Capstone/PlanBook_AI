@@ -32,7 +32,7 @@ api_router.include_router(pdf_endpoints.router, prefix="/pdf", tags=["Books Serv
 api_router.include_router(tasks.router, prefix="/tasks", tags=["Task Management"])
 api_router.include_router(celery_health.router, tags=["Celery Health"])
 api_router.include_router(
-    lesson_plan.router, prefix="/lesson", tags=["Lesson Planning"]
+    lesson_plan.router, prefix="", tags=["Lesson Planning"]
 )
 api_router.include_router(
     auto_grading.router, prefix="/auto_grading", tags=["Auto Grading"]
