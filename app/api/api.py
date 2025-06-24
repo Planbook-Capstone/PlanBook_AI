@@ -39,7 +39,7 @@ api_router.include_router(
     auto_grading.router, prefix="/auto_grading", tags=["Auto Grading"]
 )
 api_router.include_router(omr_debug.router, prefix="/omr_debug", tags=["OMR Debug"])
-api_router.include_router(omr_viewer.router, prefix="/omr_debug", tags=["OMR Viewer"])
+api_router.include_router(omr_viewer.router, prefix="/omr_viewer", tags=["OMR Viewer"])
 # Add API router to app
 app.include_router(api_router, prefix=settings.API_PREFIX)
 

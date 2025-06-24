@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OMR Block Division Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .upload-section {
+            border: 2px dashed #ddd;
+            padding: 30px;
+            text-align: center;
+            margin-bottom: 30px;
+            border-radius: 10px;
+        }
+        .upload-section:hover {
+            border-color: #007bff;
+            background-color: #f8f9fa;
+        }
+        input[type="file"] {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .results {
+            margin-top: 30px;
+        }
+        .result-section {
+            background-color: #f8f9fa;
+            padding: 20px;
+            margin: 15px 0;
+            border-radius: 8px;
+            border-left: 4px solid #007bff;
+        }
+        .success {
+            border-left-color: #28a745;
+            background-color: #d4edda;
+        }
+        .error {
+            border-left-color: #dc3545;
+            background-color: #f8d7da;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .stat-number {
+            font-size: 24px;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .stat-label {
+            color: #666;
+            margin-top: 5px;
+        }
+        .image-container {
+            text-align: center;
+            margin: 20px 0;
+        }
+        .result-image {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #007bff;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .block-list {
+            max-height: 300px;
+            overflow-y: auto;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 10px;
+        }
+        .block-item {
+            padding: 8px;
+            margin: 5px 0;
+            background: #f8f9fa;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        pre {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 OMR Block Division Test</h1>
+        
+        <div class="upload-section">
+            <h3>📤 Upload OMR Form Image</h3>
+            <p>Chọn ảnh form OMR để phân tích và chia blocks</p>
+            <input type="file" id="imageFile" accept=".jpg,.jpeg,.png">
+            <br>
+            <button onclick="processImage()" id="processBtn">🚀 Process Image</button>
+        </div>
+
+        <div id="loading" class="loading" style="display: none;">
+            <div class="spinner"></div>
+            <p>Đang xử lý ảnh... Vui lòng đợi</p>
+        </div>
+
+        <div id="results" class="results" style="display: none;">
+            <div class="result-section success">
+                <h3>✅ Kết quả xử lý</h3>
+                <div id="summary"></div>
+            </div>
+
+            <div class="stats" id="stats"></div>
+
+            <div class="result-section">
+                <h3>📊 Thống kê Markers</h3>
+                <div id="markerStats"></div>
+            </div>
+
+            <div class="result-section">
+                <h3>📦 Danh sách Blocks</h3>
+                <div id="blockList" class="block-list"></div>
+            </div>
+
+            <div class="result-section">
+                <h3>🖼️ Visualization</h3>
+                <div id="imageContainer" class="image-container"></div>
+            </div>
+
+            <div class="result-section">
+                <h3>📋 Raw JSON Response</h3>
+                <pre id="rawResponse"></pre>
+            </div>
+        </div>
+
+        <div id="error" class="result-section error" style="display: none;">
+            <h3>❌ Lỗi xử lý</h3>
+            <div id="errorMessage"></div>
+        </div>
+    </div>
+
+    <script>
+        async function processImage() {
+            const fileInput = document.getElementById('imageFile');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                alert('Vui lòng chọn file ảnh!');
+                return;
+            }
+
+            // Show loading
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('processBtn').disabled = true;
+
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const response = await fetch('/api/v1/omr_debug/divide_blocks', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    displayResults(result);
+                } else {
+                    displayError('Xử lý thất bại: ' + (result.error || 'Unknown error'));
+                }
+
+            } catch (error) {
+                displayError('Lỗi kết nối: ' + error.message);
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('processBtn').disabled = false;
+            }
+        }
+
+        function displayResults(result) {
+            document.getElementById('results').style.display = 'block';
+            
+            // Summary
+            const summary = document.getElementById('summary');
+            summary.innerHTML = `
+                <p><strong>File:</strong> ${result.filename}</p>
+                <p><strong>Kích thước:</strong> ${result.image_size}</p>
+                <p><strong>Thông báo:</strong> ${result.message}</p>
+            `;
+
+            // Stats
+            const stats = document.getElementById('stats');
+            const markerDetection = result.marker_detection;
+            const blockDivision = result.block_division;
+            
+            stats.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-number">${markerDetection.large_markers_count}</div>
+                    <div class="stat-label">Large Markers</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${markerDetection.small_markers_count}</div>
+                    <div class="stat-label">Small Markers</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${blockDivision.total_blocks}</div>
+                    <div class="stat-label">Total Blocks</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${blockDivision.main_regions.length}</div>
+                    <div class="stat-label">Main Regions</div>
+                </div>
+            `;
+
+            // Marker Stats
+            const markerStats = document.getElementById('markerStats');
+            markerStats.innerHTML = `
+                <h4>Large Markers (${markerDetection.large_markers_count}):</h4>
+                ${markerDetection.large_markers.map(m => 
+                    `<div class="block-item">ID: ${m.id}, Center: (${m.center[0]}, ${m.center[1]}), Area: ${m.area}</div>`
+                ).join('')}
+                
+                <h4>Small Markers (${markerDetection.small_markers_count}):</h4>
+                ${markerDetection.small_markers.map(m => 
+                    `<div class="block-item">ID: ${m.id}, Center: (${m.center[0]}, ${m.center[1]}), Area: ${m.area}</div>`
+                ).join('')}
+            `;
+
+            // Block List
+            const blockList = document.getElementById('blockList');
+            blockList.innerHTML = blockDivision.detailed_blocks.map(block => 
+                `<div class="block-item">
+                    <strong>${block.id}</strong> | Region: ${block.region} | Type: ${block.type} | 
+                    BBox: (${block.bbox.join(', ')}) | Markers: ${block.marker_count}
+                </div>`
+            ).join('');
+
+            // Image
+            const imageContainer = document.getElementById('imageContainer');
+            if (result.visualization && result.visualization.block_division_image) {
+                const imagePath = result.visualization.block_division_image.replace(/\\/g, '/');
+                const imageUrl = `/api/v1/omr_debug/block_division_image/block_division_result.jpg`;
+                imageContainer.innerHTML = `
+                    <img src="${imageUrl}" alt="Block Division Result" class="result-image">
+                    <p>Ảnh kết quả với các blocks được đánh dấu</p>
+                `;
+            } else {
+                imageContainer.innerHTML = '<p>Không có ảnh visualization</p>';
+            }
+
+            // Raw Response
+            document.getElementById('rawResponse').textContent = JSON.stringify(result, null, 2);
+        }
+
+        function displayError(message) {
+            document.getElementById('error').style.display = 'block';
+            document.getElementById('errorMessage').textContent = message;
+        }
+    </script>
+</body>
+</html>

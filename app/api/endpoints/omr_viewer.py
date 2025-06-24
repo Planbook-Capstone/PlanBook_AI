@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 from pathlib import Path
 import logging
@@ -8,17 +8,45 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["OMR Viewer"])
 
 @router.get("/viewer", response_class=HTMLResponse)
-async def omr_debug_viewer(request: Request):
+async def omr_debug_viewer():
     """
-    Trang web hiển thị debug images của OMR processing
+    Trang web hiển thị debug images của OMR processing với AI Pipeline và Block Division
     """
-    
-    # Lấy danh sách debug images
-    debug_dir = Path("data/grading/debug")
-    debug_files = []
-    
-    if debug_dir.exists():
-        debug_files = [f.name for f in sorted(debug_dir.glob("*.jpg"))]
+
+    # Lấy danh sách debug images từ nhiều thư mục
+    debug_dirs = {
+        "OMR Processing": Path("data/grading/debug"),
+        "All Markers": Path("data/grading/all_markers_debug"),
+        "Block Division": Path("data/grading/block_division_debug")
+    }
+
+    all_debug_files = []
+    debug_sections = {}
+
+    for section_name, debug_dir in debug_dirs.items():
+        section_files = []
+        if debug_dir.exists():
+            section_files = [f.name for f in sorted(debug_dir.glob("*.jpg"))]
+        debug_sections[section_name] = {
+            "files": section_files,
+            "count": len(section_files),
+            "dir": str(debug_dir)
+        }
+        all_debug_files.extend(section_files)
+
+    # Backward compatibility - keep original debug_files for existing functionality
+    debug_files = debug_sections.get("OMR Processing", {}).get("files", [])
+
+    def get_image_url(section_name, filename):
+        """Get the correct URL for different types of debug images"""
+        if section_name == "OMR Processing":
+            return f"/api/v1/omr_debug/debug_image/{filename}"
+        elif section_name == "All Markers":
+            return f"/api/v1/omr_debug/all_markers_image/{filename}"
+        elif section_name == "Block Division":
+            return f"/api/v1/omr_debug/block_division_image/{filename}"
+        else:
+            return f"/api/v1/omr_debug/debug_image/{filename}"
     
     # Tạo HTML
     html_content = f"""
@@ -73,6 +101,18 @@ async def omr_debug_viewer(request: Request):
             }}
             .btn.success:hover {{
                 background: #229954;
+            }}
+            .btn.info {{
+                background: #17a2b8;
+            }}
+            .btn.info:hover {{
+                background: #138496;
+            }}
+            .btn.accent {{
+                background: #6f42c1;
+            }}
+            .btn.accent:hover {{
+                background: #5a32a3;
             }}
             .btn.danger {{
                 background: #e74c3c;
@@ -167,30 +207,60 @@ async def omr_debug_viewer(request: Request):
     </head>
     <body>
         <div class="container">
-            <h1>🔍 OMR Debug Viewer</h1>
+            <h1>🔍 OMR Debug Viewer + 🤖 AI Pipeline</h1>
             
             <div class="controls">
                 <button class="btn success" onclick="processImage()">🚀 Xử lý ảnh test</button>
+                <button class="btn success" onclick="processPipeline()">🤖 AI Pipeline</button>
+                <button class="btn info" onclick="scanAllMarkers()">🔍 Scan All Markers</button>
+                <button class="btn accent" onclick="divideBlocks()">📦 Divide Blocks</button>
                 <button class="btn" onclick="refreshImages()">🔄 Làm mới</button>
                 <button class="btn danger" onclick="clearImages()">🗑️ Xóa debug images</button>
             </div>
             
             <div id="status" class="status info">
-                📊 Tìm thấy {len(debug_files)} debug images
+                📊 Tìm thấy {len(all_debug_files)} debug images tổng cộng
             </div>
-            
-            <div id="imageGrid" class="image-grid">
-                {"".join([f'''
-                <div class="image-card">
-                    <img src="/api/v1/omr_debug/debug_image/{filename}" 
-                         alt="{filename}" 
-                         onclick="openModal(this.src, '{filename}')">
-                    <div class="title">{filename}</div>
+
+            <!-- Stats for different sections -->
+            <div class="stats">
+                <div class="stat-card">
+                    <div class="stat-number">{debug_sections["OMR Processing"]["count"]}</div>
+                    <div class="stat-label">OMR Processing</div>
                 </div>
-                ''' for filename in debug_files])}
+                <div class="stat-card">
+                    <div class="stat-number">{debug_sections["All Markers"]["count"]}</div>
+                    <div class="stat-label">Marker Detection</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">{debug_sections["Block Division"]["count"]}</div>
+                    <div class="stat-label">Block Division</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">{len(all_debug_files)}</div>
+                    <div class="stat-label">Total Images</div>
+                </div>
             </div>
-            
-            {f'<div class="loading">Chưa có debug images. Nhấn "Xử lý ảnh test" để bắt đầu.</div>' if not debug_files else ''}
+
+            <!-- Sections for different types of debug images -->
+            {"".join([f'''
+            <div class="section" style="margin: 30px 0; padding: 20px; background: #f8f9fa; border-radius: 10px;">
+                <h2 style="color: #333; margin-bottom: 20px;">📁 {section_name} ({section_info["count"]} images)</h2>
+                <div class="image-grid">
+                    {"".join([f"""
+                    <div class="image-card">
+                        <img src="{get_image_url(section_name, filename)}"
+                             alt="{filename}"
+                             onclick="openModal(this.src, '{filename}')">
+                        <div class="title">{filename}</div>
+                    </div>
+                    """ for filename in section_info["files"]])}
+                </div>
+                {f'<div class="loading">Chưa có {section_name.lower()} images.</div>' if not section_info["files"] else ''}
+            </div>
+            ''' for section_name, section_info in debug_sections.items() if section_info["count"] > 0])}
+
+            {f'<div class="loading">Chưa có debug images. Nhấn các nút xử lý để bắt đầu.</div>' if not all_debug_files else ''}
         </div>
         
         <!-- Modal để hiển thị ảnh lớn -->
@@ -214,17 +284,17 @@ async def omr_debug_viewer(request: Request):
                 const statusDiv = document.getElementById('status');
                 statusDiv.innerHTML = '⏳ Đang xử lý ảnh...';
                 statusDiv.className = 'status info';
-                
+
                 try {{
                     const response = await fetch('/api/v1/omr_debug/process_test_image', {{
                         method: 'POST'
                     }});
-                    
+
                     if (response.ok) {{
                         const result = await response.json();
                         statusDiv.innerHTML = `✅ Xử lý thành công! Student ID: ${{result.student_id}}, Test Code: ${{result.test_code}}, Answers: ${{result.total_answers}}`;
                         statusDiv.className = 'status success';
-                        
+
                         // Làm mới trang sau 2 giây
                         setTimeout(() => {{
                             window.location.reload();
@@ -237,7 +307,139 @@ async def omr_debug_viewer(request: Request):
                     statusDiv.className = 'status error';
                 }}
             }}
-            
+
+            async function processPipeline() {{
+                const statusDiv = document.getElementById('status');
+                statusDiv.innerHTML = '🤖 Đang xử lý với AI Pipeline...';
+                statusDiv.className = 'status info';
+
+                try {{
+                    const response = await fetch('/api/v1/omr_debug/process_pipeline', {{
+                        method: 'POST'
+                    }});
+
+                    if (response.ok) {{
+                        const result = await response.json();
+                        const section1 = result.results['Section I'];
+                        const section2 = result.results['Section II'];
+                        const section3 = result.results['Section III'];
+
+                        statusDiv.innerHTML = `
+                            ✅ AI Pipeline thành công!
+                            📊 Section I: ${{section1.total_questions}} câu ABCD |
+                            ✅ Section II: ${{section2.total_questions}} câu T/F |
+                            🔢 Section III: ${{section3.total_questions}} câu Digits |
+                            🖼️ Debug: ${{result.debug_info.total_debug_images}} images
+                        `;
+                        statusDiv.className = 'status success';
+
+                        // Làm mới trang sau 3 giây
+                        setTimeout(() => {{
+                            window.location.reload();
+                        }}, 3000);
+                    }} else {{
+                        throw new Error('Pipeline processing failed');
+                    }}
+                }} catch (error) {{
+                    statusDiv.innerHTML = '❌ Lỗi AI Pipeline: ' + error.message;
+                    statusDiv.className = 'status error';
+                }}
+            }}
+
+            async function scanAllMarkers() {{
+                const statusDiv = document.getElementById('status');
+                statusDiv.innerHTML = '🔍 Đang quét tất cả marker...';
+                statusDiv.className = 'status info';
+
+                try {{
+                    const response = await fetch('/api/v1/omr_debug/scan_all_markers', {{
+                        method: 'POST'
+                    }});
+
+                    if (response.ok) {{
+                        const result = await response.json();
+                        const largeMarkers = result.markers.large_markers;
+                        const smallMarkers = result.markers.small_markers;
+
+                        statusDiv.innerHTML = `
+                            ✅ Marker scanning thành công!
+                            🔴 Large markers: ${{largeMarkers.count}} |
+                            🟢 Small markers: ${{smallMarkers.count}} |
+                            📊 Total: ${{largeMarkers.count + smallMarkers.count}} markers |
+                            🖼️ Debug: ${{result.debug_info.total_debug_images}} images
+                        `;
+                        statusDiv.className = 'status success';
+
+                        // Refresh images để hiển thị marker debug images
+                        setTimeout(() => {{
+                            refreshImages();
+                        }}, 1000);
+
+                        // Auto clear status after 5 seconds
+                        setTimeout(() => {{
+                            statusDiv.innerHTML = 'Sẵn sàng xử lý';
+                            statusDiv.className = 'status info';
+                        }}, 5000);
+                    }} else {{
+                        throw new Error('Marker scanning failed');
+                    }}
+                }} catch (error) {{
+                    statusDiv.innerHTML = '❌ Lỗi marker scanning: ' + error.message;
+                    statusDiv.className = 'status error';
+                }}
+            }}
+
+            async function divideBlocks() {{
+                const statusDiv = document.getElementById('status');
+                statusDiv.innerHTML = '📦 Đang chia blocks dựa trên markers...';
+                statusDiv.className = 'status info';
+
+                try {{
+                    // First, we need to create a FormData with the sample image
+                    const response = await fetch('data/grading/sample.jpg');
+                    const blob = await response.blob();
+                    const formData = new FormData();
+                    formData.append('file', blob, 'sample.jpg');
+
+                    const divideResponse = await fetch('/api/v1/omr_debug/divide_blocks', {{
+                        method: 'POST',
+                        body: formData
+                    }});
+
+                    if (divideResponse.ok) {{
+                        const result = await divideResponse.json();
+                        const markerDetection = result.marker_detection;
+                        const blockDivision = result.block_division;
+
+                        statusDiv.innerHTML = `
+                            ✅ Block division thành công!
+                            🔴 Large markers: ${{markerDetection.large_markers_count}} |
+                            🟢 Small markers: ${{markerDetection.small_markers_count}} |
+                            📦 Total blocks: ${{blockDivision.total_blocks}} |
+                            🏷️ Regions: ${{blockDivision.main_regions.length}} |
+                            🖼️ Debug: ${{result.debug_info.total_debug_images}} images
+                        `;
+                        statusDiv.className = 'status success';
+
+                        // Refresh images để hiển thị block division debug images
+                        setTimeout(() => {{
+                            refreshImages();
+                        }}, 1000);
+
+                        // Auto clear status after 5 seconds
+                        setTimeout(() => {{
+                            statusDiv.innerHTML = 'Sẵn sàng xử lý';
+                            statusDiv.className = 'status info';
+                        }}, 5000);
+                    }} else {{
+                        throw new Error('Block division failed');
+                    }}
+                }} catch (error) {{
+                    statusDiv.innerHTML = '❌ Lỗi block division: ' + error.message;
+                    statusDiv.className = 'status error';
+                }}
+            }}
+
             function refreshImages() {{
                 window.location.reload();
             }}
