@@ -1,0 +1,317 @@
+"""
+Service để tìm kiếm và xử lý nội dung bài học cho việc tạo câu hỏi thi
+"""
+import logging
+from typing import Dict, List, Any, Optional
+from app.services.qdrant_service import qdrant_service
+from app.models.exam_models import SearchContentRequest, LessonContentResponse
+from qdrant_client import models as qdrant_models
+
+logger = logging.getLogger(__name__)
+
+
+class ExamContentService:
+    """Service để tìm kiếm và xử lý nội dung cho việc tạo đề thi"""
+
+    def __init__(self):
+        self.qdrant_service = qdrant_service
+
+    async def get_lesson_content_for_exam(
+        self, lesson_id: str, search_terms: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Lấy nội dung bài học từ Qdrant để tạo câu hỏi
+
+        Args:
+            lesson_id: ID của bài học
+            search_terms: Các từ khóa tìm kiếm bổ sung
+
+        Returns:
+            Dict chứa nội dung bài học đã được xử lý
+        """
+        try:
+            if not self.qdrant_service.qdrant_client:
+                return {
+                    "success": False,
+                    "error": "Qdrant service not available",
+                    "content": None
+                }
+
+            logger.info(f"Searching for lesson content: {lesson_id}")
+
+            # 1. Tìm kiếm lesson trong tất cả collections
+            lesson_content = await self._find_lesson_in_collections(lesson_id)
+            
+            if not lesson_content["success"]:
+                return lesson_content
+
+            # 2. Nếu có search terms bổ sung, tìm kiếm thêm nội dung liên quan
+            if search_terms:
+                additional_content = await self._search_related_content(
+                    lesson_content["collection_name"], search_terms
+                )
+                lesson_content["additional_content"] = additional_content
+
+            # 3. Xử lý và cấu trúc nội dung cho việc tạo câu hỏi
+            processed_content = await self._process_content_for_exam(lesson_content)
+
+            return {
+                "success": True,
+                "lesson_id": lesson_id,
+                "content": processed_content,
+                "search_quality": self._calculate_search_quality(processed_content)
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting lesson content for exam: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "content": None
+            }
+
+    async def _find_lesson_in_collections(self, lesson_id: str) -> Dict[str, Any]:
+        """Tìm kiếm lesson trong tất cả Qdrant collections"""
+        try:
+            collections = self.qdrant_service.qdrant_client.get_collections().collections
+            
+            for collection in collections:
+                if collection.name.startswith("textbook_"):
+                    try:
+                        # Tìm kiếm lesson_id trong collection này
+                        search_result = self.qdrant_service.qdrant_client.scroll(
+                            collection_name=collection.name,
+                            scroll_filter=qdrant_models.Filter(
+                                must=[
+                                    qdrant_models.FieldCondition(
+                                        key="lesson_id",
+                                        match=qdrant_models.MatchValue(value=lesson_id),
+                                    )
+                                ]
+                            ),
+                            limit=100,  # Lấy nhiều chunks của lesson
+                            with_payload=True,
+                        )
+
+                        if search_result[0]:  # Tìm thấy lesson
+                            lesson_chunks = []
+                            lesson_info = {}
+
+                            for point in search_result[0]:
+                                payload = point.payload or {}
+                                
+                                # Bỏ qua metadata points
+                                if payload.get("type") == "metadata":
+                                    continue
+
+                                # Lưu thông tin lesson
+                                if not lesson_info:
+                                    lesson_info = {
+                                        "lesson_id": payload.get("lesson_id", ""),
+                                        "lesson_title": payload.get("lesson_title", ""),
+                                        "chapter_title": payload.get("chapter_title", ""),
+                                        "chapter_id": payload.get("chapter_id", ""),
+                                    }
+
+                                # Lưu content chunks
+                                lesson_chunks.append({
+                                    "text": payload.get("text", ""),
+                                    "page": payload.get("page", 0),
+                                    "type": payload.get("type", "content"),
+                                    "section": payload.get("section", ""),
+                                })
+
+                            return {
+                                "success": True,
+                                "collection_name": collection.name,
+                                "lesson_info": lesson_info,
+                                "content_chunks": lesson_chunks,
+                                "total_chunks": len(lesson_chunks)
+                            }
+
+                    except Exception as e:
+                        logger.warning(f"Error searching in collection {collection.name}: {e}")
+                        continue
+
+            return {
+                "success": False,
+                "error": f"Lesson {lesson_id} not found in any collection"
+            }
+
+        except Exception as e:
+            logger.error(f"Error finding lesson in collections: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _search_related_content(
+        self, collection_name: str, search_terms: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Tìm kiếm nội dung liên quan dựa trên search terms"""
+        try:
+            related_content = []
+            
+            for term in search_terms:
+                # Tạo embedding cho search term
+                query_vector = self.qdrant_service.embedding_model.encode(term).tolist()
+                
+                # Tìm kiếm trong collection
+                search_result = self.qdrant_service.qdrant_client.search(
+                    collection_name=collection_name,
+                    query_vector=query_vector,
+                    limit=5,  # Giới hạn kết quả cho mỗi term
+                    with_payload=True,
+                    score_threshold=0.4,  # Threshold cao hơn để đảm bảo chất lượng
+                )
+
+                for scored_point in search_result:
+                    payload = scored_point.payload or {}
+                    
+                    # Bỏ qua metadata
+                    if payload.get("type") == "metadata":
+                        continue
+
+                    related_content.append({
+                        "text": payload.get("text", ""),
+                        "score": scored_point.score,
+                        "search_term": term,
+                        "lesson_title": payload.get("lesson_title", ""),
+                        "chapter_title": payload.get("chapter_title", ""),
+                    })
+
+            return related_content
+
+        except Exception as e:
+            logger.error(f"Error searching related content: {e}")
+            return []
+
+    async def _process_content_for_exam(self, lesson_content: Dict[str, Any]) -> Dict[str, Any]:
+        """Xử lý nội dung để phù hợp cho việc tạo câu hỏi"""
+        try:
+            content_chunks = lesson_content.get("content_chunks", [])
+            lesson_info = lesson_content.get("lesson_info", {})
+            additional_content = lesson_content.get("additional_content", [])
+
+            # Gộp và sắp xếp nội dung theo page
+            all_content = sorted(content_chunks, key=lambda x: x.get("page", 0))
+            
+            # Tạo text liên tục từ các chunks
+            main_content = "\n\n".join([chunk["text"] for chunk in all_content if chunk["text"]])
+            
+            # Phân loại nội dung theo section
+            content_by_section = {}
+            for chunk in all_content:
+                section = chunk.get("section", "general")
+                if section not in content_by_section:
+                    content_by_section[section] = []
+                content_by_section[section].append(chunk["text"])
+
+            # Tạo summary cho từng section
+            section_summaries = {}
+            for section, texts in content_by_section.items():
+                section_summaries[section] = "\n".join(texts)
+
+            return {
+                "lesson_info": lesson_info,
+                "main_content": main_content,
+                "content_chunks": all_content,
+                "content_by_section": section_summaries,
+                "additional_content": additional_content,
+                "total_words": len(main_content.split()),
+                "total_chunks": len(all_content),
+                "available_sections": list(content_by_section.keys())
+            }
+
+        except Exception as e:
+            logger.error(f"Error processing content for exam: {e}")
+            return {}
+
+    def _calculate_search_quality(self, processed_content: Dict[str, Any]) -> float:
+        """Tính toán chất lượng search dựa trên nội dung tìm được"""
+        try:
+            total_words = processed_content.get("total_words", 0)
+            total_chunks = processed_content.get("total_chunks", 0)
+            sections_count = len(processed_content.get("available_sections", []))
+
+            # Tính điểm dựa trên:
+            # - Số lượng từ (nhiều từ = tốt hơn)
+            # - Số lượng chunks (nhiều chunks = đa dạng hơn)
+            # - Số lượng sections (nhiều sections = cấu trúc tốt hơn)
+            
+            word_score = min(total_words / 1000, 1.0)  # Tối đa 1000 từ = 1.0
+            chunk_score = min(total_chunks / 20, 1.0)  # Tối đa 20 chunks = 1.0
+            section_score = min(sections_count / 5, 1.0)  # Tối đa 5 sections = 1.0
+
+            # Trọng số: nội dung (50%), đa dạng (30%), cấu trúc (20%)
+            quality_score = (word_score * 0.5) + (chunk_score * 0.3) + (section_score * 0.2)
+            
+            return round(quality_score, 2)
+
+        except Exception as e:
+            logger.error(f"Error calculating search quality: {e}")
+            return 0.0
+
+    async def search_content_by_keywords(
+        self, lesson_id: str, keywords: List[str], limit: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Tìm kiếm nội dung theo từ khóa cụ thể trong bài học
+
+        Args:
+            lesson_id: ID bài học
+            keywords: Danh sách từ khóa
+            limit: Số lượng kết quả tối đa
+
+        Returns:
+            Dict chứa kết quả tìm kiếm
+        """
+        try:
+            # Tìm collection chứa lesson
+            lesson_content = await self._find_lesson_in_collections(lesson_id)
+            
+            if not lesson_content["success"]:
+                return lesson_content
+
+            collection_name = lesson_content["collection_name"]
+            
+            # Tìm kiếm theo từng keyword
+            search_results = []
+            for keyword in keywords:
+                related_content = await self._search_related_content(
+                    collection_name, [keyword]
+                )
+                search_results.extend(related_content)
+
+            # Loại bỏ duplicate và sắp xếp theo score
+            unique_results = {}
+            for result in search_results:
+                text = result["text"]
+                if text not in unique_results or result["score"] > unique_results[text]["score"]:
+                    unique_results[text] = result
+
+            sorted_results = sorted(
+                unique_results.values(), 
+                key=lambda x: x["score"], 
+                reverse=True
+            )[:limit]
+
+            return {
+                "success": True,
+                "lesson_id": lesson_id,
+                "keywords": keywords,
+                "results": sorted_results,
+                "total_found": len(sorted_results)
+            }
+
+        except Exception as e:
+            logger.error(f"Error searching content by keywords: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "results": []
+            }
+
+
+# Tạo instance global
+exam_content_service = ExamContentService()
