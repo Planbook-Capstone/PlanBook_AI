@@ -16,6 +16,7 @@ import io
 
 from app.services.simple_ocr_service import simple_ocr_service
 from app.services.llm_service import llm_service
+from app.services.docling_service import docling_service
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +49,9 @@ class EnhancedTextbookService:
         try:
             logger.info(f"🚀 Starting enhanced textbook processing: {filename}")
 
-            # Step 1: Extract all pages with OCR
-            logger.info("📄 Extracting pages with OCR...")
-            pages_data = await self._extract_pages_with_ocr(pdf_content)
+            # Step 1: Extract all pages with Docling (advanced) or OCR (fallback)
+            logger.info("📄 Extracting pages with Docling...")
+            pages_data = await self._extract_pages_with_docling(pdf_content, filename)
             logger.info(f"✅ Extracted {len(pages_data)} pages")
 
             # Step 2: Add LLM-generated image descriptions
@@ -82,6 +83,22 @@ class EnhancedTextbookService:
             images_data = self.extract_images_for_storage(processed_book)
             logger.info(f"🖼️ Extracted {len(images_data)} images for storage")
 
+            # Upload images to Supabase if available
+            if images_data:
+                logger.info("📤 Uploading images to Supabase...")
+                uploaded_images = await docling_service.upload_images_to_supabase(
+                    images=images_data,
+                    book_id=book_metadata.get("id", "unknown")
+                )
+
+                # Update images_data with Supabase URLs
+                images_data = uploaded_images
+
+                # Update lesson_images in book structure with Supabase URLs
+                self._update_lesson_images_with_supabase_urls(processed_book, uploaded_images)
+
+                logger.info(f"✅ Supabase upload completed for {len(images_data)} images")
+
             # Prepare clean structure for Qdrant
             clean_book_structure = self.prepare_structure_for_qdrant(processed_book)
 
@@ -108,8 +125,159 @@ class EnhancedTextbookService:
                 "message": "Failed to process textbook",
             }
 
+    async def _extract_pages_with_docling(self, pdf_content: bytes, filename: str) -> List[Dict[str, Any]]:
+        """Extract pages using Docling library for advanced PDF processing"""
+        try:
+            logger.info("🔧 Using Docling for advanced PDF image extraction...")
+
+            # Use Docling service to extract images and content
+            docling_result = await docling_service.extract_images_from_pdf(pdf_content, filename)
+
+            if not docling_result.get("success"):
+                logger.warning("Docling extraction failed, falling back to PyMuPDF")
+                return await self._extract_pages_with_ocr(pdf_content)
+
+            # Convert Docling result to our expected format
+            pages_data = []
+
+            # Process page images from Docling
+            for page_img in docling_result.get("page_images", []):
+                page_num = page_img["page_number"]
+
+                # Find or create page data
+                page_data = None
+                for p in pages_data:
+                    if p["page_number"] == page_num:
+                        page_data = p
+                        break
+
+                if not page_data:
+                    page_data = {
+                        "page_number": page_num,
+                        "text": "",
+                        "images": [],
+                        "has_text": False,
+                        "docling_processed": True
+                    }
+                    pages_data.append(page_data)
+
+            # Add extracted figures/pictures from Docling
+            for img in docling_result.get("images", []):
+                page_num = img.get("page", 1)
+                if page_num is None:
+                    page_num = 1
+
+                # Find page data
+                page_data = None
+                for p in pages_data:
+                    if p["page_number"] == page_num:
+                        page_data = p
+                        break
+
+                if not page_data:
+                    page_data = {
+                        "page_number": page_num,
+                        "text": "",
+                        "images": [],
+                        "has_text": False,
+                        "docling_processed": True
+                    }
+                    pages_data.append(page_data)
+
+                # Add image with Docling metadata
+                page_data["images"].append({
+                    "index": img.get("index", 0),
+                    "data": img.get("image_data", ""),
+                    "format": img.get("format", "png"),
+                    "page": page_num,
+                    "description": img.get("caption", ""),
+                    "type": img.get("type", "figure"),
+                    "width": img.get("width", 0),
+                    "height": img.get("height", 0),
+                    "extraction_method": "docling"
+                })
+
+            # Add table images from Docling
+            for table in docling_result.get("tables", []):
+                page_num = table.get("page", 1)
+                if page_num is None:
+                    page_num = 1
+
+                # Find page data
+                page_data = None
+                for p in pages_data:
+                    if p["page_number"] == page_num:
+                        page_data = p
+                        break
+
+                if not page_data:
+                    page_data = {
+                        "page_number": page_num,
+                        "text": "",
+                        "images": [],
+                        "has_text": False,
+                        "docling_processed": True
+                    }
+                    pages_data.append(page_data)
+
+                # Add table as image
+                page_data["images"].append({
+                    "index": table.get("index", 0),
+                    "data": table.get("image_data", ""),
+                    "format": table.get("format", "png"),
+                    "page": page_num,
+                    "description": table.get("caption", ""),
+                    "type": "table",
+                    "width": table.get("width", 0),
+                    "height": table.get("height", 0),
+                    "extraction_method": "docling"
+                })
+
+            # Extract text content from Docling markdown
+            text_content = docling_result.get("text_content", "")
+            if text_content:
+                # Split text by pages (this is approximate)
+                text_lines = text_content.split('\n')
+                current_page = 1
+                current_text = ""
+
+                for line in text_lines:
+                    if line.strip().startswith('---') and 'page' in line.lower():
+                        # Save previous page text
+                        if current_text.strip():
+                            for p in pages_data:
+                                if p["page_number"] == current_page:
+                                    p["text"] = current_text.strip()
+                                    p["has_text"] = len(current_text.strip()) > 50
+                                    break
+
+                        # Start new page
+                        current_page += 1
+                        current_text = ""
+                    else:
+                        current_text += line + "\n"
+
+                # Save last page
+                if current_text.strip():
+                    for p in pages_data:
+                        if p["page_number"] == current_page:
+                            p["text"] = current_text.strip()
+                            p["has_text"] = len(current_text.strip()) > 50
+                            break
+
+            # Sort pages by page number
+            pages_data.sort(key=lambda x: x["page_number"])
+
+            logger.info(f"✅ Docling extracted {len(pages_data)} pages with {sum(len(p['images']) for p in pages_data)} images")
+            return pages_data
+
+        except Exception as e:
+            logger.error(f"Docling extraction failed: {e}")
+            logger.info("Falling back to PyMuPDF extraction...")
+            return await self._extract_pages_with_ocr(pdf_content)
+
     async def _extract_pages_with_ocr(self, pdf_content: bytes) -> List[Dict[str, Any]]:
-        """Extract tất cả pages với OCR nếu cần"""
+        """Extract tất cả pages với OCR nếu cần (PyMuPDF fallback)"""
 
         def extract_page_data():
             doc = fitz.open(stream=pdf_content, filetype="pdf")
@@ -745,24 +913,43 @@ Hãy mô tả hình ảnh:"""
         for page in pages_data:
             for img in page.get("images", []):
                 total_images += 1
+
+                # Check if image already has description from Docling
+                existing_description = img.get("description", "").strip()
+                extraction_method = img.get("extraction_method", "")
+
+                if existing_description and extraction_method == "docling":
+                    logger.debug(f"Image on page {page.get('page_number')} already has Docling description: {existing_description[:50]}...")
+                    continue
+
                 if img.get("data"):
                     image_tasks.append(self._describe_image_with_llm(img["data"]))
                 else:
                     logger.debug(f"Image on page {page.get('page_number')} has no data")
 
-        logger.info(f"🖼️ Found {total_images} total images, {len(image_tasks)} with data")
+        logger.info(f"🖼️ Found {total_images} total images, {len(image_tasks)} need LLM descriptions")
 
         if image_tasks:
             logger.info(f"🖼️ Generating descriptions for {len(image_tasks)} images...")
             descriptions = await asyncio.gather(*image_tasks, return_exceptions=True)
 
-            # Apply descriptions back to images
+            # Apply descriptions back to images (only for those without existing descriptions)
             desc_index = 0
             success_count = 0
             fallback_count = 0
+            docling_count = 0
 
             for page in pages_data:
                 for img in page.get("images", []):
+                    # Skip images that already have Docling descriptions
+                    existing_description = img.get("description", "").strip()
+                    extraction_method = img.get("extraction_method", "")
+
+                    if existing_description and extraction_method == "docling":
+                        img["description_method"] = "docling_generated"
+                        docling_count += 1
+                        continue
+
                     if img.get("data") and desc_index < len(descriptions):
                         if not isinstance(descriptions[desc_index], Exception):
                             img["description"] = descriptions[desc_index]
@@ -778,7 +965,7 @@ Hãy mô tả hình ảnh:"""
                             logger.warning(f"❌ Failed to describe image: {descriptions[desc_index]}")
                         desc_index += 1
 
-            logger.info(f"🎯 Image description results: {success_count} success, {fallback_count} fallback, {len(image_tasks)} total")
+            logger.info(f"🎯 Image description results: {docling_count} docling, {success_count} llm, {fallback_count} fallback, {total_images} total")
 
     async def _build_final_structure(
         self,
@@ -833,6 +1020,12 @@ Hãy mô tả hình ảnh:"""
                                 "description_method": img.get(
                                     "description_method", "auto"
                                 ),
+                                "extraction_method": img.get(
+                                    "extraction_method", "unknown"
+                                ),  # Add extraction method
+                                "type": img.get(
+                                    "type", "unknown"
+                                ),  # Add image type
                                 "image_index": img.get(
                                     "index", 0
                                 ),  # Original index in page
@@ -845,6 +1038,13 @@ Hãy mô tả hình ảnh:"""
                                 "has_data": bool(
                                     img.get("data", "")
                                 ),  # Flag to check if image data exists
+                                "width": img.get("width", 0),  # Add width
+                                "height": img.get("height", 0),  # Add height
+                                # Supabase storage info
+                                "image_url": img.get("image_url", ""),  # Supabase public URL
+                                "filename": img.get("filename", ""),  # Supabase filename
+                                "upload_status": img.get("upload_status", "pending"),  # Upload status
+                                "storage_path": img.get("storage_path", ""),  # Supabase storage path
                             }
                             lesson_images.append(
                                 image_info
@@ -906,9 +1106,15 @@ Hãy mô tả hình ảnh:"""
                             "page": image.get("page"),
                             "description": image.get("description", ""),
                             "description_method": image.get("description_method", ""),
+                            "extraction_method": image.get("extraction_method", "unknown"),
+                            "type": image.get("type", "unknown"),
                             "format": image.get("format", "png"),
                             "image_index": image.get("image_index", 0),
+                            "index": image.get("image_index", 0),  # For Docling compatibility
                             "base64_data": image.get("base64_data", ""),
+                            "image_data": image.get("base64_data", ""),  # For Docling compatibility
+                            "width": image.get("width", 0),
+                            "height": image.get("height", 0),
                             "book_title": book_structure.get("title", ""),
                             "subject": book_structure.get("subject", ""),
                             "grade": book_structure.get("grade", ""),
@@ -916,6 +1122,36 @@ Hãy mô tả hình ảnh:"""
                         images_data.append(image_record)
 
         return images_data
+
+    def _update_lesson_images_with_supabase_urls(
+        self,
+        book_structure: Dict[str, Any],
+        uploaded_images: List[Dict[str, Any]]
+    ) -> None:
+        """Update lesson_images in book structure with Supabase URLs"""
+
+        # Create mapping from image_id to Supabase data
+        supabase_mapping = {}
+        for img in uploaded_images:
+            image_id = img.get("image_id")
+            if image_id:
+                supabase_mapping[image_id] = {
+                    "image_url": img.get("image_url", ""),
+                    "filename": img.get("filename", ""),
+                    "upload_status": img.get("upload_status", "pending"),
+                    "storage_path": img.get("storage_path", ""),
+                    "file_size": img.get("file_size", 0)
+                }
+
+        # Update lesson_images in book structure
+        for chapter in book_structure.get("chapters", []):
+            for lesson in chapter.get("lessons", []):
+                for img in lesson.get("images", []):
+                    image_id = img.get("image_id")
+                    if image_id in supabase_mapping:
+                        supabase_data = supabase_mapping[image_id]
+                        img.update(supabase_data)
+                        logger.debug(f"Updated lesson image {image_id} with Supabase URL: {supabase_data.get('image_url', '')[:50]}...")
 
     def prepare_structure_for_qdrant(
         self, book_structure: Dict[str, Any]

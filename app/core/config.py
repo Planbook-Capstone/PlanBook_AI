@@ -78,6 +78,11 @@ class Settings(BaseSettings):
         os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
     )
 
+    # Supabase Configuration
+    SUPABASE_URL: Optional[str] = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY: Optional[str] = os.getenv("SUPABASE_KEY")
+    SUPABASE_BUCKET: str = os.getenv("SUPABASE_BUCKET", "biteologystorage")
+
     class Config:
         case_sensitive = True
 

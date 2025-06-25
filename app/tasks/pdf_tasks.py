@@ -142,26 +142,9 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
             # Import services here to avoid circular imports
             from app.services.enhanced_textbook_service import enhanced_textbook_service
             from app.services.qdrant_service import qdrant_service
-            import uuid  # Extract pages with OCR
+            import uuid
 
-            pages_data = await enhanced_textbook_service._extract_pages_with_ocr(
-                file_content
-            )
-
-            # Validate OCR extraction
-            if not pages_data or len(pages_data) == 0:
-                raise Exception("OCR extraction failed: No pages extracted")
-
-            logger.info(f"OCR completed. Extracted {len(pages_data)} pages")
-
-            # Add image descriptions using LLM
-            await mongodb_task_service.update_task_progress(
-                task_id, 35, "Analyzing images with AI..."
-            )
-
-            await enhanced_textbook_service._add_image_descriptions(
-                pages_data
-            )  # Create metadata
+            # Create metadata
             book_metadata = {
                 "id": str(uuid.uuid4())[:8],
                 "title": filename.replace(".pdf", ""),
@@ -171,19 +154,19 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
                 "language": "vi",
             }
 
-            # Process textbook with enhanced service
+            # Process textbook with enhanced service (includes Docling integration)
             await mongodb_task_service.update_task_progress(
-                task_id, 50, "Analyzing book structure with AI..."
+                task_id, 30, "Processing PDF with Docling and AI analysis..."
             )
 
-            logger.info("🧠 Using enhanced textbook processing...")
-            # Use the main processing method that returns full structure
+            logger.info("🧠 Using enhanced textbook processing with Docling integration...")
+            # Use the main processing method that returns full structure with images
             processing_result = (
                 await enhanced_textbook_service.process_textbook_to_structure(
-                    file_content,
-                    filename,
-                    book_metadata,
-                    lesson_id,  # Pass lesson_id
+                    pdf_content=file_content,
+                    filename=filename,
+                    book_metadata=book_metadata,
+                    lesson_id=lesson_id,  # Pass lesson_id
                 )
             )
 
