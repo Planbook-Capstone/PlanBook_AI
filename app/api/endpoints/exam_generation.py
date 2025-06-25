@@ -10,6 +10,8 @@ import os
 import re
 from urllib.parse import quote
 from datetime import datetime
+import asyncio
+from pathlib import Path
 
 from app.models.exam_models import (
     ExamMatrixRequest,
@@ -25,6 +27,26 @@ from app.services.exam_docx_service import exam_docx_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+class AutoDeleteFileResponse(FileResponse):
+    """Custom FileResponse that deletes the file after sending"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    async def __call__(self, scope, receive, send):
+        try:
+            # Send the file response
+            await super().__call__(scope, receive, send)
+        finally:
+            # Delete the file after sending
+            try:
+                if os.path.exists(self.path):
+                    os.remove(self.path)
+                    logger.info(f"Deleted temporary file: {self.path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete temporary file {self.path}: {e}")
 
 
 def _sanitize_filename(filename: str) -> str:
@@ -143,8 +165,8 @@ async def generate_exam_from_matrix(request: ExamMatrixRequest):
             f"Exam generation completed successfully. Generated {len(exam_result.get('questions', []))} questions. Returning file: {docx_file_path}"
         )
 
-        # Trả về file DOCX để download
-        return FileResponse(
+        # Trả về file DOCX để download và tự động xóa sau khi gửi
+        return AutoDeleteFileResponse(
             path=docx_file_path,
             filename=filename,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -240,8 +262,8 @@ async def generate_exam_test(request: ExamMatrixRequest):
             f"Test exam generation completed successfully. Returning file: {docx_file_path}"
         )
 
-        # Return DOCX file
-        return FileResponse(
+        # Return DOCX file và tự động xóa sau khi gửi
+        return AutoDeleteFileResponse(
             path=docx_file_path,
             filename=filename,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
