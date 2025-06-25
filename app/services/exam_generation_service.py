@@ -81,6 +81,11 @@ class ExamGenerationService:
 
             logger.info(f"Total questions generated: {len(all_questions)}")
 
+            # Kiểm tra nếu không có câu hỏi nào được tạo
+            if len(all_questions) == 0:
+                logger.error("No questions were generated. This might indicate an API issue.")
+                return {"success": False, "error": "Không thể tạo câu hỏi. Vui lòng kiểm tra API key hoặc thử lại sau."}
+
             # Tạo thống kê
             statistics = self._create_exam_statistics(all_questions, exam_request)
 
@@ -201,8 +206,18 @@ class ExamGenerationService:
 
             except Exception as api_error:
                 logger.error(f"Gemini API error: {api_error}")
-                # Không dùng fallback, trả về lỗi trực tiếp
-                raise api_error
+                error_msg = str(api_error).lower()
+
+                # Kiểm tra các loại lỗi cụ thể
+                if "quota" in error_msg or "resource_exhausted" in error_msg or "limit" in error_msg:
+                    raise Exception("API quota đã hết. Vui lòng kiểm tra lại API key hoặc thử lại sau.")
+                elif "api key" in error_msg or "authentication" in error_msg or "permission" in error_msg:
+                    raise Exception("API key không hợp lệ hoặc không có quyền truy cập.")
+                elif "invalid" in error_msg or "bad request" in error_msg:
+                    raise Exception("Yêu cầu không hợp lệ. Vui lòng kiểm tra lại dữ liệu đầu vào.")
+                else:
+                    # Lỗi khác, trả về lỗi gốc
+                    raise api_error
 
             # Format câu hỏi theo model
             formatted_questions = []
@@ -242,7 +257,8 @@ class ExamGenerationService:
         except Exception as e:
             logger.error(f"Error generating questions by type: {e}")
             logger.error(f"Error details: {type(e).__name__}: {str(e)}")
-            return []
+            # Ném lại exception thay vì trả về danh sách rỗng
+            raise e
 
     def _create_question_prompt(
         self,
@@ -292,6 +308,8 @@ QUAN TRỌNG - ĐỊNH DẠNG BẮT BUỘC:
 - Ví dụ: "dap_an": {{"A": "...", "B": "...", "C": "...", "D": "...", "dung": "A"}}
 - Trường "dung" phải chứa chính xác một trong các giá trị: "A", "B", "C", "D"
 - Đáp án trong trường "dung" phải khớp với nội dung giải thích
+- KHÔNG BAO GIỜ để trống trường "dung" - luôn phải chỉ rõ đáp án đúng
+- Trong phần "giai_thich", hãy bắt đầu bằng "Đáp án: [A/B/C/D]" để rõ ràng
 
 Hãy tạo {muc_do.so_cau} câu hỏi chất lượng cao, phù hợp với mức độ {muc_do.loai}.
 """
@@ -516,7 +534,9 @@ HƯỚNG DẪN TẠO CÂU TỰ LUẬN:
                 r"([abcd]) đúng vì",
                 r"([abcd]) là đáp án đúng",
                 r"([abcd]) đúng",
-                r"chọn đáp án ([abcd])"
+                r"chọn đáp án ([abcd])",
+                r"đáp án:\s*([abcd])",
+                r"đáp án\s+([abcd])"
             ]
 
             for pattern in strong_patterns:
@@ -530,7 +550,11 @@ HƯỚNG DẪN TẠO CÂU TỰ LUẬN:
             # Tìm pattern yếu hơn (chỉ đề cập đến đáp án)
             weak_patterns = [
                 r"đáp án ([abcd])",
-                r"chọn ([abcd])"
+                r"chọn ([abcd])",
+                r"([abcd])\s*[:\-\.]",
+                r"^([abcd])\s",
+                r"\b([abcd])\b.*chính xác",
+                r"\b([abcd])\b.*đúng"
             ]
 
             for pattern in weak_patterns:
@@ -541,18 +565,48 @@ HƯỚNG DẪN TẠO CÂU TỰ LUẬN:
                         logger.info(f"Found correct answer '{answer}' using weak pattern: {pattern}")
                         return answer
 
-            # Nếu không tìm thấy pattern, phân tích ngữ cảnh
-            # Tìm câu có từ "đúng" và xem đáp án nào được nhắc đến
+            # Phân tích ngữ cảnh thông minh hơn
+            # Tìm các từ khóa chỉ ra đáp án đúng
+            context_keywords = [
+                'đúng', 'chính xác', 'phù hợp', 'là', 'vì', 'do', 'bởi vì',
+                'nên', 'nó', 'điều này', 'vậy', 'như vậy'
+            ]
+
+            # Tách thành các câu và phân tích
             sentences = explanation_lower.split('.')
             for sentence in sentences:
-                if 'đúng' in sentence:
+                sentence = sentence.strip()
+                if any(keyword in sentence for keyword in context_keywords):
+                    # Tìm đáp án được nhắc đến trong câu này
                     for option in ['A', 'B', 'C', 'D']:
                         if option.lower() in sentence and option in dap_an:
-                            logger.info(f"Found correct answer '{option}' by context analysis")
-                            return option
+                            # Kiểm tra xem có phải đang nói về đáp án đúng không
+                            if any(keyword in sentence for keyword in ['đúng', 'chính xác', 'phù hợp']):
+                                logger.info(f"Found correct answer '{option}' by context analysis in sentence: {sentence[:50]}...")
+                                return option
+
+            # Nếu vẫn không tìm thấy, thử phân tích nội dung đáp án
+            # Tìm đáp án có nội dung được nhắc đến nhiều nhất trong giải thích
+            option_scores = {}
+            for option, content in dap_an.items():
+                if option in ['A', 'B', 'C', 'D'] and isinstance(content, str):
+                    # Đếm số từ khóa từ nội dung đáp án xuất hiện trong giải thích
+                    content_words = content.lower().split()
+                    score = 0
+                    for word in content_words:
+                        if len(word) > 2 and word in explanation_lower:  # Chỉ đếm từ có ý nghĩa
+                            score += 1
+                    option_scores[option] = score
+
+            if option_scores:
+                best_option = max(option_scores.keys(), key=lambda x: option_scores[x])
+                if option_scores[best_option] > 0:
+                    logger.info(f"Found correct answer '{best_option}' by content analysis with score: {option_scores[best_option]}")
+                    return best_option
 
             logger.warning("Could not extract correct answer from explanation")
             logger.debug(f"Full explanation: {explanation}")
+            logger.debug(f"Available options: {list(dap_an.keys())}")
             return ""
 
         except Exception as e:

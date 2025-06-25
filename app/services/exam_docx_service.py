@@ -5,11 +5,12 @@ Service để xuất đề thi ra file DOCX
 import logging
 import os
 import re
+import tempfile
 from typing import Dict, List, Any, Optional
 from docx import Document
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT
+
 from docx.oxml.shared import OxmlElement, qn
 from datetime import datetime
 
@@ -20,13 +21,8 @@ class ExamDocxService:
     """Service để tạo file DOCX cho đề thi"""
 
     def __init__(self):
-        self.exports_dir = "exports"
-        self._ensure_exports_dir()
-
-    def _ensure_exports_dir(self):
-        """Đảm bảo thư mục exports tồn tại"""
-        if not os.path.exists(self.exports_dir):
-            os.makedirs(self.exports_dir)
+        # Sử dụng thư mục tạm thời của hệ thống
+        self.temp_dir = tempfile.gettempdir()
 
     async def create_exam_docx(
         self, exam_data: Dict[str, Any], exam_request: Dict[str, Any]
@@ -60,14 +56,14 @@ class ExamDocxService:
             # Tạo đáp án (trang riêng)
             self._create_answer_key(doc, exam_data.get("questions", []))
 
-            # Lưu file với filename an toàn (không có ký tự đặc biệt)
+            # Lưu file với filename an toàn (không có ký tự đặc biệt) trong thư mục tạm thời
             lesson_id_safe = self._sanitize_filename(
                 exam_request.get("lesson_id", "unknown")
             )
             filename = (
                 f"exam_{lesson_id_safe}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
             )
-            filepath = os.path.join(self.exports_dir, filename)
+            filepath = os.path.join(self.temp_dir, filename)
 
             doc.save(filepath)
 
@@ -323,40 +319,44 @@ class ExamDocxService:
                 detail_title_run.font.name = "Times New Roman"
                 detail_title_run.font.size = Pt(12)
 
-                for i, question in enumerate(other_questions, 1):
-                    self._create_detailed_answer(doc, question, i)
+                for question in other_questions:
+                    question_num = question.get("stt", 1)  # Sử dụng số thứ tự thực tế từ dữ liệu
+                    self._create_detailed_answer(doc, question, question_num)
 
         except Exception as e:
             logger.error(f"Error creating answer key: {e}")
 
     def _create_answer_table(self, doc: Document, tn_questions: List[Dict[str, Any]]):
-        """Tạo bảng đáp án trắc nghiệm"""
+        """Tạo danh sách đáp án trắc nghiệm theo format dọc"""
         try:
             if not tn_questions:
                 return
 
-            # Tạo bảng với đủ số hàng
-            num_questions = len(tn_questions)
-            rows_needed = (num_questions + 9) // 10  # 10 câu mỗi hàng
-            table = doc.add_table(rows=rows_needed + 1, cols=11)  # +1 cho header
-            table.alignment = WD_TABLE_ALIGNMENT.CENTER
+            # Tạo danh sách đáp án theo format dọc
+            doc.add_paragraph()
+            answer_list_title = doc.add_heading("Đáp án trắc nghiệm:", level=3)
+            answer_list_title_run = answer_list_title.runs[0]
+            answer_list_title_run.font.name = "Times New Roman"
+            answer_list_title_run.font.size = Pt(12)
 
-            # Header row
-            header_cells = table.rows[0].cells
-            header_cells[0].text = "Câu"
-            for i in range(1, 11):
-                header_cells[i].text = str(i)
+            # Tạo danh sách đáp án dọc
+            for i, question in enumerate(tn_questions, 1):
+                dap_an = question.get("dap_an", {})
+                correct_answer = dap_an.get("dung", "")
 
-            # Điền đáp án vào bảng
-            for i, question in enumerate(tn_questions):
-                row_idx = (i // 10) + 1  # Hàng trong bảng (bỏ qua header)
-                col_idx = (i % 10) + 1   # Cột trong bảng (bỏ qua cột đầu)
+                # Nếu không có đáp án đúng, thử trích xuất từ giải thích
+                if not correct_answer:
+                    giai_thich = question.get("giai_thich", "")
+                    correct_answer = self._extract_correct_answer_from_explanation(giai_thich, dap_an)
+                    if correct_answer:
+                        logger.info(f"Extracted missing answer for question {i}: {correct_answer}")
+                    else:
+                        logger.warning(f"No correct answer found for question {i}")
+                        correct_answer = "?"  # Placeholder để báo hiệu lỗi
 
-                # Kiểm tra bounds
-                if row_idx < len(table.rows) and col_idx < len(table.rows[row_idx].cells):
-                    dap_an = question.get("dap_an", {})
-                    correct_answer = dap_an.get("dung", "")
-                    table.rows[row_idx].cells[col_idx].text = correct_answer
+                answer_para = doc.add_paragraph()
+                answer_para.add_run(f"{i} ").bold = True
+                answer_para.add_run(correct_answer)
 
             # Thêm giải thích chi tiết cho từng câu
             doc.add_paragraph()
@@ -384,7 +384,7 @@ class ExamDocxService:
                 doc.add_paragraph()  # Khoảng trống
 
         except Exception as e:
-            logger.error(f"Error creating answer table: {e}")
+            logger.error(f"Error creating answer list: {e}")
 
     def _create_detailed_answer(
         self, doc: Document, question: Dict[str, Any], question_num: int
@@ -434,6 +434,72 @@ class ExamDocxService:
             "TL": "Tự luận",
         }
         return names.get(loai_cau, loai_cau)
+
+    def _extract_correct_answer_from_explanation(self, explanation: str, dap_an: dict) -> str:
+        """Trích xuất đáp án đúng từ giải thích (copy từ exam_generation_service)"""
+        try:
+            import re
+
+            if not explanation or not isinstance(dap_an, dict):
+                return ""
+
+            explanation_lower = explanation.lower()
+
+            # Tìm các pattern rõ ràng nhất trước
+            strong_patterns = [
+                r"đáp án ([abcd]) đúng",
+                r"đáp án đúng là ([abcd])",
+                r"([abcd]) đúng vì",
+                r"([abcd]) là đáp án đúng",
+                r"([abcd]) đúng",
+                r"chọn đáp án ([abcd])",
+                r"đáp án:\s*([abcd])",
+                r"đáp án\s+([abcd])"
+            ]
+
+            for pattern in strong_patterns:
+                match = re.search(pattern, explanation_lower)
+                if match:
+                    answer = match.group(1).upper()
+                    if answer in dap_an:
+                        return answer
+
+            # Tìm pattern yếu hơn
+            weak_patterns = [
+                r"đáp án ([abcd])",
+                r"chọn ([abcd])",
+                r"([abcd])\s*[:\-\.]",
+                r"^([abcd])\s"
+            ]
+
+            for pattern in weak_patterns:
+                match = re.search(pattern, explanation_lower)
+                if match:
+                    answer = match.group(1).upper()
+                    if answer in dap_an:
+                        return answer
+
+            # Phân tích nội dung đáp án
+            option_scores = {}
+            for option, content in dap_an.items():
+                if option in ['A', 'B', 'C', 'D'] and isinstance(content, str):
+                    content_words = content.lower().split()
+                    score = 0
+                    for word in content_words:
+                        if len(word) > 2 and word in explanation_lower:
+                            score += 1
+                    option_scores[option] = score
+
+            if option_scores:
+                best_option = max(option_scores.keys(), key=lambda x: option_scores[x])
+                if option_scores[best_option] > 0:
+                    return best_option
+
+            return ""
+
+        except Exception as e:
+            logger.error(f"Error extracting correct answer: {e}")
+            return ""
 
 
 # Tạo instance global
