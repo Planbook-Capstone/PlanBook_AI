@@ -3,9 +3,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.endpoints.auto_grading import auto_grading_endpoint
 from app.core.config import settings
-from app.api.endpoints import pdf_endpoints, tasks, celery_health, lesson_plan
+from app.api.endpoints import (
+    pdf_endpoints,
+    tasks,
+    celery_health,
+    lesson_plan,
+    exam_generation,
+)
 from app.services.lesson_plan_framework_service import lesson_plan_framework_service
 from app.api.endpoints import auto_grading
+
 # Initialize FastAPI app
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -37,6 +44,9 @@ api_router.include_router(
 api_router.include_router(
     auto_grading.router, prefix="/auto_grading", tags=["Auto Grading"]
 )
+api_router.include_router(
+    exam_generation.router, prefix="/exam", tags=["Exam Generation"]
+)
 # Add API router to app
 app.include_router(api_router, prefix=settings.API_PREFIX)
 
@@ -54,6 +64,6 @@ async def startup_event():
     """Initialize services on startup"""
     try:
         await lesson_plan_framework_service.initialize()
-        print("✅ Lesson Plan Framework Service initialized successfully")
+        print("[OK] Lesson Plan Framework Service initialized successfully")
     except Exception as e:
-        print(f"❌ Failed to initialize Lesson Plan Framework Service: {e}")
+        print(f"[ERROR] Failed to initialize Lesson Plan Framework Service: {e}")
