@@ -51,9 +51,9 @@ class ExamGenerationService:
             logger.info(f"Total questions requested: {exam_request.tong_so_cau}")
             logger.info(f"Number of lessons: {len(exam_request.cau_hinh_de)}")
 
-            if not self.llm_service.model:
+            if not self.llm_service.is_available():
                 logger.error(
-                    "LLM service model is None - check Gemini API configuration"
+                    "LLM service not available - check API configuration"
                 )
                 return {"success": False, "error": "LLM service not available"}
 
@@ -202,8 +202,8 @@ class ExamGenerationService:
             logger.info(f"Number of questions to generate: {muc_do.so_cau}")
 
             # Kiểm tra LLM service
-            if not self.llm_service.model:
-                logger.error("LLM service model is None in _generate_questions_by_type")
+            if not self.llm_service.is_available():
+                logger.error("LLM service not available in _generate_questions_by_type")
                 return []
 
             # Tạo prompt dựa trên loại câu hỏi và mức độ
@@ -214,14 +214,19 @@ class ExamGenerationService:
             logger.info(f"Generated prompt length: {len(prompt)} characters")
             logger.debug(f"Prompt preview: {prompt[:500]}...")
 
-            # Gọi Gemini để tạo câu hỏi
-            logger.info("Calling Gemini API...")
+            # Gọi LLM để tạo câu hỏi
+            logger.info("Calling LLM API...")
             try:
-                response = self.llm_service.model.generate_content(prompt)
-                response_text = response.text.strip()
+                result = await self.llm_service._generate_content(prompt)
 
-                logger.info(f"Gemini response length: {len(response_text)} characters")
-                logger.debug(f"Gemini response preview: {response_text[:500]}...")
+                if not result["success"]:
+                    logger.error(f"LLM API failed: {result['error']}")
+                    return []
+
+                response_text = result["text"].strip()
+
+                logger.info(f"LLM response length: {len(response_text)} characters")
+                logger.debug(f"LLM response preview: {response_text[:500]}...")
 
                 # Parse JSON response
                 logger.info("Parsing JSON response...")
@@ -430,50 +435,89 @@ HƯỚNG DẪN TẠO CÂU TỰ LUẬN:
             logger.debug(f"Original response text: {response_text}")
 
             original_text = response_text
+            all_questions = []
 
-            # Clean JSON text
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-                logger.debug("Removed ```json prefix")
-            if response_text.startswith("```"):
-                response_text = response_text[3:]
-                logger.debug("Removed ``` prefix")
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
-                logger.debug("Removed ``` suffix")
+            # Tìm tất cả các JSON blocks trong response
+            import re
 
-            response_text = response_text.strip()
-            logger.debug(f"Cleaned response text: {response_text}")
+            # Pattern để tìm JSON arrays trong ```json blocks
+            json_pattern = r'```json\s*(\[.*?\])\s*```'
+            matches = re.findall(json_pattern, response_text, re.DOTALL)
 
-            # Tìm JSON array
-            start_idx = response_text.find("[")
-            end_idx = response_text.rfind("]")
+            logger.info(f"Found {len(matches)} JSON blocks in response")
 
-            logger.info(f"JSON array bounds: start={start_idx}, end={end_idx}")
+            for i, match in enumerate(matches):
+                try:
+                    logger.info(f"Parsing JSON block {i+1}...")
+                    logger.debug(f"JSON block {i+1}: {match}")
 
-            if start_idx != -1 and end_idx != -1:
-                json_text = response_text[start_idx : end_idx + 1]
-                logger.info(f"Extracted JSON text length: {len(json_text)}")
-                logger.debug(f"JSON text to parse: {json_text}")
+                    questions = json.loads(match)
+                    if isinstance(questions, list):
+                        all_questions.extend(questions)
+                        logger.info(f"Added {len(questions)} questions from block {i+1}")
+                    else:
+                        all_questions.append(questions)
+                        logger.info(f"Added 1 question from block {i+1}")
 
-                questions = json.loads(json_text)
-                logger.info(f"Successfully parsed JSON. Type: {type(questions)}")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse JSON block {i+1}: {e}")
+                    continue
 
-                if isinstance(questions, list):
-                    logger.info(f"Found {len(questions)} questions in array")
-                    return questions
-                else:
-                    logger.info("Single question object found, converting to list")
-                    return [questions]
-            else:
-                logger.error("No JSON array found in response")
-                logger.error(f"Full response text: {original_text}")
-                return []
+            # Nếu không tìm thấy JSON blocks, thử tìm JSON array trực tiếp
+            if not all_questions:
+                logger.info("No JSON blocks found, trying direct JSON array extraction...")
 
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error: {e}")
-            logger.error(f"Failed to parse JSON: {response_text}")
-            return []
+                # Tìm JSON array đầu tiên
+                start_idx = response_text.find("[")
+                if start_idx != -1:
+                    # Tìm ] tương ứng
+                    bracket_count = 0
+                    end_idx = -1
+                    for i in range(start_idx, len(response_text)):
+                        if response_text[i] == '[':
+                            bracket_count += 1
+                        elif response_text[i] == ']':
+                            bracket_count -= 1
+                            if bracket_count == 0:
+                                end_idx = i
+                                break
+
+                    if end_idx != -1:
+                        json_text = response_text[start_idx:end_idx + 1]
+                        logger.info(f"Extracted JSON array: {len(json_text)} characters")
+                        logger.debug(f"JSON text: {json_text}")
+
+                        try:
+                            questions = json.loads(json_text)
+                            if isinstance(questions, list):
+                                all_questions.extend(questions)
+                                logger.info(f"Added {len(questions)} questions from direct extraction")
+                            else:
+                                all_questions.append(questions)
+                                logger.info(f"Added 1 question from direct extraction")
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Failed to parse direct JSON: {e}")
+
+            logger.info(f"Total questions parsed: {len(all_questions)}")
+
+            # Debug: Log first question structure
+            if all_questions:
+                logger.info("=== DEBUGGING FIRST QUESTION ===")
+                first_q = all_questions[0]
+                logger.info(f"First question keys: {list(first_q.keys())}")
+                logger.info(f"First question content: {first_q}")
+
+                # Check specific fields
+                cau_hoi = first_q.get('cau_hoi', 'MISSING')
+                noi_dung = first_q.get('noi_dung', 'MISSING')
+                de_bai = first_q.get('de_bai', 'MISSING')
+                logger.info(f"cau_hoi field: '{cau_hoi}'")
+                logger.info(f"noi_dung field: '{noi_dung}'")
+                logger.info(f"de_bai field: '{de_bai}'")
+                logger.info("=== END DEBUG ===")
+
+            return all_questions
+
         except Exception as e:
             logger.error(f"Error parsing questions response: {e}")
             logger.error(f"Response text: {response_text}")
@@ -862,15 +906,14 @@ HƯỚNG DẪN TẠO CÂU TỰ LUẬN:
                     continue
 
                 question = {
-                    "so_thu_tu": start_counter + i,
-                    "cau_hoi": q_data["cau_hoi"],
-                    "lua_chon": q_data.get("lua_chon", []),
-                    "dap_an": q_data["dap_an"],
+                    "stt": start_counter + i,
+                    "loai_cau": loai_cau,
+                    "muc_do": muc_do.loai,
+                    "noi_dung_cau_hoi": q_data.get("cau_hoi", ""),  # Fix: sử dụng field name nhất quán
+                    "dap_an": q_data.get("dap_an", {}),
                     "giai_thich": q_data.get("giai_thich", ""),
                     "bai_hoc": f"Lesson {cau_hinh.lesson_id}",
                     "noi_dung_kien_thuc": cau_hinh.yeu_cau_can_dat,
-                    "muc_do": muc_do.loai,
-                    "loai_cau": loai_cau,
                 }
                 formatted_questions.append(question)
 
