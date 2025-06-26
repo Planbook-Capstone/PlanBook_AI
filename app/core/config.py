@@ -71,6 +71,12 @@ class Settings(BaseSettings):
     MAX_TOKENS: int = int(os.getenv("MAX_TOKENS", "4096"))
     RETRY_ATTEMPTS: int = int(os.getenv("RETRY_ATTEMPTS", "3"))
 
+    # Google Drive Settings
+    GOOGLE_DRIVE_CREDENTIALS_PATH: Optional[str] = os.getenv("GOOGLE_DRIVE_CREDENTIALS_PATH")
+    GOOGLE_DRIVE_FOLDER_ID: Optional[str] = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+    GOOGLE_DRIVE_AUTO_DELETE_DAYS: int = int(os.getenv("GOOGLE_DRIVE_AUTO_DELETE_DAYS", "7"))
+    ENABLE_GOOGLE_DRIVE: bool = os.getenv("ENABLE_GOOGLE_DRIVE", "False").lower() == "true"
+
     # Security
     SECRET_KEY: Optional[str] = os.getenv("SECRET_KEY")
     ALGORITHM: str = os.getenv("ALGORITHM", "HS256")

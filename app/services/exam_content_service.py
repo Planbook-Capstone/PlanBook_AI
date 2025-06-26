@@ -133,6 +133,12 @@ class ExamContentService:
                         logger.warning(f"Error searching in collection {collection.name}: {e}")
                         continue
 
+            # Fallback: Tìm trong MongoDB nếu không có trong Qdrant
+            logger.info(f"Lesson {lesson_id} not found in Qdrant, searching in MongoDB...")
+            mongodb_result = await self._find_lesson_in_mongodb(lesson_id)
+            if mongodb_result["success"]:
+                return mongodb_result
+
             return {
                 "success": False,
                 "error": f"Lesson {lesson_id} not found in any collection"
@@ -140,6 +146,69 @@ class ExamContentService:
 
         except Exception as e:
             logger.error(f"Error finding lesson in collections: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _find_lesson_in_mongodb(self, lesson_id: str) -> Dict[str, Any]:
+        """Tìm kiếm lesson trong MongoDB collections"""
+        try:
+            from motor.motor_asyncio import AsyncIOMotorClient
+            from app.core.config import settings
+
+            # Kết nối MongoDB
+            client = AsyncIOMotorClient(settings.MONGODB_URL)
+            db = client[settings.MONGODB_DATABASE]
+
+            # Tìm trong textbooks collection
+            textbooks = await db.textbooks.find({}).to_list(length=None)
+
+            for book in textbooks:
+                chapters = book.get("chapters", [])
+                for chapter in chapters:
+                    lessons = chapter.get("lessons", [])
+                    for lesson in lessons:
+                        if lesson.get("lesson_id") == lesson_id:
+                            # Tìm thấy lesson, tạo content chunks từ content
+                            content = lesson.get("content", "")
+
+                            # Chia content thành chunks
+                            content_chunks = []
+                            if content:
+                                # Chia theo đoạn văn
+                                paragraphs = content.split('\n\n')
+                                for i, paragraph in enumerate(paragraphs):
+                                    if paragraph.strip():
+                                        content_chunks.append({
+                                            "text": paragraph.strip(),
+                                            "page": i + 1,
+                                            "type": "content",
+                                            "section": "main",
+                                        })
+
+                            lesson_info = {
+                                "lesson_id": lesson.get("lesson_id", ""),
+                                "lesson_title": lesson.get("title", ""),
+                                "chapter_title": chapter.get("title", ""),
+                                "chapter_id": chapter.get("chapter_id", ""),
+                            }
+
+                            return {
+                                "success": True,
+                                "collection_name": "mongodb_textbooks",
+                                "lesson_info": lesson_info,
+                                "content_chunks": content_chunks,
+                                "total_chunks": len(content_chunks)
+                            }
+
+            return {
+                "success": False,
+                "error": f"Lesson {lesson_id} not found in MongoDB"
+            }
+
+        except Exception as e:
+            logger.error(f"Error finding lesson in MongoDB: {e}")
             return {
                 "success": False,
                 "error": str(e)
