@@ -4,7 +4,7 @@ API endpoints cho chức năng tạo bài kiểm tra từ ma trận đề thi
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Union
 import logging
 import os
 import re
@@ -21,12 +21,119 @@ from app.models.exam_models import (
     LessonContentResponse,
     ExamGenerationError,
 )
+from app.models.online_document_models import (
+    ExamOnlineResponse,
+    OnlineDocumentError,
+    OnlineDocumentLinks
+)
 from app.services.exam_content_service import exam_content_service
 from app.services.exam_generation_service import exam_generation_service
 from app.services.exam_docx_service import exam_docx_service
+from app.services.google_drive_service import google_drive_service
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def _create_online_document_response(
+    docx_file_path: str,
+    filename: str,
+    exam_result: Dict[str, Any],
+    request: ExamMatrixRequest,
+    search_quality: float = 0.0
+) -> Dict[str, Any]:
+    """
+    Tạo response cho document online - upload thật lên Google Drive
+
+    Args:
+        docx_file_path: Đường dẫn file DOCX đã tạo
+        filename: Tên file
+        exam_result: Kết quả tạo đề thi
+        request: Request gốc
+        search_quality: Chất lượng tìm kiếm
+
+    Returns:
+        Dict chứa response data với link online thật
+
+    Raises:
+        HTTPException: Nếu không thể tạo online document
+    """
+    # Kiểm tra Google Drive có enabled và available không
+    if not settings.ENABLE_GOOGLE_DRIVE:
+        raise HTTPException(
+            status_code=503,
+            detail="Google Drive service is disabled. Cannot create online document."
+        )
+
+    if not google_drive_service.is_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Google Drive service is not available. Please check configuration."
+        )
+
+    try:
+        # Upload lên Google Drive
+        logger.info(f"Uploading file to Google Drive: {filename}")
+        upload_result = await google_drive_service.upload_docx_file(
+            file_path=docx_file_path,
+            filename=filename,
+            convert_to_google_docs=True  # Convert thành Google Docs để edit online
+        )
+
+        if not upload_result.get("success"):
+            error_msg = upload_result.get('error', 'Unknown upload error')
+            logger.error(f"Failed to upload to Google Drive: {error_msg}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to upload document to Google Drive: {error_msg}"
+            )
+
+        # Xóa file local sau khi upload thành công
+        try:
+            if os.path.exists(docx_file_path):
+                os.remove(docx_file_path)
+                logger.info(f"Deleted local file after upload: {docx_file_path}")
+        except Exception as e:
+            logger.warning(f"Failed to delete local file: {e}")
+
+        # Tạo response online với link thật
+        links = OnlineDocumentLinks(**upload_result["links"])
+
+        return ExamOnlineResponse(
+            success=True,
+            message="Đề thi đã được tạo và upload lên Google Drive thành công",
+            file_id=upload_result["file_id"],
+            filename=upload_result["filename"],
+            mime_type=upload_result["mime_type"],
+            links=links,
+            primary_link=links.edit or links.view or "",
+            created_at=datetime.now().isoformat(),
+            storage_provider="Google Drive",
+            exam_id=str(exam_result.get("exam_id", "unknown")),
+            lesson_id=request.cau_hinh_de[0].lesson_id if request.cau_hinh_de else "unknown",
+            mon_hoc=request.mon_hoc,
+            lop=request.lop,
+            total_questions=len(exam_result.get("questions", [])),
+            search_quality=search_quality,
+            additional_info={
+                "web_view_link": upload_result.get("web_view_link"),
+                "web_content_link": upload_result.get("web_content_link")
+            }
+        ).model_dump()
+
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error uploading to Google Drive: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal error while creating online document: {str(e)}"
+        )
+
+
+
 
 
 class AutoDeleteFileResponse(FileResponse):
@@ -69,19 +176,19 @@ def _sanitize_filename(filename: str) -> str:
 @router.post("/generate-exam")
 async def generate_exam_from_matrix(request: ExamMatrixRequest):
     """
-    Tạo bài kiểm tra từ ma trận đề thi và trả về file DOCX
+    Tạo bài kiểm tra từ ma trận đề thi và trả về link doc online
 
     Endpoint này nhận ma trận đề thi và lesson_id, sau đó:
     1. Tìm kiếm nội dung bài học trong Qdrant
     2. Sử dụng Gemini LLM để tạo câu hỏi theo ma trận
     3. Xuất ra file DOCX chứa đề thi và đáp án
-    4. Trả về file DOCX để download trực tiếp
+    4. Upload lên Google Drive và trả về link online để xem/chỉnh sửa
 
     Args:
         request: Ma trận đề thi với lesson_id và cấu hình chi tiết
 
     Returns:
-        FileResponse: File DOCX chứa đề thi và đáp án để download
+        ExamOnlineResponse: Link online để xem/chỉnh sửa đề thi hoặc OnlineDocumentError nếu thất bại
 
     Example:
         POST /api/v1/exam/generate-exam
@@ -93,19 +200,23 @@ async def generate_exam_from_matrix(request: ExamMatrixRequest):
             "cau_hinh_de": [...]
         }
 
-        Response: File DOCX download với tên "De_thi_Sinh_hoc_12_[exam_id].docx"
+        Response: JSON với links online để truy cập đề thi
     """
     try:
-        logger.info(f"Starting exam generation for lesson: {request.lesson_id}")
+        logger.info(f"Starting exam generation for exam_id: {request.exam_id}")
 
         # 1. Validate request
-        if not request.lesson_id:
-            raise HTTPException(status_code=400, detail="lesson_id is required")
+        if not request.cau_hinh_de or len(request.cau_hinh_de) == 0:
+            raise HTTPException(status_code=400, detail="cau_hinh_de is required and cannot be empty")
+
+        # Lấy lesson_id đầu tiên để tìm kiếm nội dung (có thể cần cải thiện sau)
+        first_lesson_id = request.cau_hinh_de[0].lesson_id
+        logger.info(f"Using first lesson_id for content search: {first_lesson_id}")
 
         # 2. Tìm kiếm nội dung bài học
         logger.info("Searching for lesson content...")
         lesson_content = await exam_content_service.get_lesson_content_for_exam(
-            lesson_id=request.lesson_id
+            lesson_id=first_lesson_id
         )
 
         if not lesson_content.get("success", False):
@@ -143,7 +254,7 @@ async def generate_exam_from_matrix(request: ExamMatrixRequest):
         else:
             docx_file_path = docx_result.get("filepath")
 
-        # 6. Trả về file DOCX trực tiếp
+        # 6. Upload lên Google Drive và trả về link online
         if not docx_result.get("success", False) or not docx_file_path:
             raise HTTPException(
                 status_code=500,
@@ -162,7 +273,106 @@ async def generate_exam_from_matrix(request: ExamMatrixRequest):
         filename = f"De_thi_{mon_hoc_safe}_{request.lop}_{exam_id_safe}.docx"
 
         logger.info(
-            f"Exam generation completed successfully. Generated {len(exam_result.get('questions', []))} questions. Returning file: {docx_file_path}"
+            f"Exam generation completed successfully. Generated {len(exam_result.get('questions', []))} questions."
+        )
+
+        # Tạo online document response
+        response = await _create_online_document_response(
+            docx_file_path=docx_file_path,
+            filename=filename,
+            exam_result=exam_result,
+            request=request,
+            search_quality=search_quality
+        )
+
+        return ExamOnlineResponse(**response)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error generating exam: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.post("/generate-exam-download")
+async def generate_exam_download(request: ExamMatrixRequest):
+    """
+    Tạo bài kiểm tra từ ma trận đề thi và trả về file DOCX download trực tiếp
+    (Endpoint backup cho trường hợp Google Drive không hoạt động)
+
+    Args:
+        request: Ma trận đề thi với lesson_id và cấu hình chi tiết
+
+    Returns:
+        FileResponse: File DOCX chứa đề thi và đáp án để download
+    """
+    try:
+        logger.info(f"Starting exam generation (download mode) for exam_id: {request.exam_id}")
+
+        # 1. Validate request
+        if not request.cau_hinh_de or len(request.cau_hinh_de) == 0:
+            raise HTTPException(status_code=400, detail="cau_hinh_de is required and cannot be empty")
+
+        # Lấy lesson_id đầu tiên để tìm kiếm nội dung
+        first_lesson_id = request.cau_hinh_de[0].lesson_id
+        logger.info(f"Using first lesson_id for content search: {first_lesson_id}")
+
+        # 2. Tìm kiếm nội dung bài học
+        logger.info("Searching for lesson content...")
+        lesson_content = await exam_content_service.get_lesson_content_for_exam(
+            lesson_id=first_lesson_id
+        )
+
+        if not lesson_content.get("success", False):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Lesson content not found: {lesson_content.get('error', 'Unknown error')}",
+            )
+
+        # 3. Kiểm tra chất lượng nội dung
+        search_quality = lesson_content.get("search_quality", 0.0)
+        if search_quality < 0.3:
+            logger.warning(f"Low search quality: {search_quality}")
+
+        # 4. Tạo câu hỏi từ ma trận
+        logger.info("Generating questions from matrix...")
+        exam_result = await exam_generation_service.generate_questions_from_matrix(
+            exam_request=request, lesson_content=lesson_content
+        )
+
+        if not exam_result.get("success", False):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to generate questions: {exam_result.get('error', 'Unknown error')}",
+            )
+
+        # 5. Tạo file DOCX
+        logger.info("Creating DOCX file...")
+        docx_result = await exam_docx_service.create_exam_docx(
+            exam_data=exam_result, exam_request=request.model_dump()
+        )
+
+        if not docx_result.get("success", False):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to create DOCX file: {docx_result.get('error', 'Unknown error')}",
+            )
+
+        docx_file_path = docx_result.get("filepath")
+
+        # Kiểm tra file có tồn tại không
+        if not docx_file_path or not os.path.exists(docx_file_path):
+            raise HTTPException(
+                status_code=500, detail="DOCX file was created but not found on disk"
+            )
+
+        # Tạo filename với thông tin đề thi (sanitize để tránh lỗi encoding)
+        mon_hoc_safe = _sanitize_filename(request.mon_hoc)
+        exam_id_safe = _sanitize_filename(str(exam_result.get("exam_id", "unknown")))
+        filename = f"De_thi_{mon_hoc_safe}_{request.lop}_{exam_id_safe}.docx"
+
+        logger.info(
+            f"Exam generation (download mode) completed successfully. Generated {len(exam_result.get('questions', []))} questions."
         )
 
         # Trả về file DOCX để download và tự động xóa sau khi gửi
@@ -172,16 +382,17 @@ async def generate_exam_from_matrix(request: ExamMatrixRequest):
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             headers={
                 "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
-                "X-Exam-Info": f"Generated from lesson {_sanitize_filename(request.lesson_id)}",
+                "X-Exam-Info": f"Generated from exam {_sanitize_filename(request.exam_id)}",
                 "X-Total-Questions": str(len(exam_result.get("questions", []))),
                 "X-Search-Quality": str(search_quality),
+                "X-Download-Mode": "true",
             },
         )
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error generating exam: {e}")
+        logger.error(f"Error generating exam (download mode): {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
@@ -193,7 +404,7 @@ async def generate_exam_test(request: ExamMatrixRequest):
     Endpoint này dùng để test chức năng tạo DOCX mà không cần lesson data thực
     """
     try:
-        logger.info(f"Starting test exam generation for lesson: {request.lesson_id}")
+        logger.info(f"Starting test exam generation for exam_id: {request.exam_id}")
 
         # Mock lesson content
         mock_lesson_content = {
@@ -201,7 +412,7 @@ async def generate_exam_test(request: ExamMatrixRequest):
             "search_quality": 0.8,
             "content": {
                 "lesson_info": {
-                    "lesson_id": request.lesson_id,
+                    "lesson_id": request.cau_hinh_de[0].lesson_id if request.cau_hinh_de else "test_lesson",
                     "title": "Mock Lesson for Testing",
                     "subject": request.mon_hoc,
                     "grade": request.lop,
@@ -269,7 +480,7 @@ async def generate_exam_test(request: ExamMatrixRequest):
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             headers={
                 "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
-                "X-Exam-Info": f"Test exam from lesson {_sanitize_filename(request.lesson_id)}",
+                "X-Exam-Info": f"Test exam from exam {_sanitize_filename(request.exam_id)}",
                 "X-Total-Questions": str(len(exam_result.get("questions", []))),
                 "X-Search-Quality": "0.8",
                 "X-Test-Mode": "true",

@@ -2,10 +2,12 @@
 Service để tạo câu hỏi thi sử dụng Gemini LLM
 """
 
+import asyncio
 import logging
 import json
 import re
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, cast
+from datetime import datetime
 from app.services.llm_service import LLMService
 from app.models.exam_models import (
     ExamMatrixRequest,
@@ -13,7 +15,6 @@ from app.models.exam_models import (
     ExamResponse,
     ExamStatistics,
     MucDoModel,
-    NoiDungModel,
     CauHinhDeModel,
 )
 from datetime import datetime
@@ -43,11 +44,12 @@ class ExamGenerationService:
         try:
             # Debug logging
             logger.info(f"=== EXAM GENERATION DEBUG ===")
-            logger.info(f"Lesson ID: {exam_request.lesson_id}")
+            logger.info(f"Exam ID: {exam_request.exam_id}")
+            logger.info(f"School: {exam_request.ten_truong}")
             logger.info(f"Subject: {exam_request.mon_hoc}")
             logger.info(f"Grade: {exam_request.lop}")
             logger.info(f"Total questions requested: {exam_request.tong_so_cau}")
-            logger.info(f"Number of cau_hinh_de: {len(exam_request.cau_hinh_de)}")
+            logger.info(f"Number of lessons: {len(exam_request.cau_hinh_de)}")
 
             if not self.llm_service.model:
                 logger.error(
@@ -58,26 +60,26 @@ class ExamGenerationService:
             logger.info(f"LLM service is available: {self.llm_service.is_available()}")
             logger.info(f"Lesson content keys: {list(lesson_content.keys())}")
 
-            # Tạo câu hỏi cho từng bài trong cấu hình đề
+            # Tạo câu hỏi cho từng lesson trong cấu hình đề
             all_questions = []
             question_counter = 1
 
             for i, cau_hinh in enumerate(exam_request.cau_hinh_de):
                 logger.info(
-                    f"Processing cau_hinh {i+1}/{len(exam_request.cau_hinh_de)}: {cau_hinh.bai}"
+                    f"Processing cau_hinh {i+1}/{len(exam_request.cau_hinh_de)}: lesson_id {cau_hinh.lesson_id}"
                 )
                 logger.info(
-                    f"Number of noi_dung in this cau_hinh: {len(cau_hinh.noi_dung)}"
+                    f"Yeu cau can dat: {cau_hinh.yeu_cau_can_dat}"
                 )
 
-                bai_questions = await self._generate_questions_for_bai(
+                lesson_questions = await self._generate_questions_for_lesson(
                     cau_hinh, lesson_content, question_counter
                 )
                 logger.info(
-                    f"Generated {len(bai_questions)} questions for bai: {cau_hinh.bai}"
+                    f"Generated {len(lesson_questions)} questions for lesson_id: {cau_hinh.lesson_id}"
                 )
-                all_questions.extend(bai_questions)
-                question_counter += len(bai_questions)
+                all_questions.extend(lesson_questions)
+                question_counter += len(lesson_questions)
 
             logger.info(f"Total questions generated: {len(all_questions)}")
 
@@ -89,13 +91,27 @@ class ExamGenerationService:
             # Tạo thống kê
             statistics = self._create_exam_statistics(all_questions, exam_request)
 
-            # Tạo exam ID an toàn (không có ký tự đặc biệt)
-            lesson_id_safe = self._sanitize_id(exam_request.lesson_id)
-            exam_id = (
-                f"exam_{lesson_id_safe}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            )
+            # Sử dụng exam_id từ request
+            exam_id = exam_request.exam_id
 
             logger.info(f"=== EXAM GENERATION COMPLETED ===")
+            logger.info(f"FINAL SUMMARY:")
+            logger.info(f"  - Total questions requested: {exam_request.tong_so_cau}")
+            logger.info(f"  - Total questions generated: {len(all_questions)}")
+            logger.info(f"  - Success rate: {len(all_questions)/exam_request.tong_so_cau*100:.1f}%")
+
+            # Kiểm tra nếu thiếu câu hỏi
+            if len(all_questions) < exam_request.tong_so_cau:
+                missing_count = exam_request.tong_so_cau - len(all_questions)
+                logger.warning(f"MISSING {missing_count} QUESTIONS!")
+
+                # Phân tích thiếu ở mức độ nào
+                for cau_hinh in exam_request.cau_hinh_de:
+                    for muc_do in cau_hinh.muc_do:
+                        actual_count = sum(1 for q in all_questions if q.get('muc_do') == muc_do.loai)
+                        if actual_count < muc_do.so_cau:
+                            logger.warning(f"  - {muc_do.loai}: {actual_count}/{muc_do.so_cau} questions")
+
             return {
                 "success": True,
                 "exam_id": exam_id,
@@ -108,61 +124,69 @@ class ExamGenerationService:
             logger.error(f"Error generating questions from matrix: {e}")
             return {"success": False, "error": str(e)}
 
-    async def _generate_questions_for_bai(
+    async def _generate_questions_for_lesson(
         self,
         cau_hinh: CauHinhDeModel,
         lesson_content: Dict[str, Any],
         start_counter: int,
     ) -> List[Dict[str, Any]]:
-        """Tạo câu hỏi cho một bài cụ thể"""
+        """Tạo câu hỏi cho một lesson cụ thể"""
         try:
-            logger.info(f"--- Generating questions for bai: {cau_hinh.bai} ---")
-            bai_questions = []
+            logger.info(f"--- Generating questions for lesson_id: {cau_hinh.lesson_id} ---")
+            lesson_questions = []
             current_counter = start_counter
 
-            for i, noi_dung in enumerate(cau_hinh.noi_dung):
+            # Tạo câu hỏi cho từng mức độ trong lesson
+            for i, muc_do in enumerate(cau_hinh.muc_do):
                 logger.info(
-                    f"Processing noi_dung {i+1}/{len(cau_hinh.noi_dung)}: {noi_dung.ten_noi_dung}"
+                    f"Processing muc_do {i+1}/{len(cau_hinh.muc_do)}: {muc_do.loai} ({muc_do.so_cau} questions)"
                 )
-                logger.info(
-                    f"Number of muc_do in this noi_dung: {len(noi_dung.muc_do)}"
-                )
+                logger.info(f"Question types for this muc_do: {muc_do.loai_cau}")
 
-                for j, muc_do in enumerate(noi_dung.muc_do):
+                # Chia đều số câu hỏi giữa các loại câu
+                total_question_types = len(muc_do.loai_cau)
+                questions_per_type = muc_do.so_cau // total_question_types
+                remaining_questions = muc_do.so_cau % total_question_types
+
+                logger.info(f"Distributing {muc_do.so_cau} questions across {total_question_types} types: {questions_per_type} per type, {remaining_questions} remaining")
+
+                # Tạo câu hỏi cho từng loại câu trong mức độ này
+                for k, loai_cau in enumerate(muc_do.loai_cau):
+                    # Tính số câu hỏi cho loại câu này
+                    questions_for_this_type = questions_per_type
+                    if k < remaining_questions:  # Phân phối câu hỏi dư cho các loại đầu tiên
+                        questions_for_this_type += 1
+
                     logger.info(
-                        f"Processing muc_do {j+1}/{len(noi_dung.muc_do)}: {muc_do.loai} ({muc_do.so_cau} questions)"
+                        f"Generating {questions_for_this_type} {loai_cau} questions for {muc_do.loai} level..."
                     )
-                    logger.info(f"Question types for this muc_do: {muc_do.loai_cau}")
 
-                    # Tạo câu hỏi cho từng loại câu trong mức độ này
-                    for k, loai_cau in enumerate(muc_do.loai_cau):
-                        logger.info(
-                            f"Generating {loai_cau} questions for {muc_do.loai} level..."
-                        )
-                        questions = await self._generate_questions_by_type(
-                            noi_dung,
-                            muc_do,
-                            loai_cau,
-                            lesson_content,
-                            cau_hinh.bai,
-                            current_counter,
-                        )
-                        logger.info(f"Generated {len(questions)} {loai_cau} questions")
-                        bai_questions.extend(questions)
-                        current_counter += len(questions)
+                    # Chia nhỏ request nếu số câu lớn
+                    questions = await self._generate_questions_with_batching_for_lesson(
+                        cau_hinh,
+                        muc_do.loai,
+                        questions_for_this_type,
+                        loai_cau,
+                        lesson_content,
+                        current_counter,
+                    )
+
+                    logger.info(f"Generated {len(questions)} {loai_cau} questions")
+                    lesson_questions.extend(questions)
+                    current_counter += len(questions)
 
             logger.info(
-                f"Total questions generated for bai '{cau_hinh.bai}': {len(bai_questions)}"
+                f"Total questions generated for lesson_id '{cau_hinh.lesson_id}': {len(lesson_questions)}"
             )
-            return bai_questions
+            return lesson_questions
 
         except Exception as e:
-            logger.error(f"Error generating questions for bai: {e}")
+            logger.error(f"Error generating questions for lesson: {e}")
             return []
 
     async def _generate_questions_by_type(
         self,
-        noi_dung: NoiDungModel,
+        noi_dung: Dict[str, Any],
         muc_do: MucDoModel,
         loai_cau: str,
         lesson_content: Dict[str, Any],
@@ -174,7 +198,7 @@ class ExamGenerationService:
             logger.info(
                 f"*** Generating {loai_cau} questions for {muc_do.loai} level ***"
             )
-            logger.info(f"Content topic: {noi_dung.ten_noi_dung}")
+            logger.info(f"Content topic: {noi_dung.get('ten_noi_dung', 'Unknown')}")
             logger.info(f"Number of questions to generate: {muc_do.so_cau}")
 
             # Kiểm tra LLM service
@@ -244,11 +268,17 @@ class ExamGenerationService:
                     "dap_an": dap_an,
                     "giai_thich": q_data.get("giai_thich", ""),
                     "bai_hoc": bai_name,
-                    "noi_dung_kien_thuc": noi_dung.ten_noi_dung,
+                    "noi_dung_kien_thuc": noi_dung.get('ten_noi_dung', 'Unknown'),
                 }
                 formatted_questions.append(question)
                 logger.debug(
                     f"Formatted question {i+1}: {q_data.get('cau_hoi', '')[:100]}..."
+                )
+
+            # Kiểm tra số lượng câu hỏi được tạo
+            if len(formatted_questions) < muc_do.so_cau:
+                logger.warning(
+                    f"Generated only {len(formatted_questions)} questions, expected {muc_do.so_cau}"
                 )
 
             logger.info(f"Successfully formatted {len(formatted_questions)} questions")
@@ -257,12 +287,12 @@ class ExamGenerationService:
         except Exception as e:
             logger.error(f"Error generating questions by type: {e}")
             logger.error(f"Error details: {type(e).__name__}: {str(e)}")
-            # Ném lại exception thay vì trả về danh sách rỗng
-            raise e
+            # Trả về danh sách rỗng thay vì raise exception để không crash toàn bộ quá trình
+            return []
 
     def _create_question_prompt(
         self,
-        noi_dung: NoiDungModel,
+        noi_dung: Dict[str, Any],
         muc_do: MucDoModel,
         loai_cau: str,
         lesson_content: Dict[str, Any],
@@ -281,8 +311,8 @@ Bạn là một chuyên gia giáo dục và ra đề thi chuyên nghiệp. Hãy 
 THÔNG TIN BÀI HỌC:
 - Bài học: {bai_name}
 - Chương: {lesson_info.get('chapter_title', '')}
-- Nội dung kiến thức: {noi_dung.ten_noi_dung}
-- Yêu cầu cần đạt: {noi_dung.yeu_cau_can_dat}
+- Nội dung kiến thức: {noi_dung.get('ten_noi_dung', 'Unknown')}
+- Yêu cầu cần đạt: {noi_dung.get('yeu_cau_can_dat', 'Unknown')}
 
 NỘI DUNG BÀI HỌC:
 {main_content[:2000]}...
@@ -612,6 +642,244 @@ HƯỚNG DẪN TẠO CÂU TỰ LUẬN:
         except Exception as e:
             logger.error(f"Error extracting correct answer: {e}")
             return ""
+
+    async def _generate_questions_with_batching(
+        self,
+        noi_dung: Dict[str, Any],
+        muc_do_loai: str,
+        total_questions: int,
+        loai_cau: str,
+        lesson_content: Dict[str, Any],
+        bai_name: str,
+        start_counter: int,
+    ) -> List[Dict[str, Any]]:
+        """Tạo câu hỏi với cơ chế chia nhỏ batch để tránh giới hạn API"""
+        try:
+            logger.info(f"Starting batched question generation: {total_questions} questions")
+
+            # Cấu hình batch size
+            max_questions_per_batch = 8  # Giảm xuống 8 để tránh giới hạn API
+            all_questions = []
+
+            if total_questions <= max_questions_per_batch:
+                # Tạo một lần nếu số câu ít
+                temp_muc_do = MucDoModel(
+                    loai=cast(Any, muc_do_loai),
+                    so_cau=total_questions,
+                    loai_cau=cast(Any, [loai_cau])
+                )
+
+                questions = await self._generate_questions_by_type(
+                    noi_dung, temp_muc_do, loai_cau, lesson_content, bai_name, start_counter
+                )
+                all_questions.extend(questions)
+            else:
+                # Chia thành nhiều batch
+                remaining_questions = total_questions
+                current_counter = start_counter
+                batch_number = 1
+
+                while remaining_questions > 0:
+                    batch_size = min(remaining_questions, max_questions_per_batch)
+                    logger.info(f"Processing batch {batch_number}: {batch_size} questions")
+
+                    # Tạo mức độ tạm thời cho batch này
+                    temp_muc_do = MucDoModel(
+                        loai=cast(Any, muc_do_loai),
+                        so_cau=batch_size,
+                        loai_cau=cast(Any, [loai_cau])
+                    )
+
+                    try:
+                        batch_questions = await self._generate_questions_by_type(
+                            noi_dung, temp_muc_do, loai_cau, lesson_content, bai_name, current_counter
+                        )
+
+                        if batch_questions:
+                            all_questions.extend(batch_questions)
+                            current_counter += len(batch_questions)
+                            remaining_questions -= len(batch_questions)
+                            logger.info(f"Batch {batch_number} completed: {len(batch_questions)} questions generated")
+                        else:
+                            logger.warning(f"Batch {batch_number} failed: no questions generated")
+                            remaining_questions -= batch_size
+
+                    except Exception as batch_error:
+                        logger.error(f"Error in batch {batch_number}: {batch_error}")
+                        remaining_questions -= batch_size
+
+                    batch_number += 1
+
+            logger.info(f"Batched generation completed: {len(all_questions)}/{total_questions} questions")
+
+            # Nếu thiếu câu hỏi, thử tạo thêm
+            if len(all_questions) < total_questions:
+                missing_count = total_questions - len(all_questions)
+                logger.warning(f"Missing {missing_count} questions, attempting to generate more...")
+
+                if missing_count <= 5:  # Chỉ thử nếu thiếu ít câu
+                    temp_muc_do = MucDoModel(
+                        loai=cast(Any, muc_do_loai),
+                        so_cau=missing_count,
+                        loai_cau=cast(Any, [loai_cau])
+                    )
+                    try:
+                        missing_questions = await self._generate_questions_by_type(
+                            noi_dung, temp_muc_do, loai_cau, lesson_content,
+                            bai_name, start_counter + len(all_questions)
+                        )
+                        if missing_questions:
+                            all_questions.extend(missing_questions)
+                            logger.info(f"Successfully generated {len(missing_questions)} missing questions")
+                    except Exception as e:
+                        logger.error(f"Failed to generate missing questions: {e}")
+
+            return all_questions
+
+        except Exception as e:
+            logger.error(f"Error in batched question generation: {e}")
+            return []
+
+    async def _generate_questions_with_batching_for_lesson(
+        self,
+        cau_hinh: CauHinhDeModel,
+        muc_do_loai: str,
+        total_questions: int,
+        loai_cau: str,
+        lesson_content: Dict[str, Any],
+        start_counter: int,
+    ) -> List[Dict[str, Any]]:
+        """Tạo câu hỏi với cơ chế chia nhỏ batch cho lesson format mới"""
+        try:
+            logger.info(f"Starting batched question generation for lesson: {total_questions} questions")
+
+            # Cấu hình batch size
+            max_questions_per_batch = 8
+            all_questions = []
+
+            if total_questions <= max_questions_per_batch:
+                # Tạo một lần nếu số câu ít
+                temp_muc_do = MucDoModel(
+                    loai=cast(Any, muc_do_loai),
+                    so_cau=total_questions,
+                    loai_cau=cast(Any, [loai_cau])
+                )
+
+                questions = await self._generate_questions_by_type_for_lesson(
+                    cau_hinh, temp_muc_do, loai_cau, lesson_content, start_counter
+                )
+                all_questions.extend(questions)
+            else:
+                # Chia thành nhiều batch
+                remaining_questions = total_questions
+                current_counter = start_counter
+                batch_number = 1
+
+                while remaining_questions > 0:
+                    batch_size = min(remaining_questions, max_questions_per_batch)
+                    logger.info(f"Processing batch {batch_number}: {batch_size} questions")
+
+                    temp_muc_do = MucDoModel(
+                        loai=cast(Any, muc_do_loai),
+                        so_cau=batch_size,
+                        loai_cau=cast(Any, [loai_cau])
+                    )
+
+                    try:
+                        batch_questions = await self._generate_questions_by_type_for_lesson(
+                            cau_hinh, temp_muc_do, loai_cau, lesson_content, current_counter
+                        )
+
+                        if batch_questions:
+                            all_questions.extend(batch_questions)
+                            current_counter += len(batch_questions)
+                            remaining_questions -= len(batch_questions)
+                        else:
+                            logger.warning(f"No questions generated for batch {batch_number}")
+                            remaining_questions -= batch_size
+
+                        batch_number += 1
+
+                        if remaining_questions > 0:
+                            await asyncio.sleep(1)
+
+                    except Exception as e:
+                        logger.error(f"Error in batch {batch_number}: {e}")
+                        remaining_questions -= batch_size
+                        batch_number += 1
+
+            logger.info(f"Total batched questions generated for lesson: {len(all_questions)}")
+            return all_questions
+
+        except Exception as e:
+            logger.error(f"Error in batched question generation for lesson: {e}")
+            return []
+
+    async def _generate_questions_by_type_for_lesson(
+        self,
+        cau_hinh: CauHinhDeModel,
+        muc_do: MucDoModel,
+        loai_cau: str,
+        lesson_content: Dict[str, Any],
+        start_counter: int,
+    ) -> List[Dict[str, Any]]:
+        """Tạo câu hỏi theo loại cho lesson format mới"""
+        try:
+            logger.info(f"Generating {muc_do.so_cau} {loai_cau} questions for lesson {cau_hinh.lesson_id}")
+
+            # Tạo prompt cho LLM sử dụng method có sẵn
+            # Tạo fake noi_dung từ cau_hinh
+            fake_noi_dung = {
+                "ten_noi_dung": f"Lesson {cau_hinh.lesson_id}",
+                "yeu_cau_can_dat": cau_hinh.yeu_cau_can_dat,
+                "muc_do": [muc_do]
+            }
+
+            prompt = self._create_question_prompt(
+                fake_noi_dung, muc_do, loai_cau, lesson_content, f"Lesson {cau_hinh.lesson_id}"
+            )
+
+            # Gọi LLM để tạo câu hỏi
+            response = await self.llm_service.format_document_text(prompt, "exam_questions")
+
+            if not response or not response.get("success", False):
+                logger.error(f"LLM failed to generate questions: {response}")
+                return []
+
+            # Parse response và format câu hỏi
+            questions_text = response.get("formatted_text", "")
+            if not questions_text:
+                logger.error("Empty response from LLM")
+                return []
+
+            # Sử dụng method có sẵn để parse câu hỏi
+            parsed_questions = self._parse_questions_response(questions_text)
+
+            # Format câu hỏi với metadata
+            formatted_questions = []
+            for i, q_data in enumerate(parsed_questions):
+                if not q_data.get("cau_hoi") or not q_data.get("dap_an"):
+                    continue
+
+                question = {
+                    "so_thu_tu": start_counter + i,
+                    "cau_hoi": q_data["cau_hoi"],
+                    "lua_chon": q_data.get("lua_chon", []),
+                    "dap_an": q_data["dap_an"],
+                    "giai_thich": q_data.get("giai_thich", ""),
+                    "bai_hoc": f"Lesson {cau_hinh.lesson_id}",
+                    "noi_dung_kien_thuc": cau_hinh.yeu_cau_can_dat,
+                    "muc_do": muc_do.loai,
+                    "loai_cau": loai_cau,
+                }
+                formatted_questions.append(question)
+
+            logger.info(f"Successfully generated {len(formatted_questions)} questions for lesson {cau_hinh.lesson_id}")
+            return formatted_questions
+
+        except Exception as e:
+            logger.error(f"Error generating questions by type for lesson: {e}")
+            return []
 
 
 # Tạo instance global
