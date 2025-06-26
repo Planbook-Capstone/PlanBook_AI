@@ -1,34 +1,59 @@
 """
-LLM Service để cấu trúc lại text bằng Gemini API
+LLM Service để cấu trúc lại text bằng Gemini API hoặc OpenRouter API
 """
 import logging
 from typing import Dict, Any, Optional
 import google.generativeai as genai
 from app.core.config import settings
+from app.services.openrouter_service import OpenRouterService
 
 logger = logging.getLogger(__name__)
 
 class LLMService:
     """
-    Service sử dụng Gemini API để cấu trúc lại text
+    Service sử dụng Gemini API hoặc OpenRouter API để cấu trúc lại text
     """
-    
+
     def __init__(self):
         self.model = None
-        self._init_gemini()
+        self.openrouter_service = None
+        self.use_openrouter = False
+        self._init_llm_service()
     
+    def _init_llm_service(self):
+        """Initialize LLM service - prioritize OpenRouter, fallback to Gemini"""
+        try:
+            # Ưu tiên sử dụng OpenRouter nếu có API key
+            if settings.OPENROUTER_API_KEY:
+                logger.info("Initializing OpenRouter service...")
+                self.openrouter_service = OpenRouterService()
+                if self.openrouter_service.is_available():
+                    self.use_openrouter = True
+                    logger.info("OpenRouter service initialized successfully")
+                    return
+                else:
+                    logger.warning("OpenRouter service not available, falling back to Gemini")
+
+            # Fallback to Gemini API
+            if settings.GEMINI_API_KEY:
+                logger.info("Initializing Gemini API...")
+                self._init_gemini()
+            else:
+                logger.warning("No API keys available. LLM features will be disabled.")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize LLM service: {e}")
+            self.model = None
+            self.openrouter_service = None
+
     def _init_gemini(self):
         """Initialize Gemini API"""
         try:
-            if not settings.GEMINI_API_KEY:
-                logger.warning("GEMINI_API_KEY not set. LLM features will be disabled.")
-                return
-            
             genai.configure(api_key=settings.GEMINI_API_KEY)
             # Use the latest available model
             self.model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
             logger.info("Gemini API initialized with gemini-1.5-flash-latest")
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize Gemini API: {e}")
             self.model = None
@@ -44,13 +69,13 @@ class LLMService:
             Dict chứa text đã được cấu trúc lại
         """
         try:
-            if not self.model:
+            if not self.is_available():
                 return {
                     "success": False,
-                    "error": "LLM service not available. Please set GEMINI_API_KEY.",
+                    "error": "LLM service not available. Please set API keys.",
                     "formatted_text": raw_text
                 }
-            
+
             prompt = f"""
 Bạn là một chuyên gia HR và CV formatting chuyên nghiệp. Hãy cấu trúc lại CV sau thành format CHUẨN QUỐC TẾ, đẹp mắt và chuyên nghiệp với LAYOUT ĐẸP.
 
@@ -99,16 +124,22 @@ Text CV cần format:
 
 Hãy trả về CV với LAYOUT ĐẸP, không dài 1 hàng, format chuyên nghiệp:
 """
-            
-            response = self.model.generate_content(prompt)
-            formatted_text = response.text
-            
-            return {
-                "success": True,
-                "formatted_text": formatted_text,
-                "original_length": len(raw_text),
-                "formatted_length": len(formatted_text)
-            }
+
+            result = await self._generate_content(prompt)
+
+            if result["success"]:
+                return {
+                    "success": True,
+                    "formatted_text": result["text"],
+                    "original_length": len(raw_text),
+                    "formatted_length": len(result["text"])
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": result["error"],
+                    "formatted_text": raw_text
+                }
             
         except Exception as e:
             logger.error(f"Error formatting CV text: {e}")
@@ -130,16 +161,20 @@ Hãy trả về CV với LAYOUT ĐẸP, không dài 1 hàng, format chuyên nghi
             Dict chứa text đã được cấu trúc lại
         """
         try:
-            if not self.model:
+            if not self.is_available():
                 return {
                     "success": False,
-                    "error": "LLM service not available. Please set GEMINI_API_KEY.",
+                    "error": "LLM service not available. Please set API keys.",
                     "formatted_text": raw_text
                 }
             
             # Tùy chỉnh prompt theo loại tài liệu
             if document_type.lower() == "cv":
                 return await self.format_cv_text(raw_text)
+
+            # Xử lý exam questions
+            if document_type.lower() == "exam_questions":
+                return await self.generate_exam_questions(raw_text)
 
             # Nếu là general nhưng có vẻ như CV, format như CV
             if document_type.lower() == "general" and self._is_cv_content(raw_text):
@@ -180,17 +215,23 @@ Text cần format:
 
 Hãy trả về tài liệu đã được format đẹp:
 """
-            
-            response = self.model.generate_content(prompt)
-            formatted_text = response.text
-            
-            return {
-                "success": True,
-                "formatted_text": formatted_text,
-                "original_length": len(raw_text),
-                "formatted_length": len(formatted_text),
-                "document_type": document_type
-            }
+
+            result = await self._generate_content(prompt)
+
+            if result["success"]:
+                return {
+                    "success": True,
+                    "formatted_text": result["text"],
+                    "original_length": len(raw_text),
+                    "formatted_length": len(result["text"]),
+                    "document_type": document_type
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": result["error"],
+                    "formatted_text": raw_text
+                }
             
         except Exception as e:
             logger.error(f"Error formatting document text: {e}")
@@ -220,7 +261,108 @@ Hãy trả về tài liệu đã được format đẹp:
 
     def is_available(self) -> bool:
         """Check if LLM service is available"""
+        if self.use_openrouter:
+            return self.openrouter_service is not None and self.openrouter_service.is_available()
         return self.model is not None
+
+    async def _generate_content(self, prompt: str) -> Dict[str, Any]:
+        """
+        Helper method để gọi LLM (OpenRouter hoặc Gemini)
+
+        Args:
+            prompt: Text prompt để gửi tới model
+
+        Returns:
+            Dict chứa response từ LLM
+        """
+        try:
+            if self.use_openrouter and self.openrouter_service:
+                # Sử dụng OpenRouter
+                result = await self.openrouter_service.generate_content(prompt)
+                if result["success"]:
+                    return {
+                        "success": True,
+                        "text": result["text"],
+                        "error": None
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "text": "",
+                        "error": result["error"]
+                    }
+
+            elif self.model:
+                # Sử dụng Gemini
+                response = self.model.generate_content(prompt)
+                if response and response.text:
+                    return {
+                        "success": True,
+                        "text": response.text,
+                        "error": None
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "text": "",
+                        "error": "No response from Gemini API"
+                    }
+            else:
+                return {
+                    "success": False,
+                    "text": "",
+                    "error": "No LLM service available"
+                }
+
+        except Exception as e:
+            logger.error(f"Error in _generate_content: {e}")
+            return {
+                "success": False,
+                "text": "",
+                "error": str(e)
+            }
+
+    async def generate_exam_questions(self, prompt: str) -> Dict[str, Any]:
+        """
+        Tạo câu hỏi thi trắc nghiệm bằng LLM API
+
+        Args:
+            prompt: Prompt để tạo câu hỏi
+
+        Returns:
+            Dict chứa response từ LLM
+        """
+        try:
+            if not self.is_available():
+                return {
+                    "success": False,
+                    "error": "LLM service not available. Please set API keys.",
+                    "formatted_text": ""
+                }
+
+            # Gọi LLM API để tạo câu hỏi
+            result = await self._generate_content(prompt)
+
+            if result["success"]:
+                return {
+                    "success": True,
+                    "formatted_text": result["text"],
+                    "error": None
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": result["error"],
+                    "formatted_text": ""
+                }
+
+        except Exception as e:
+            logger.error(f"Error generating exam questions: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "formatted_text": ""
+            }
 
 # Global instance
 llm_service = LLMService()

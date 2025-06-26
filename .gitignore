@@ -75,3 +75,4 @@ mongodb_data/
 
 # API Keys (backup)
 .env.example.backup
+google-credentials.json

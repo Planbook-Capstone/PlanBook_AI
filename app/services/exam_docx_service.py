@@ -60,7 +60,7 @@ class ExamDocxService:
             # Tạo câu hỏi
             self._create_questions_section(doc, exam_data.get("questions", []))
 
-            # Tạo đáp án theo cấu trúc THPT (trang riêng)
+            # Tạo đáp án theo cấu trúc THPT (cùng trang với đề thi)
             self._create_thpt_answer_table(doc, exam_data.get("questions", []))
 
             # Lưu file với filename an toàn (không có ký tự đặc biệt) trong thư mục tạm thời
@@ -128,27 +128,11 @@ class ExamDocxService:
                 section.left_margin = Inches(0.8)
                 section.right_margin = Inches(0.8)
 
-                # Thêm số trang vào footer
-                footer = section.footer
-                footer_para = footer.paragraphs[0]
-                footer_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-
-                # Thêm text và page number field
-                footer_para.add_run("Trang ")
-
-                # Thêm page number field bằng cách đơn giản
-                from docx.oxml.shared import qn
-                from docx.oxml import parse_xml
-
-                # Tạo page number field
-                page_num_run = footer_para.add_run()
-                fldChar1 = parse_xml('<w:fldChar w:fldCharType="begin" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>')
-                instrText = parse_xml('<w:instrText xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"> PAGE </w:instrText>')
-                fldChar2 = parse_xml('<w:fldChar w:fldCharType="end" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>')
-
-                page_num_run._element.append(fldChar1)
-                page_num_run._element.append(instrText)
-                page_num_run._element.append(fldChar2)
+                # Bỏ số trang theo yêu cầu
+                # footer = section.footer
+                # footer_para = footer.paragraphs[0]
+                # footer_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                pass
 
             # Thiết lập font mặc định
             style = doc.styles["Normal"]
@@ -179,7 +163,7 @@ class ExamDocxService:
             left_para.add_run("BỘ GIÁO DỤC VÀ ĐÀO TạO\n").bold = True
             school_name = exam_request.get('ten_truong', 'TRƯỜNG THPT ABC')
             left_para.add_run(f"{school_name}\n").bold = True
-            left_para.add_run("(Đề có ... trang)")
+            # Bỏ text "(Đề có ... trang)" theo yêu cầu
 
             # Cột phải - Thông tin đề thi
             right_cell = header_table.cell(0, 1)
@@ -457,10 +441,14 @@ class ExamDocxService:
             logger.error(f"Error creating essay answer space: {e}")
 
     def _create_thpt_answer_table(self, doc: Document, questions: List[Dict[str, Any]]):
-        """Tạo bảng đáp án theo cấu trúc THPT chuẩn cho 60 câu"""
+        """Tạo bảng đáp án theo cấu trúc THPT chuẩn - động theo số câu thực tế"""
         try:
-            # Ngắt trang
-            doc.add_page_break()
+            # Bỏ ngắt trang - đáp án cùng trang với đề thi
+            # doc.add_page_break()
+
+            # Thêm khoảng trống trước đáp án
+            doc.add_paragraph()
+            doc.add_paragraph()
 
             # Tiêu đề đáp án
             title_para = doc.add_paragraph()
@@ -492,10 +480,13 @@ class ExamDocxService:
             logger.error(f"Error creating THPT answer table: {e}")
 
     def _create_tn_answer_section(self, doc: Document, tn_questions: List[Dict[str, Any]]):
-        """Tạo phần đáp án trắc nghiệm nhiều phương án lựa chọn cho 60 câu"""
+        """Tạo phần đáp án trắc nghiệm nhiều phương án lựa chọn - động theo số câu thực tế"""
         try:
-            # Luôn tạo bảng cho 60 câu (chuẩn THPT)
-            total_questions = 60
+            # Số câu thực tế (không cố định 60)
+            total_questions = len(tn_questions)
+
+            if total_questions == 0:
+                return
 
             # Tiêu đề phần
             section1_para = doc.add_paragraph()
@@ -508,11 +499,12 @@ class ExamDocxService:
 
             doc.add_paragraph()  # Dòng trống
 
-            # Tạo bảng đáp án với format cải thiện: 7 hàng x 10 cột
+            # Tính toán số hàng và cột dựa trên số câu thực tế
             cols_per_row = 10  # 10 cột (1 cột label + 9 cột câu hỏi)
-            num_rows = 7  # 7 hàng để chứa 60 câu (7 x 9 = 63 > 60)
+            questions_per_row = cols_per_row - 1  # 9 câu hỏi mỗi hàng
+            num_rows = (total_questions + questions_per_row - 1) // questions_per_row  # Làm tròn lên
 
-            # Tạo bảng với 14 hàng (7 hàng câu + 7 hàng đáp án)
+            # Tạo bảng với số hàng động (mỗi hàng có 2 dòng: câu + đáp án)
             table = doc.add_table(rows=num_rows * 2, cols=cols_per_row)
             table.style = 'Table Grid'
 
@@ -535,12 +527,12 @@ class ExamDocxService:
                 table.cell(answer_row, 0).paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
                 table.cell(answer_row, 0).paragraphs[0].runs[0].bold = True
 
-                # Điền số câu và đáp án cho 9 cột (bỏ cột đầu)
+                # Điền số câu và đáp án cho các cột (bỏ cột đầu)
                 for col_idx in range(1, cols_per_row):
-                    # Tính chỉ số câu hỏi: mỗi hàng có 9 câu (bỏ cột đầu)
-                    question_idx = row_idx * 9 + col_idx - 1
+                    # Tính chỉ số câu hỏi: mỗi hàng có questions_per_row câu (bỏ cột đầu)
+                    question_idx = row_idx * questions_per_row + col_idx - 1
 
-                    # Luôn tạo ô cho 60 câu đầu tiên
+                    # Chỉ tạo ô cho số câu thực tế
                     if question_idx < total_questions:
                         # Số câu
                         table.cell(header_row, col_idx).text = str(question_idx + 1)
@@ -548,25 +540,20 @@ class ExamDocxService:
                         table.cell(header_row, col_idx).paragraphs[0].runs[0].bold = True
 
                         # Đáp án
-                        if question_idx < len(tn_questions):
-                            # Có câu hỏi thực tế
-                            dap_an = tn_questions[question_idx].get("dap_an", {})
-                            correct_answer = dap_an.get("dung", "")
-                            if not correct_answer:
-                                giai_thich = tn_questions[question_idx].get("giai_thich", "")
-                                correct_answer = self._extract_correct_answer_from_explanation(giai_thich, dap_an)
-                            if not correct_answer:
-                                correct_answer = "A"  # Default nếu không tìm được
-                        else:
-                            # Câu hỏi thiếu - để trống
-                            correct_answer = ""
+                        dap_an = tn_questions[question_idx].get("dap_an", {})
+                        correct_answer = dap_an.get("dung", "")
+                        if not correct_answer:
+                            giai_thich = tn_questions[question_idx].get("giai_thich", "")
+                            correct_answer = self._extract_correct_answer_from_explanation(giai_thich, dap_an)
+                        if not correct_answer:
+                            correct_answer = "A"  # Default nếu không tìm được
 
                         table.cell(answer_row, col_idx).text = correct_answer
                         table.cell(answer_row, col_idx).paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
                         if correct_answer:
                             table.cell(answer_row, col_idx).paragraphs[0].runs[0].bold = True
                     else:
-                        # Ô ngoài 60 câu - để trống hoàn toàn
+                        # Ô ngoài số câu thực tế - để trống
                         table.cell(header_row, col_idx).text = ""
                         table.cell(answer_row, col_idx).text = ""
 
