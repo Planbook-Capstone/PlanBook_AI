@@ -9,11 +9,9 @@ import re
 from typing import Dict, List, Any, Optional, cast
 from datetime import datetime
 from app.services.llm_service import LLMService
+from app.core.logging_config import safe_log_text
 from app.models.exam_models import (
     ExamMatrixRequest,
-    CauHoiModel,
-    ExamResponse,
-    ExamStatistics,
     MucDoModel,
     CauHinhDeModel,
 )
@@ -45,8 +43,11 @@ class ExamGenerationService:
             # Debug logging
             logger.info(f"=== EXAM GENERATION DEBUG ===")
             logger.info(f"Exam ID: {exam_request.exam_id}")
-            logger.info(f"School: {exam_request.ten_truong}")
-            logger.info(f"Subject: {exam_request.mon_hoc}")
+            # Encode Vietnamese text safely for logging
+            school_safe = safe_log_text(exam_request.ten_truong) if exam_request.ten_truong else "N/A"
+            subject_safe = safe_log_text(exam_request.mon_hoc) if exam_request.mon_hoc else "N/A"
+            logger.info(f"School: {school_safe}")
+            logger.info(f"Subject: {subject_safe}")
             logger.info(f"Grade: {exam_request.lop}")
             logger.info(f"Total questions requested: {exam_request.tong_so_cau}")
             logger.info(f"Number of lessons: {len(exam_request.cau_hinh_de)}")
@@ -110,7 +111,9 @@ class ExamGenerationService:
                     for muc_do in cau_hinh.muc_do:
                         actual_count = sum(1 for q in all_questions if q.get('muc_do') == muc_do.loai)
                         if actual_count < muc_do.so_cau:
-                            logger.warning(f"  - {muc_do.loai}: {actual_count}/{muc_do.so_cau} questions")
+                            # Sử dụng ASCII-safe logging để tránh encoding error
+                            level_safe = safe_log_text(muc_do.loai)
+                            logger.warning(f"  - {level_safe}: {actual_count}/{muc_do.so_cau} questions")
 
             return {
                 "success": True,
@@ -124,6 +127,46 @@ class ExamGenerationService:
             logger.error(f"Error generating questions from matrix: {e}")
             return {"success": False, "error": str(e)}
 
+    def _get_content_for_lesson(self, lesson_content: Dict[str, Any], lesson_id: str) -> Dict[str, Any]:
+        """
+        Lấy nội dung cụ thể cho một lesson từ lesson_content đa lesson
+
+        Args:
+            lesson_content: Nội dung từ multiple lessons hoặc single lesson
+            lesson_id: ID của lesson cần lấy nội dung
+
+        Returns:
+            Dict chứa nội dung của lesson cụ thể
+        """
+        try:
+            # Kiểm tra nếu đây là format mới (multiple lessons)
+            if "content" in lesson_content and isinstance(lesson_content["content"], dict):
+                # Nếu có lesson_id trong content (multiple lessons format)
+                if lesson_id in lesson_content["content"]:
+                    specific_content = lesson_content["content"][lesson_id]
+                    logger.info(f"Found specific content for lesson_id: {lesson_id}")
+                    return specific_content
+                else:
+                    # Fallback: tìm trong tất cả lessons
+                    for stored_lesson_id, stored_content in lesson_content["content"].items():
+                        if stored_lesson_id == lesson_id:
+                            logger.info(f"Found content for lesson_id: {lesson_id} via fallback search")
+                            return stored_content
+
+
+            # Fallback: nếu đây là format cũ (single lesson), sử dụng trực tiếp
+            elif "content" in lesson_content:
+                logger.info(f"Using single lesson content format for lesson_id: {lesson_id}")
+                return lesson_content
+
+            # Nếu không có content nào
+            logger.warning(f"No content structure found for lesson_id: {lesson_id}")
+            return {}
+
+        except Exception as e:
+            logger.error(f"Error getting content for lesson {lesson_id}: {e}")
+            return {}
+
     async def _generate_questions_for_lesson(
         self,
         cau_hinh: CauHinhDeModel,
@@ -135,6 +178,16 @@ class ExamGenerationService:
             logger.info(f"--- Generating questions for lesson_id: {cau_hinh.lesson_id} ---")
             lesson_questions = []
             current_counter = start_counter
+
+            # Lấy nội dung cụ thể cho lesson này
+            specific_lesson_content = self._get_content_for_lesson(lesson_content, cau_hinh.lesson_id)
+
+            if not specific_lesson_content:
+                logger.warning(f"No content found for lesson_id: {cau_hinh.lesson_id}")
+                logger.warning("Using fallback content or skipping this lesson")
+                return []
+
+            logger.info(f"Found content for lesson_id: {cau_hinh.lesson_id}")
 
             # Tạo câu hỏi cho từng mức độ trong lesson
             for i, muc_do in enumerate(cau_hinh.muc_do):
@@ -167,7 +220,7 @@ class ExamGenerationService:
                         muc_do.loai,
                         questions_for_this_type,
                         loai_cau,
-                        lesson_content,
+                        specific_lesson_content,
                         current_counter,
                     )
 
