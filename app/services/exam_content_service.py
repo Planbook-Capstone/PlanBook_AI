@@ -16,6 +16,75 @@ class ExamContentService:
     def __init__(self):
         self.qdrant_service = qdrant_service
 
+    async def get_multiple_lessons_content_for_exam(
+        self, lesson_ids: List[str], search_terms: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Lấy nội dung cho nhiều bài học từ Qdrant để tạo câu hỏi
+
+        Args:
+            lesson_ids: Danh sách ID của các bài học
+            search_terms: Các từ khóa tìm kiếm bổ sung
+
+        Returns:
+            Dict chứa nội dung tất cả bài học đã được xử lý
+        """
+        try:
+            if not self.qdrant_service.qdrant_client:
+                return {
+                    "success": False,
+                    "error": "Qdrant service not available",
+                    "content": None
+                }
+
+            logger.info(f"Searching for multiple lesson contents: {lesson_ids}")
+
+            all_lessons_content = {}
+            successful_lessons = []
+            failed_lessons = []
+
+            # Lấy nội dung cho từng lesson
+            for lesson_id in lesson_ids:
+                lesson_result = await self.get_lesson_content_for_exam(lesson_id, search_terms)
+
+                if lesson_result.get("success", False):
+                    all_lessons_content[lesson_id] = lesson_result
+                    successful_lessons.append(lesson_id)
+                    logger.info(f"Successfully retrieved content for lesson: {lesson_id}")
+                else:
+                    failed_lessons.append(lesson_id)
+                    logger.warning(f"Failed to retrieve content for lesson: {lesson_id} - {lesson_result.get('error', 'Unknown error')}")
+
+            # Tính toán chất lượng tổng thể
+            total_quality = 0.0
+            if successful_lessons:
+                for lesson_id in successful_lessons:
+                    lesson_quality = all_lessons_content[lesson_id].get("search_quality", 0.0)
+                    total_quality += lesson_quality
+                average_quality = total_quality / len(successful_lessons)
+            else:
+                average_quality = 0.0
+
+            return {
+                "success": len(successful_lessons) > 0,
+                "lesson_ids": lesson_ids,
+                "successful_lessons": successful_lessons,
+                "failed_lessons": failed_lessons,
+                "content": all_lessons_content,
+                "search_quality": average_quality,
+                "total_lessons": len(lesson_ids),
+                "successful_count": len(successful_lessons),
+                "failed_count": len(failed_lessons)
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting multiple lessons content for exam: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "content": None
+            }
+
     async def get_lesson_content_for_exam(
         self, lesson_id: str, search_terms: Optional[List[str]] = None
     ) -> Dict[str, Any]:

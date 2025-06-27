@@ -203,32 +203,55 @@ async def generate_exam_from_matrix(request: ExamMatrixRequest):
         Response: JSON với links online để truy cập đề thi
     """
     try:
-        logger.info(f"Starting exam generation for exam_id: {request.exam_id}")
+        logger.info(f"=== EXAM GENERATION START ===")
+        logger.info(f"Request received: exam_id={request.exam_id}, mon_hoc={request.mon_hoc}")
+        logger.info(f"Request data: {request.model_dump()}")
 
         # 1. Validate request
         if not request.cau_hinh_de or len(request.cau_hinh_de) == 0:
             raise HTTPException(status_code=400, detail="cau_hinh_de is required and cannot be empty")
 
-        # Lấy lesson_id đầu tiên để tìm kiếm nội dung (có thể cần cải thiện sau)
-        first_lesson_id = request.cau_hinh_de[0].lesson_id
-        logger.info(f"Using first lesson_id for content search: {first_lesson_id}")
+        # Lấy tất cả lesson_id từ cấu hình đề thi
+        lesson_ids = [cau_hinh.lesson_id for cau_hinh in request.cau_hinh_de]
+        logger.info(f"Extracting lesson_ids from cau_hinh_de: {lesson_ids}")
 
-        # 2. Tìm kiếm nội dung bài học
-        logger.info("Searching for lesson content...")
-        lesson_content = await exam_content_service.get_lesson_content_for_exam(
-            lesson_id=first_lesson_id
+        # 2. Tìm kiếm nội dung cho tất cả bài học
+        logger.info("Searching for multiple lesson contents...")
+        lesson_content = await exam_content_service.get_multiple_lessons_content_for_exam(
+            lesson_ids=lesson_ids
         )
+        print("LessonContent" ,lesson_content)
 
         if not lesson_content.get("success", False):
+            failed_lessons = lesson_content.get("failed_lessons", [])
+            successful_lessons = lesson_content.get("successful_lessons", [])
+            error_detail = f"Failed to retrieve content for lessons: {failed_lessons}. "
+            if successful_lessons:
+                error_detail += f"Successfully retrieved: {successful_lessons}. "
+            error_detail += f"Error: {lesson_content.get('error', 'Unknown error')}"
+
             raise HTTPException(
                 status_code=404,
-                detail=f"Lesson content not found: {lesson_content.get('error', 'Unknown error')}",
+                detail=error_detail,
             )
 
-        # 3. Kiểm tra chất lượng nội dung
+        # 3. Kiểm tra chất lượng nội dung và thông báo về lessons
         search_quality = lesson_content.get("search_quality", 0.0)
+        successful_lessons = lesson_content.get("successful_lessons", [])
+        failed_lessons = lesson_content.get("failed_lessons", [])
+
+        logger.info(f"Content retrieval summary:")
+        logger.info(f"  - Total lessons requested: {lesson_content.get('total_lessons', 0)}")
+        logger.info(f"  - Successfully retrieved: {len(successful_lessons)} lessons: {successful_lessons}")
+        logger.info(f"  - Failed to retrieve: {len(failed_lessons)} lessons: {failed_lessons}")
+        logger.info(f"  - Average search quality: {search_quality:.2f}")
+
         if search_quality < 0.3:
             logger.warning(f"Low search quality: {search_quality}")
+
+        if failed_lessons:
+            logger.warning(f"Some lessons failed to retrieve content: {failed_lessons}")
+            logger.warning("Exam generation will proceed with available content only")
 
         # 4. Tạo câu hỏi từ ma trận
         logger.info("Generating questions from matrix...")
@@ -244,9 +267,25 @@ async def generate_exam_from_matrix(request: ExamMatrixRequest):
 
         # 5. Tạo file DOCX
         logger.info("Creating DOCX file...")
-        docx_result = await exam_docx_service.create_exam_docx(
-            exam_data=exam_result, exam_request=request.model_dump()
-        )
+        try:
+            logger.info(f"Calling create_exam_docx with exam_data type: {type(exam_result)}")
+            logger.info(f"Calling create_exam_docx with exam_request type: {type(request.model_dump())}")
+
+            docx_result = await exam_docx_service.create_exam_docx(
+                exam_data=exam_result, exam_request=request.model_dump()
+            )
+
+            logger.info(f"DOCX creation result: {docx_result}")
+
+        except Exception as docx_error:
+            logger.error(f"Exception during DOCX creation: {docx_error}")
+            logger.error(f"Exception type: {type(docx_error)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"DOCX creation failed: {str(docx_error)}"
+            )
 
         if not docx_result.get("success", False):
             logger.warning(f"Failed to create DOCX: {docx_result.get('error')}")
@@ -313,26 +352,46 @@ async def generate_exam_download(request: ExamMatrixRequest):
         if not request.cau_hinh_de or len(request.cau_hinh_de) == 0:
             raise HTTPException(status_code=400, detail="cau_hinh_de is required and cannot be empty")
 
-        # Lấy lesson_id đầu tiên để tìm kiếm nội dung
-        first_lesson_id = request.cau_hinh_de[0].lesson_id
-        logger.info(f"Using first lesson_id for content search: {first_lesson_id}")
+        # Lấy tất cả lesson_id từ cấu hình đề thi
+        lesson_ids = [cau_hinh.lesson_id for cau_hinh in request.cau_hinh_de]
+        logger.info(f"Extracting lesson_ids from cau_hinh_de: {lesson_ids}")
 
-        # 2. Tìm kiếm nội dung bài học
-        logger.info("Searching for lesson content...")
-        lesson_content = await exam_content_service.get_lesson_content_for_exam(
-            lesson_id=first_lesson_id
+        # 2. Tìm kiếm nội dung cho tất cả bài học
+        logger.info("Searching for multiple lesson contents...")
+        lesson_content = await exam_content_service.get_multiple_lessons_content_for_exam(
+            lesson_ids=lesson_ids
         )
 
         if not lesson_content.get("success", False):
+            failed_lessons = lesson_content.get("failed_lessons", [])
+            successful_lessons = lesson_content.get("successful_lessons", [])
+            error_detail = f"Failed to retrieve content for lessons: {failed_lessons}. "
+            if successful_lessons:
+                error_detail += f"Successfully retrieved: {successful_lessons}. "
+            error_detail += f"Error: {lesson_content.get('error', 'Unknown error')}"
+
             raise HTTPException(
                 status_code=404,
-                detail=f"Lesson content not found: {lesson_content.get('error', 'Unknown error')}",
+                detail=error_detail,
             )
 
-        # 3. Kiểm tra chất lượng nội dung
+        # 3. Kiểm tra chất lượng nội dung và thông báo về lessons
         search_quality = lesson_content.get("search_quality", 0.0)
+        successful_lessons = lesson_content.get("successful_lessons", [])
+        failed_lessons = lesson_content.get("failed_lessons", [])
+
+        logger.info(f"Content retrieval summary:")
+        logger.info(f"  - Total lessons requested: {lesson_content.get('total_lessons', 0)}")
+        logger.info(f"  - Successfully retrieved: {len(successful_lessons)} lessons: {successful_lessons}")
+        logger.info(f"  - Failed to retrieve: {len(failed_lessons)} lessons: {failed_lessons}")
+        logger.info(f"  - Average search quality: {search_quality:.2f}")
+
         if search_quality < 0.3:
             logger.warning(f"Low search quality: {search_quality}")
+
+        if failed_lessons:
+            logger.warning(f"Some lessons failed to retrieve content: {failed_lessons}")
+            logger.warning("Exam generation will proceed with available content only")
 
         # 4. Tạo câu hỏi từ ma trận
         logger.info("Generating questions from matrix...")

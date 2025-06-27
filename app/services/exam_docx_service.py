@@ -54,23 +54,36 @@ class ExamDocxService:
 
             # Tạo bảng hóa trị cho môn Hóa học
             mon_hoc = exam_request.get("mon_hoc", "").lower()
+            logger.info(f"Subject check: '{exam_request.get('mon_hoc', '')}' -> '{mon_hoc}'")
             if "hóa" in mon_hoc or "chemistry" in mon_hoc:
-                self._create_chemistry_valence_table(doc)
+                logger.info("Creating chemistry valence table...")
+                self._create_chemistry_valence_table(doc, exam_data.get("questions", []))
+            else:
+                logger.info(f"Skipping chemistry valence table for subject: {mon_hoc}")
 
             # Tạo câu hỏi
             self._create_questions_section(doc, exam_data.get("questions", []))
+
+            # Thêm chữ "Hết" sau phần câu hỏi, trước phần đáp án
+            self._add_exam_ending(doc)
 
             # Tạo đáp án theo cấu trúc THPT (cùng trang với đề thi)
             self._create_thpt_answer_table(doc, exam_data.get("questions", []))
 
             # Lưu file với filename an toàn (không có ký tự đặc biệt) trong thư mục tạm thời
-            lesson_id_safe = self._sanitize_filename(
-                exam_request.get("lesson_id", "unknown")
+            exam_id_safe = self._sanitize_filename(
+                exam_request.get("exam_id", "unknown")
             )
             filename = (
-                f"exam_{lesson_id_safe}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+                f"exam_{exam_id_safe}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
             )
             filepath = os.path.join(self.temp_dir, filename)
+
+            logger.info(f"Saving DOCX file to: {filepath}")
+            logger.info(f"Temp directory: {self.temp_dir}")
+            logger.info(f"Filename: {filename}")
+            logger.info(f"Directory exists: {os.path.exists(self.temp_dir)}")
+            logger.info(f"Directory writable: {os.access(self.temp_dir, os.W_OK)}")
 
             doc.save(filepath)
 
@@ -88,24 +101,35 @@ class ExamDocxService:
 
     def _sanitize_filename(self, filename: str) -> str:
         """
-        Làm sạch filename để tránh lỗi encoding
+        Làm sạch filename để tránh lỗi encoding và giới hạn độ dài
 
         Args:
             filename: Tên file gốc
 
         Returns:
-            Tên file đã được làm sạch (chỉ chứa ASCII)
+            Tên file đã được làm sạch (chỉ chứa ASCII, độ dài hợp lệ)
         """
         try:
-            # Loại bỏ ký tự đặc biệt và dấu tiếng Việt
-            # Chỉ giữ lại chữ cái, số, dấu gạch dưới và gạch ngang
-            sanitized = re.sub(r"[^\w\-_]", "_", filename)
+            # Chuyển đổi ký tự tiếng Việt sang ASCII
+            import unicodedata
+
+            # Normalize unicode và loại bỏ dấu
+            normalized = unicodedata.normalize('NFD', filename)
+            ascii_only = normalized.encode('ascii', 'ignore').decode('ascii')
+
+            # Loại bỏ ký tự đặc biệt, chỉ giữ lại chữ cái, số, dấu gạch dưới và gạch ngang
+            sanitized = re.sub(r"[^\w\-_]", "_", ascii_only)
 
             # Loại bỏ nhiều dấu gạch dưới liên tiếp
             sanitized = re.sub(r"_+", "_", sanitized)
 
             # Loại bỏ dấu gạch dưới ở đầu và cuối
             sanitized = sanitized.strip("_")
+
+            # Giới hạn độ dài tên file (Windows có giới hạn 255 ký tự cho tên file)
+            # Để an toàn, giới hạn ở 100 ký tự
+            if len(sanitized) > 100:
+                sanitized = sanitized[:100]
 
             # Nếu kết quả rỗng, dùng default
             if not sanitized:
@@ -161,7 +185,7 @@ class ExamDocxService:
 
             # Logo/Tên cơ quan
             left_para.add_run("BỘ GIÁO DỤC VÀ ĐÀO TạO\n").bold = True
-            school_name = exam_request.get('ten_truong', 'TRƯỜNG THPT ABC')
+            school_name = exam_request.get('ten_truong', 'TRƯỜNG ...')
             left_para.add_run(f"{school_name}\n").bold = True
             # Bỏ text "(Đề có ... trang)" theo yêu cầu
 
@@ -175,7 +199,7 @@ class ExamDocxService:
             if exam_request.get('tong_so_cau', 0) >= 40:
                 exam_type = "ĐỀ THI"
 
-            right_para.add_run(f"{exam_type} LỚP {exam_request.get('lop', 12)}\n").bold = True
+            right_para.add_run(f"{exam_type} LỚP {exam_request.get('lop', ...)}\n").bold = True
             right_para.add_run(f"Môn: {exam_request.get('mon_hoc', '').upper()}\n").bold = True
 
             # Thời gian làm bài
@@ -193,10 +217,10 @@ class ExamDocxService:
             # Khoảng trống
             doc.add_paragraph()
 
-            # Đường kẻ ngang
+            # Đường kẻ ngang (nét liền không có khoảng cách)
             separator = doc.add_paragraph()
-            separator.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-            separator.add_run("─" * 80)
+            separator.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT  # Căn phải
+            separator.add_run("_" * 80)  # Nét liền bằng dấu gạch dưới
 
             doc.add_paragraph()
 
@@ -211,12 +235,12 @@ class ExamDocxService:
             # Thông tin học sinh theo format chuẩn THPT
             info_para = doc.add_paragraph()
             info_para.add_run("Họ, tên thí sinh: ").bold = True
-            info_para.add_run("." * 50)
+            info_para.add_run("." * 70)
 
             # Số báo danh
             sbd_para = doc.add_paragraph()
             sbd_para.add_run("Số báo danh: ").bold = True
-            sbd_para.add_run("." * 55)
+            sbd_para.add_run("." * 70)
 
             # Thống kê đề thi theo chuẩn THPT
             stats = exam_data.get("statistics", {})
@@ -266,24 +290,109 @@ class ExamDocxService:
                 part3_run.font.size = Pt(11)
                 part3_run.bold = True
 
-            doc.add_paragraph()  # Khoảng trống
+            # doc.add_paragraph()  # Khoảng trống
 
-            # Đường kẻ phân cách
-            separator = doc.add_paragraph()
-            separator.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-            separator.add_run("─" * 80)
+     
 
-            doc.add_paragraph()
 
         except Exception as e:
             logger.error(f"Error creating exam info: {e}")
 
-    def _create_chemistry_valence_table(self, doc: Document):
+    def _extract_atomic_masses_from_questions(self, questions: Optional[List[Dict[str, Any]]]) -> str:
+        """
+        Extract nguyên tử khối từ nội dung câu hỏi
+
+        Args:
+            questions: Danh sách câu hỏi
+
+        Returns:
+            String chứa thông tin nguyên tử khối theo format chuẩn
+        """
+        try:
+            if not questions:
+                # Default atomic masses cho Hóa học 12
+                return "H = 1, C = 12, N = 14, O = 16, Al = 27, S = 32, K = 39, Fe = 56"
+
+            # Tập hợp các nguyên tố đã tìm thấy
+            found_elements = {}
+
+            # Danh sách nguyên tố phổ biến và nguyên tử khối
+            common_elements = {
+                'H': 1, 'He': 4, 'Li': 7, 'Be': 9, 'B': 11, 'C': 12, 'N': 14, 'O': 16,
+                'F': 19, 'Ne': 20, 'Na': 23, 'Mg': 24, 'Al': 27, 'Si': 28, 'P': 31, 'S': 32,
+                'Cl': 35.5, 'Ar': 40, 'K': 39, 'Ca': 40, 'Sc': 45, 'Ti': 48, 'V': 51, 'Cr': 52,
+                'Mn': 55, 'Fe': 56, 'Co': 59, 'Ni': 59, 'Cu': 64, 'Zn': 65, 'Ga': 70, 'Ge': 73,
+                'As': 75, 'Se': 79, 'Br': 80, 'Kr': 84, 'Rb': 85, 'Sr': 88, 'Y': 89, 'Zr': 91,
+                'Nb': 93, 'Mo': 96, 'Tc': 98, 'Ru': 101, 'Rh': 103, 'Pd': 106, 'Ag': 108, 'Cd': 112,
+                'In': 115, 'Sn': 119, 'Sb': 122, 'Te': 128, 'I': 127, 'Xe': 131, 'Cs': 133, 'Ba': 137
+            }
+
+            # Tìm kiếm nguyên tố trong nội dung câu hỏi
+            import re
+            for question in questions:
+                # Lấy nội dung từ các trường có thể chứa text
+                content_fields = ['cau_hoi', 'noi_dung', 'de_bai', 'giai_thich']
+                full_content = ""
+
+                for field in content_fields:
+                    if field in question and question[field]:
+                        full_content += str(question[field]) + " "
+
+                # Tìm các ký hiệu nguyên tố (1-2 chữ cái, chữ đầu viết hoa)
+                element_pattern = r'\b([A-Z][a-z]?)\b'
+                matches = re.findall(element_pattern, full_content)
+
+                for element in matches:
+                    if element in common_elements:
+                        found_elements[element] = common_elements[element]
+
+            # Nếu không tìm thấy nguyên tố nào, sử dụng default
+            if not found_elements:
+                return "H = 1, C = 12, N = 14, O = 16, Al = 27, S = 32, K = 39, Fe = 56"
+
+            # Sắp xếp theo thứ tự alphabet và tạo string
+            sorted_elements = sorted(found_elements.items())
+            atomic_mass_parts = []
+
+            for element, mass in sorted_elements:
+                # Format số nguyên hoặc thập phân
+                if isinstance(mass, float) and mass.is_integer():
+                    atomic_mass_parts.append(f"{element} = {int(mass)}")
+                else:
+                    atomic_mass_parts.append(f"{element} = {mass}")
+
+            result = ", ".join(atomic_mass_parts)
+
+            # Đảm bảo có ít nhất một số nguyên tố cơ bản
+            essential_elements = ['H', 'C', 'N', 'O']
+            missing_essentials = []
+
+            for essential in essential_elements:
+                if essential not in found_elements:
+                    missing_essentials.append(f"{essential} = {common_elements[essential]}")
+
+            if missing_essentials:
+                if result:
+                    result = ", ".join(missing_essentials) + ", " + result
+                else:
+                    result = ", ".join(missing_essentials)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error extracting atomic masses: {e}")
+            # Fallback to default
+            return "H = 1, C = 12, N = 14, O = 16, Al = 27, S = 32, K = 39, Fe = 56"
+
+    def _create_chemistry_valence_table(self, doc: Document, questions: Optional[List[Dict[str, Any]]] = None):
         """Tạo bảng hóa trị cho môn Hóa học"""
         try:
+            # Extract nguyên tử khối từ questions hoặc sử dụng default
+            atomic_masses = self._extract_atomic_masses_from_questions(questions)
+
             # Thêm bảng hóa trị cho môn Hóa học
             valence_para = doc.add_paragraph()
-            valence_para.add_run("Cho biết nguyên tử khối: H = 1, C = 12, N = 14, O = 16, Al = 27, S = 32, K = 39; Fe = 56.").font.size = Pt(12)
+            valence_para.add_run(f"Cho biết nguyên tử khối: {atomic_masses}").font.size = Pt(12)
             valence_para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
 
             # Thêm khoảng trống
@@ -291,6 +400,22 @@ class ExamDocxService:
 
         except Exception as e:
             logger.error(f"Error creating chemistry valence table: {e}")
+
+    def _add_exam_ending(self, doc: Document):
+        """Thêm chữ 'Hết' ở cuối đề thi"""
+        try:
+            # Thêm khoảng trống
+            doc.add_paragraph()
+
+            # Thêm chữ "Hết" căn giữa
+            ending_para = doc.add_paragraph()
+            ending_run = ending_para.add_run("--- Hết ---")
+            ending_run.bold = True
+            ending_run.font.size = Pt(12)
+            ending_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+
+        except Exception as e:
+            logger.error(f"Error adding exam ending: {e}")
 
     def _create_questions_section(self, doc: Document, questions: List[Dict[str, Any]]):
         """Tạo phần câu hỏi"""
