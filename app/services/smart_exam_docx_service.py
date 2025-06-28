@@ -111,7 +111,7 @@ class SmartExamDocxService:
             style = doc.styles['Normal']
             font = style.font
             font.name = 'Times New Roman'
-            font.size = Pt(12)
+            font.size = Pt(11)
 
         except Exception as e:
             logger.error(f"Error setting up document style: {e}")
@@ -121,7 +121,6 @@ class SmartExamDocxService:
         try:
             # Header với logo và thông tin trường
             header_table = doc.add_table(rows=1, cols=2)
-            header_table.style = 'Table Grid'
 
             # Cột trái - Logo và thông tin bộ
             left_cell = header_table.cell(0, 0)
@@ -135,35 +134,37 @@ class SmartExamDocxService:
             right_cell = header_table.cell(0, 1)
             right_para = right_cell.paragraphs[0]
             right_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-            right_para.add_run("ĐỀ THAM KHẢO").bold = True
-            right_para.add_run(f"\nMôn: {self._get_field(exam_request, 'subject', 'Hóa học')}")
+            right_para.add_run("ĐỀ KIỂM TRA LỚP 10").bold = True
+            right_para.add_run(f"\nMôn: {self._get_field(exam_request, 'subject', 'HÓA HỌC').upper()}")
+            right_para.add_run(f"\nThời gian làm bài: {self._get_field(exam_request, 'duration', 50)} phút, không kể thời gian phát đề")
 
-            # Tiêu đề chính
-            title_para = doc.add_paragraph()
-            title_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-            title_run = title_para.add_run(self._get_field(exam_request, "examTitle", "KIỂM TRA GIỮA KỲ"))
-            title_run.bold = True
-            title_run.font.size = Pt(16)
+            # Khoảng trắng
+            doc.add_paragraph()
 
-            # Thông tin chi tiết
+            # Thông tin thí sinh
+            doc.add_paragraph()
             info_para = doc.add_paragraph()
-            info_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-            info_para.add_run(f"Môn: {self._get_field(exam_request, 'subject', 'Hóa học')} - Lớp {self._get_field(exam_request, 'grade', 12)}")
-            info_para.add_run(f"\nThời gian làm bài: {self._get_field(exam_request, 'duration', 45)} phút")
+            info_para.add_run("Họ, tên thí sinh: ").bold = True
+            info_para.add_run("." * 50)
             
+            info_para2 = doc.add_paragraph()
+            info_para2.add_run("Số báo danh: ").bold = True
+            info_para2.add_run("." * 50)
+
             # Thống kê đề thi
+            doc.add_paragraph()
             statistics = exam_data.get("statistics", {})
             if hasattr(statistics, 'total_questions'):
-                # ExamStatistics object
                 total_questions = statistics.total_questions
             elif isinstance(statistics, dict):
-                # Dictionary
                 total_questions = statistics.get("total_questions", 0)
             else:
                 total_questions = 0
-            info_para.add_run(f"\n(Đề thi gồm {total_questions} câu)")
+            
+            stats_para = doc.add_paragraph()
+            stats_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+            stats_para.add_run(f"(Đề thi gồm {total_questions} câu)")
 
-    
 
         except Exception as e:
             logger.error(f"Error creating cover page: {e}")
@@ -205,14 +206,15 @@ class SmartExamDocxService:
             valence_para.add_run(atomic_masses_text)
 
             # Thêm lưu ý
-            note_para = doc.add_paragraph()
-            note_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-            if len(used_elements) <= 20:  # Nếu ít nguyên tố thì ghi chú là từ đề thi
-                note_run = note_para.add_run("(Chỉ ghi các nguyên tố có trong đề thi)")
-            else:  # Nếu nhiều nguyên tố thì ghi chú là nguyên tố phổ biến
-                note_run = note_para.add_run("(Các nguyên tố hóa học phổ biến)")
-            note_run.italic = True
-            note_run.font.size = Pt(10)
+            # note_para = doc.add_paragraph()
+            # note_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+            # if len(used_elements) <= 20:  # Nếu ít nguyên tố thì ghi chú là từ đề thi
+            #     # note_run = note_para.add_run("(Chỉ ghi các nguyên tố có trong đề thi)")
+            #     print("DEBUG: Not enough elements to create custom valence table")
+            # else:  # Nếu nhiều nguyên tố thì ghi chú là nguyên tố phổ biến
+            #     note_run = note_para.add_run("(Các nguyên tố hóa học phổ biến)")
+            # note_run.italic = True
+            # note_run.font.size = Pt(10)
 
             doc.add_paragraph()
 
@@ -359,11 +361,7 @@ class SmartExamDocxService:
             part_title.add_run(f"Thí sinh trả lời từ câu 1 đến câu {len(questions)}. Trong mỗi ý a), b), c), d) ở mỗi câu, thí sinh chọn đúng hoặc sai.")
 
             # Hướng dẫn chấm điểm
-            note_para = doc.add_paragraph()
-            note_para.add_run("- Thí sinh chỉ lựa chọn chính xác 01 ý trong 01 câu hỏi được 0,1 điểm;")
-            note_para.add_run("\n- Thí sinh chỉ lựa chọn chính xác 02 ý trong 01 câu hỏi được 0,25 điểm;")
-            note_para.add_run("\n- Thí sinh chỉ lựa chọn chính xác 03 ý trong 01 câu hỏi được 0,5 điểm;")
-            note_para.add_run("\n- Thí sinh lựa chọn chính xác cả 04 ý trong 01 câu hỏi được 1 điểm.")
+   
 
             # Tạo câu hỏi
             for i, question in enumerate(questions, 1):
@@ -610,6 +608,12 @@ class SmartExamDocxService:
             section_run = section_para.add_run("PHẦN II. Câu trắc nghiệm đúng sai. ")
             section_run.bold = True
             section_para.add_run(f"Thí sinh trả lời từ câu 1 đến câu {len(questions)}.")
+            note_para = doc.add_paragraph()
+            note_para.add_run("- Thí sinh chỉ lựa chọn chính xác 01 ý trong 01 câu hỏi được 0,1 điểm;")
+            note_para.add_run("\n- Thí sinh chỉ lựa chọn chính xác 02 ý trong 01 câu hỏi được 0,25 điểm;")
+            note_para.add_run("\n- Thí sinh chỉ lựa chọn chính xác 03 ý trong 01 câu hỏi được 0,5 điểm;")
+            note_para.add_run("\n- Thí sinh lựa chọn chính xác cả 04 ý trong 01 câu hỏi được 1 điểm.")    
+            doc.add_paragraph()
 
             # Tạo bảng đáp án với format gộp: 1 hàng cho header, 1 hàng cho đáp án
             num_questions = len(questions)
