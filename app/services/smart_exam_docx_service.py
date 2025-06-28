@@ -5,6 +5,7 @@ Service tạo file DOCX cho đề thi thông minh theo chuẩn THPT 2025
 import logging
 import os
 import tempfile
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Union
@@ -50,9 +51,6 @@ class SmartExamDocxService:
             # Tạo trang bìa
             self._create_cover_page(doc, exam_request, exam_data)
 
-            # Tạo thông tin đề thi
-            self._create_exam_info(doc, exam_request, exam_data)
-
             # Tạo bảng hóa trị cho môn Hóa học
             subject = self._get_field(exam_request, "subject", "")
 
@@ -95,6 +93,117 @@ class SmartExamDocxService:
             return exam_request.get(field, default)
         else:
             return getattr(exam_request, field, default)
+
+    def _normalize_chemistry_format(self, text: str) -> str:
+        """
+        Chuyển đổi định dạng hóa học từ HTML sang định dạng chuẩn
+        VD: <sup>6</sup>Li -> ⁶Li, S<sub>8</sub> -> S₈, Fe<sup>2+</sup> -> Fe²⁺
+        """
+        if not text:
+            return text
+
+        # Chuyển đổi superscript với số và ký hiệu (chỉ số trên)
+        sup_pattern = r'<sup>([^<]+)</sup>'
+        superscript_map = {
+            '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+            '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+            '+': '⁺', '-': '⁻'
+        }
+
+        def replace_sup(match):
+            content = match.group(1)
+            result = ''
+            for char in content:
+                result += superscript_map.get(char, char)
+            return result
+
+        text = re.sub(sup_pattern, replace_sup, text)
+
+        # Chuyển đổi subscript (chỉ số dưới)
+        sub_pattern = r'<sub>(\d+)</sub>'
+        subscript_map = {
+            '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
+            '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉'
+        }
+
+        def replace_sub(match):
+            number = match.group(1)
+            return ''.join(subscript_map.get(digit, digit) for digit in number)
+
+        text = re.sub(sub_pattern, replace_sub, text)
+
+        return text
+
+    def _extract_numeric_answer(self, answer_text: str) -> str:
+        """
+        Trích xuất đáp án số thuần túy từ text cho phần III
+        Yêu cầu: Chỉ số, làm tròn 2 chữ số thập phân, format: -1,25; 0,75; 3,14
+        Tối đa 4 ký tự (bao gồm dấu trừ và dấu phẩy)
+        """
+        if not answer_text:
+            return "0,00"
+
+        # Tìm số đầu tiên trong chuỗi (chỉ số âm, không có dấu +)
+        number_pattern = r'-?(?:\d+[.,]?\d*|[.,]\d+)'
+        match = re.search(number_pattern, str(answer_text))
+
+        if match:
+            number = match.group()
+            try:
+                # Chuyển dấu phẩy thành dấu chấm để parse
+                number_for_parse = number.replace(',', '.')
+                float_num = float(number_for_parse)
+
+                # Xử lý số quá lớn - chuyển về dạng nhỏ hơn để vừa 4 ký tự
+                if abs(float_num) >= 100:
+                    # Tất cả số >= 100 đều cần chia nhỏ
+                    if abs(float_num) >= 10000:
+                        # VD: 17482 -> 1,75 (chia 10000)
+                        float_num = float_num / 10000
+                    elif abs(float_num) >= 1000:
+                        # VD: 2500 -> 2,50 (chia 1000)
+                        float_num = float_num / 1000
+                    else:
+                        # VD: 207.23 -> 2,07 (chia 100)
+                        float_num = float_num / 100
+
+                # Làm tròn chính xác 2 chữ số thập phân
+                rounded_num = round(float_num, 2)
+
+                # Format với đúng 2 chữ số thập phân
+                result = f"{rounded_num:.2f}"
+
+                # Chuyển dấu chấm thành dấu phẩy (định dạng Việt Nam)
+                result = result.replace('.', ',')
+
+                # Kiểm tra độ dài (tối đa 4 ký tự)
+                # Các format hợp lệ: X,XX hoặc -X,XX (3-4 ký tự)
+                if len(result) > 4:
+                    # Nếu quá dài, chia nhỏ số để vừa 4 ký tự
+                    if ',' in result:
+                        parts = result.split(',')
+                        integer_part = parts[0]
+                        decimal_part = parts[1]
+
+                        # Nếu phần nguyên có 2+ chữ số (không âm) hoặc 3+ chữ số (âm)
+                        if (not integer_part.startswith('-') and len(integer_part) >= 2) or \
+                           (integer_part.startswith('-') and len(integer_part) >= 3):
+                            # Chia nhỏ số để vừa format
+                            if integer_part.startswith('-'):
+                                # Số âm: giữ 1 chữ số sau dấu trừ
+                                result = f"-{integer_part[-1]},{decimal_part}"
+                            else:
+                                # Số dương: giữ 1 chữ số cuối
+                                result = f"{integer_part[-1]},{decimal_part}"
+
+                return result
+
+            except ValueError:
+                # Nếu không parse được, trả về 0,00
+                return "0,00"
+
+        # Fallback: không tìm thấy số
+        return "0,00"
 
     def _setup_document_style(self, doc: Document):
         """Thiết lập style cho document"""
@@ -169,19 +278,7 @@ class SmartExamDocxService:
         except Exception as e:
             logger.error(f"Error creating cover page: {e}")
 
-    def _create_exam_info(self, doc: Document, exam_request: Union[SmartExamRequest, Dict[str, Any]], exam_data: Dict[str, Any]):
-        """Tạo thông tin đề thi"""
-        try:
-            # Thông tin cơ bản
-            info_para = doc.add_paragraph()
-            info_para.add_run("Họ và tên thí sinh: ").bold = True
-            info_para.add_run("." * 40)
-            info_para.add_run("  Số báo danh: ").bold = True
-            info_para.add_run("." * 20)
-
-        except Exception as e:
-            logger.error(f"Error creating exam info: {e}")
-
+   
     def _create_chemistry_valence_table(self, doc: Document, questions: List[Dict[str, Any]]):
         """Tạo bảng nguyên tử khối cho môn Hóa học dựa trên nội dung đề thi"""
         try:
@@ -380,7 +477,13 @@ class SmartExamDocxService:
             part_title.add_run(f"Thí sinh trả lời từ câu 1 đến câu {len(questions)}")
 
             note_para = doc.add_paragraph()
-            note_para.add_run("Mỗi câu trả lời đúng thí sinh được 0,25 điểm.")
+            # Thêm lưu ý về định dạng đáp án
+            format_note = doc.add_paragraph()
+            format_note_run = format_note.add_run("Lưu ý: ")
+            format_note_run.bold = True
+            format_note.add_run("Đáp án phần III chỉ ghi số (không ghi đơn vị, không ghi chữ). ")
+            format_note.add_run("Làm tròn 2 chữ số thập phân, sử dụng dấu phẩy (,), tối đa 4 ký tự. ")
+            format_note.add_run("Ví dụ: -1,50; 0,25; 3,14")
 
             doc.add_paragraph()
 
@@ -397,8 +500,9 @@ class SmartExamDocxService:
             # Câu hỏi
             q_para = doc.add_paragraph()
             q_para.add_run(f"Câu {question_num}. ").bold = True
-            # Sử dụng field "question" thay vì "cau_hoi"
-            q_para.add_run(question.get("question", question.get("cau_hoi", "")))
+            # Sử dụng field "question" thay vì "cau_hoi" và chuẩn hóa định dạng hóa học
+            question_text = question.get("question", question.get("cau_hoi", ""))
+            q_para.add_run(self._normalize_chemistry_format(question_text))
 
             # Các phương án
             # Sử dụng field "answer" thay vì "dap_an"
@@ -406,7 +510,8 @@ class SmartExamDocxService:
             for option in ["A", "B", "C", "D"]:
                 if option in dap_an:
                     option_para = doc.add_paragraph()
-                    option_para.add_run(f"{option}. {dap_an[option]}")
+                    option_text = self._normalize_chemistry_format(str(dap_an[option]))
+                    option_para.add_run(f"{option}. {option_text}")
 
             doc.add_paragraph()
 
@@ -441,9 +546,9 @@ class SmartExamDocxService:
             # Câu hỏi chính
             q_para = doc.add_paragraph()
             q_para.add_run(f"Câu {question_num}. ").bold = True
-            # Sử dụng field "question" thay vì "cau_hoi"
+            # Sử dụng field "question" thay vì "cau_hoi" và chuẩn hóa định dạng hóa học
             main_question = question.get("question", question.get("cau_hoi", ""))
-            q_para.add_run(main_question)
+            q_para.add_run(self._normalize_chemistry_format(main_question))
 
             # Các statement a), b), c), d) - lấy từ explanation hoặc tạo từ answer
             answer_data = question.get("answer", question.get("dap_an", {}))
@@ -455,7 +560,8 @@ class SmartExamDocxService:
             for option in ["a", "b", "c", "d"]:
                 if option in statements:
                     option_para = doc.add_paragraph()
-                    option_para.add_run(f"{option}) {statements[option]}")
+                    statement_text = self._normalize_chemistry_format(statements[option])
+                    option_para.add_run(f"{option}) {statement_text}")
 
             doc.add_paragraph()
 
@@ -504,8 +610,9 @@ class SmartExamDocxService:
             # Câu hỏi
             q_para = doc.add_paragraph()
             q_para.add_run(f"Câu {question_num}. ").bold = True
-            # Sử dụng field "question" thay vì "cau_hoi"
-            q_para.add_run(question.get("question", question.get("cau_hoi", "")))
+            # Sử dụng field "question" thay vì "cau_hoi" và chuẩn hóa định dạng hóa học
+            question_text = question.get("question", question.get("cau_hoi", ""))
+            q_para.add_run(self._normalize_chemistry_format(question_text))
 
             doc.add_paragraph()
 
