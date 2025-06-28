@@ -33,7 +33,7 @@ def process_cv_task(self, task_id: str) -> Dict[str, Any]:
     Returns:
         Dict kết quả xử lý
     """
-    logger.info(f"Starting CV processing task: {task_id}")
+    print(f"Starting CV processing task: {task_id}")
     
     try:
         current_task.update_state(
@@ -42,7 +42,7 @@ def process_cv_task(self, task_id: str) -> Dict[str, Any]:
         )
         
         result = run_async_task(_process_cv_async(task_id))
-        logger.info(f"CV processing completed: {task_id}")
+        print(f"CV processing completed: {task_id}")
         return result
         
     except Exception as e:
