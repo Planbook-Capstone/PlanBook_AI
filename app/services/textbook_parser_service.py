@@ -42,7 +42,7 @@ class TextbookParserService:
             Dict chứa kết quả xử lý
         """
         try:
-            logger.info(f"🚀 Starting textbook processing: {filename}")
+            print(f"🚀 Starting textbook processing: {filename}")
 
             # Tạo thư mục cho sách
             book_id = book_metadata.get("id", filename.replace(".pdf", ""))
@@ -55,21 +55,21 @@ class TextbookParserService:
             lessons_path.mkdir(exist_ok=True)
             images_path.mkdir(exist_ok=True)
 
-            logger.info(f"📁 Created directories for book: {book_id}")
+            print(f"📁 Created directories for book: {book_id}")
 
             # Lưu metadata
             await self._save_metadata(book_path, book_metadata, filename)
-            logger.info(f"💾 Saved metadata for book: {book_id}")
+            print(f"💾 Saved metadata for book: {book_id}")
 
             # Extract và phân tích PDF
-            logger.info(f"📄 Starting PDF extraction...")
+            print(f"📄 Starting PDF extraction...")
             pages_data = await self._extract_pdf_pages(pdf_content)
-            logger.info(f"✅ Extracted {len(pages_data)} pages from PDF")
+            print(f"✅ Extracted {len(pages_data)} pages from PDF")
 
             # Phân tích cấu trúc sách bằng LLM
-            logger.info(f"🧠 Analyzing book structure with LLM...")
+            print(f"🧠 Analyzing book structure with LLM...")
             book_structure = await self._analyze_book_structure(pages_data)
-            logger.info(
+            print(
                 f"📚 Detected {len(book_structure.get('chapters', []))} chapters"
             )
 
@@ -78,11 +78,11 @@ class TextbookParserService:
             lessons_processed = 0
             total_chapters = len(book_structure.get("chapters", []))
 
-            logger.info(f"🔄 Starting to process {total_chapters} chapters...")
+            print(f"🔄 Starting to process {total_chapters} chapters...")
 
             for i, chapter_data in enumerate(book_structure.get("chapters", []), 1):
                 try:
-                    logger.info(
+                    print(
                         f"📖 Processing chapter {i}/{total_chapters}: {chapter_data.get('chapter_title', 'Unknown')}"
                     )
 
@@ -92,10 +92,10 @@ class TextbookParserService:
                     chapters_processed += 1
                     lessons_processed += chapter_result.get("lessons_count", 0)
 
-                    logger.info(
+                    print(
                         f"✅ Completed chapter {chapters_processed}/{total_chapters} - {chapter_result.get('lessons_count', 0)} lessons processed"
                     )
-                    logger.info(
+                    print(
                         f"📊 Progress: {chapters_processed}/{total_chapters} chapters, {lessons_processed} total lessons"
                     )
 
@@ -212,7 +212,7 @@ class TextbookParserService:
             if page["text"].strip():  # Chỉ lấy trang có text
                 full_text += f"\n--- Trang {page['page_number']} ---\n{page['text']}"
 
-        logger.info(
+        print(
             f"Analyzing {len(pages_data)} pages with LLM for structure detection"
         )
 
@@ -303,7 +303,7 @@ Trả về JSON cấu trúc thực tế:
             clean_json = json_text[start_idx:end_idx]
 
             structure = json.loads(clean_json)
-            logger.info(f"LLM detected {len(structure.get('chapters', []))} chapters")
+            print(f"LLM detected {len(structure.get('chapters', []))} chapters")
             return structure
 
         except Exception as e:
@@ -480,7 +480,7 @@ Trả về JSON cấu trúc thực tế:
         chapter_start = chapter_data.get("start_page", 1)
         chapter_end = chapter_data.get("end_page", len(pages_data))
 
-        logger.info(
+        print(
             f"Processing chapter: {chapter_title} (pages {chapter_start}-{chapter_end})"
         )
 
@@ -501,7 +501,7 @@ Trả về JSON cấu trúc thực tế:
                     chapter_images_path,
                 )
                 lessons_count += 1
-                logger.info(
+                print(
                     f"Processed lesson: {lesson_data.get('lesson_title', 'Unknown')}"
                 )
             except Exception as e:

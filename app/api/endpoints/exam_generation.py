@@ -26,10 +26,17 @@ from app.models.online_document_models import (
     OnlineDocumentError,
     OnlineDocumentLinks
 )
+from app.models.smart_exam_models import (
+    SmartExamRequest,
+    SmartExamResponse,
+    SmartExamError
+)
 from app.services.exam_content_service import exam_content_service
 from app.services.exam_generation_service import exam_generation_service
 from app.services.exam_docx_service import exam_docx_service
 from app.services.google_drive_service import google_drive_service
+from app.services.smart_exam_generation_service import smart_exam_generation_service
+from app.services.smart_exam_docx_service import smart_exam_docx_service
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -175,6 +182,7 @@ def _sanitize_filename(filename: str) -> str:
 
 @router.post("/generate-exam")
 async def generate_exam_from_matrix(request: ExamMatrixRequest):
+    print("=== GENERATE-EXAM ENDPOINT CALLED ===")
     """
     Tạo bài kiểm tra từ ma trận đề thi và trả về link doc online
 
@@ -335,6 +343,7 @@ async def generate_exam_from_matrix(request: ExamMatrixRequest):
 
 @router.post("/generate-exam-download")
 async def generate_exam_download(request: ExamMatrixRequest):
+    print("=== GENERATE-EXAM-DOWNLOAD ENDPOINT CALLED ===")
     """
     Tạo bài kiểm tra từ ma trận đề thi và trả về file DOCX download trực tiếp
     (Endpoint backup cho trường hợp Google Drive không hoạt động)
@@ -445,6 +454,8 @@ async def generate_exam_download(request: ExamMatrixRequest):
                 "X-Total-Questions": str(len(exam_result.get("questions", []))),
                 "X-Search-Quality": str(search_quality),
                 "X-Download-Mode": "true",
+                
+                
             },
         )
 
@@ -457,6 +468,7 @@ async def generate_exam_download(request: ExamMatrixRequest):
 
 @router.post("/generate-exam-test")
 async def generate_exam_test(request: ExamMatrixRequest):
+    print("=== GENERATE-EXAM-TEST ENDPOINT CALLED ===")
     """
     Test endpoint để tạo đề thi với mock data (bypass lesson content check)
 
@@ -757,3 +769,261 @@ def _calculate_search_result_quality(results: List[Dict[str, Any]]) -> float:
 
     avg_score = sum(r.get("score", 0) for r in results) / len(results)
     return round(avg_score, 2)
+
+
+@router.post("/generate-smart-exam", response_model=SmartExamResponse)
+async def generate_smart_exam(request: SmartExamRequest):
+    """
+    Tạo đề thi thông minh theo chuẩn THPT 2025
+
+    Endpoint này nhận ma trận đề thi theo format mới và tạo đề thi với cấu trúc:
+    - Phần I: Câu trắc nghiệm nhiều phương án lựa chọn
+    - Phần II: Câu trắc nghiệm đúng sai
+    - Phần III: Câu trắc nghiệm trả lời ngắn
+
+    Args:
+        request: SmartExamRequest chứa thông tin trường, môn học, ma trận đề thi
+
+    Returns:
+        SmartExamResponse: Kết quả tạo đề thi với link online document
+
+    Example:
+        POST /api/v1/exam/generate-smart-exam
+        {
+  "school": "Trường THPT Hong Thinh",
+  "grade": 12,
+  "subject": "Hoa hoc",
+  "examTitle": "Kiểm tra con cat",
+  "duration": 90,
+  "outputFormat": "docx",
+  "outputLink": "online",
+  "matrix": [
+    {
+      "lessonId": "234",
+      "totalQuestions": 10,
+      "parts": [
+        {
+          "part": 1,
+          "objectives": {
+            "Biết": 3,
+            "Hiểu": 1,
+            "Vận_dụng": 0
+          }
+        },
+        {
+          "part": 2,
+          "objectives": {
+            "Biết": 1,
+            "Hiểu": 3,
+            "Vận_dụng": 0
+          }
+        },
+        {
+          "part": 3,
+          "objectives": {
+            "Biết": 0,
+            "Hiểu": 1,
+            "Vận_dụng": 1
+          }
+        }
+      ]
+    },
+    {
+      "lessonId": "test1",
+      "totalQuestions": 8,
+      "parts": [
+        {
+          "part": 1,
+          "objectives": {
+            "Biết": 2,
+            "Hiểu": 1,
+            "Vận_dụng": 0
+          }
+        },
+        {
+          "part": 2,
+          "objectives": {
+            "Biết": 0,
+            "Hiểu": 3,
+            "Vận_dụng": 0
+          }
+        },
+        {
+          "part": 3,
+          "objectives": {
+            "Biết": 0,
+            "Hiểu": 1,
+            "Vận_dụng": 1
+          }
+        }
+      ]
+    }
+  ]
+}
+    """
+    print("=== SMART EXAM ENDPOINT CALLED ===")
+    try:
+        logger.info(f"=== SMART EXAM GENERATION START ===")
+        logger.info(f"Request: {request.school} - {request.subject} - Grade {request.grade}")
+
+        # 1. Validate request
+        if not request.matrix:
+            return SmartExamError(
+                success=False,
+                message="Validation failed",
+                error="Ma trận đề thi không được rỗng",
+                error_code="EMPTY_MATRIX",
+                details={}
+            )
+
+        # 2. Lấy tất cả lesson_id từ ma trận
+        lesson_ids = [lesson.lessonId for lesson in request.matrix]
+        logger.info(f"Extracting lesson_ids: {lesson_ids}")
+
+        # 3. Tìm kiếm nội dung cho tất cả bài học
+        logger.info("Searching for lesson contents...")
+        lesson_content = await exam_content_service.get_multiple_lessons_content_for_exam(
+            lesson_ids=lesson_ids
+        )
+
+        if not lesson_content.get("success", False):
+            return SmartExamError(
+                success=False,
+                message="Content retrieval failed",
+                error=f"Không thể lấy nội dung bài học: {lesson_content.get('error', 'Unknown error')}",
+                error_code="CONTENT_RETRIEVAL_FAILED",
+                details={"lesson_ids": lesson_ids}
+            )
+
+        # 4. Kiểm tra nội dung bài học
+        content_data = lesson_content.get("content", {})
+        missing_lessons = []
+        available_lessons = []
+
+        for lesson_id in lesson_ids:
+            if lesson_id in content_data and content_data[lesson_id]:
+                available_lessons.append(lesson_id)
+            else:
+                missing_lessons.append(lesson_id)
+
+        if missing_lessons:
+            logger.warning(f"Missing lessons: {missing_lessons}")
+            if len(missing_lessons) == len(lesson_ids):
+                return SmartExamError(
+                    success=False,
+                    message="No content found",
+                    error="Không tìm thấy nội dung cho bất kỳ bài học nào",
+                    error_code="NO_CONTENT_FOUND",
+                    details={
+                        "missing_lessons": missing_lessons,
+                        "available_lessons": available_lessons
+                    }
+                )
+
+        # 5. Tạo đề thi thông minh
+        logger.info("Generating smart exam...")
+        logger.info(f"DEBUG: content_data keys: {list(content_data.keys())}")
+        for lesson_id, lesson_data in content_data.items():
+            logger.info(f"DEBUG: lesson {lesson_id} data type: {type(lesson_data)}")
+            if isinstance(lesson_data, dict):
+                logger.info(f"DEBUG: lesson {lesson_id} keys: {list(lesson_data.keys())}")
+
+        logger.info(f"DEBUG ENDPOINT: About to call smart exam generation service")
+        exam_result = await smart_exam_generation_service.generate_smart_exam(
+            exam_request=request, lesson_content=content_data
+        )
+        logger.info(f"DEBUG ENDPOINT: Smart exam generation completed")
+        logger.info(f"DEBUG ENDPOINT: exam_result keys: {list(exam_result.keys()) if isinstance(exam_result, dict) else 'Not a dict'}")
+    
+        if not exam_result.get("success", False):
+            return SmartExamError(
+                success=False,
+                message="Exam generation failed",
+                error=f"Không thể tạo đề thi: {exam_result.get('error', 'Unknown error')}",
+                error_code="EXAM_GENERATION_FAILED",
+                details={}
+            )
+
+        # 6. Tạo file DOCX
+        logger.info("Creating DOCX file...")
+        docx_result = await smart_exam_docx_service.create_smart_exam_docx(
+            exam_data=exam_result, exam_request=request.model_dump()
+        )
+
+        if not docx_result.get("success", False):
+            return SmartExamError(
+                success=False,
+                message="DOCX creation failed",
+                error=f"Không thể tạo file DOCX: {docx_result.get('error', 'Unknown error')}",
+                error_code="DOCX_CREATION_FAILED",
+                details={}
+            )
+
+        # 7. Upload lên Google Drive và tạo link online
+        logger.info("Uploading to Google Drive...")
+        file_path = docx_result.get("file_path")
+        filename = docx_result.get("filename")
+
+        if not file_path:
+            return SmartExamError(
+                success=False,
+                message="No file path",
+                error="Không có đường dẫn file để upload",
+                error_code="NO_FILE_PATH",
+                details={}
+            )
+
+        upload_result = await google_drive_service.upload_docx_file(
+            file_path=file_path,
+            filename=filename or "smart_exam.docx",
+            convert_to_google_docs=True
+        )
+
+        if not upload_result.get("success", False):
+            return SmartExamError(
+                success=False,
+                message="Upload failed",
+                error=f"Không thể upload file: {upload_result.get('error', 'Unknown error')}",
+                error_code="UPLOAD_FAILED",
+                details={}
+            )
+
+        # 8. Xóa file tạm
+        try:
+            if file_path and os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f"Deleted temporary file: {file_path}")
+        except Exception as e:
+            logger.warning(f"Could not delete temporary file: {e}")
+
+        # 9. Trả về kết quả
+        statistics = exam_result.get("statistics", {})
+        logger.info(f"DEBUG ENDPOINT: statistics type: {type(statistics)}")
+        logger.info(f"DEBUG ENDPOINT: statistics content: {statistics}")
+
+        # Convert statistics to dict if it's a Pydantic model
+        if hasattr(statistics, 'model_dump'):
+            statistics_dict = statistics.model_dump()
+            logger.info(f"DEBUG ENDPOINT: converted statistics: {statistics_dict}")
+        else:
+            statistics_dict = statistics
+            logger.info(f"DEBUG ENDPOINT: using statistics as-is: {statistics_dict}")
+
+        return SmartExamResponse(
+            success=True,
+            exam_id=exam_result.get("exam_id"),
+            message="Đề thi thông minh đã được tạo thành công theo chuẩn THPT 2025",
+            online_links=upload_result.get("links", {}),
+            statistics=statistics_dict,
+            error=""
+        )
+
+    except Exception as e:
+        logger.error(f"Error in smart exam generation: {e}")
+        return SmartExamError(
+            success=False,
+            message="System error",
+            error=f"Lỗi hệ thống: {str(e)}",
+            error_code="SYSTEM_ERROR",
+            details={}
+        )

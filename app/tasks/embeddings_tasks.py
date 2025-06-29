@@ -33,7 +33,7 @@ def create_embeddings_task(self, task_id: str) -> Dict[str, Any]:
     Returns:
         Dict kết quả xử lý
     """
-    logger.info(f"Starting embeddings creation task: {task_id}")
+    print(f"Starting embeddings creation task: {task_id}")
     
     try:
         current_task.update_state(
@@ -42,7 +42,7 @@ def create_embeddings_task(self, task_id: str) -> Dict[str, Any]:
         )
         
         result = run_async_task(_create_embeddings_async(task_id))
-        logger.info(f"Embeddings creation completed: {task_id}")
+        print(f"Embeddings creation completed: {task_id}")
         return result
         
     except Exception as e:
@@ -112,7 +112,7 @@ def update_embeddings_task(self, task_id: str) -> Dict[str, Any]:
     Returns:
         Dict kết quả xử lý
     """
-    logger.info(f"Starting embeddings update task: {task_id}")
+    print(f"Starting embeddings update task: {task_id}")
     
     try:
         current_task.update_state(
@@ -121,7 +121,7 @@ def update_embeddings_task(self, task_id: str) -> Dict[str, Any]:
         )
         
         result = run_async_task(_update_embeddings_async(task_id))
-        logger.info(f"Embeddings update completed: {task_id}")
+        print(f"Embeddings update completed: {task_id}")
         return result
         
     except Exception as e:
