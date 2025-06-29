@@ -136,14 +136,26 @@ class SmartExamDocxService:
 
     def _extract_numeric_answer(self, answer_text: str) -> str:
         """
-        Trích xuất đáp án số thuần túy từ text cho phần III
-        Yêu cầu: Chỉ số, làm tròn 2 chữ số thập phân, format: -1,25; 0,75; 3,14
-        Tối đa 4 ký tự (bao gồm dấu trừ và dấu phẩy)
+        Trích xuất đáp án số thuần túy từ text cho phần III theo quy tắc mới
+
+        🎯 Quy tắc format đáp án phần 3:
+        1. Chỉ được tô đúng 4 ký tự (bao gồm chữ số 0-9, dấu trừ -, dấu phẩy ,)
+        2. Làm tròn/cắt bớt phần thập phân sao cho vừa đủ 4 ký tự
+        3. Không được tô dư, không ghi dấu , ở cuối
+        4. Chuyển đổi dấu thập phân: . → ,
+
+        📘 Ví dụ chuẩn:
+        - 12.34 → 12,3 (cắt còn 4 ký tự)
+        - -1.56 → -1,5 (đủ 4 ký tự)
+        - 0.123 → 0,12 (cắt, đổi . → ,)
+        - 123.45 → 123 (ưu tiên phần nguyên)
+        - 3.5 → 3,5 (dưới 4 ký tự, đổi dấu)
+        - -12.34 → -12 (cắt phần thập phân)
         """
         if not answer_text:
-            return "0,00"
+            return "0"
 
-        # Tìm số đầu tiên trong chuỗi (chỉ số âm, không có dấu +)
+        # Tìm số đầu tiên trong chuỗi
         number_pattern = r'-?(?:\d+[.,]?\d*|[.,]\d+)'
         match = re.search(number_pattern, str(answer_text))
 
@@ -154,56 +166,111 @@ class SmartExamDocxService:
                 number_for_parse = number.replace(',', '.')
                 float_num = float(number_for_parse)
 
-                # Xử lý số quá lớn - chuyển về dạng nhỏ hơn để vừa 4 ký tự
-                if abs(float_num) >= 100:
-                    # Tất cả số >= 100 đều cần chia nhỏ
-                    if abs(float_num) >= 10000:
-                        # VD: 17482 -> 1,75 (chia 10000)
-                        float_num = float_num / 10000
-                    elif abs(float_num) >= 1000:
-                        # VD: 2500 -> 2,50 (chia 1000)
-                        float_num = float_num / 1000
-                    else:
-                        # VD: 207.23 -> 2,07 (chia 100)
-                        float_num = float_num / 100
-
-                # Làm tròn chính xác 2 chữ số thập phân
-                rounded_num = round(float_num, 2)
-
-                # Format với đúng 2 chữ số thập phân
-                result = f"{rounded_num:.2f}"
-
-                # Chuyển dấu chấm thành dấu phẩy (định dạng Việt Nam)
-                result = result.replace('.', ',')
-
-                # Kiểm tra độ dài (tối đa 4 ký tự)
-                # Các format hợp lệ: X,XX hoặc -X,XX (3-4 ký tự)
-                if len(result) > 4:
-                    # Nếu quá dài, chia nhỏ số để vừa 4 ký tự
-                    if ',' in result:
-                        parts = result.split(',')
-                        integer_part = parts[0]
-                        decimal_part = parts[1]
-
-                        # Nếu phần nguyên có 2+ chữ số (không âm) hoặc 3+ chữ số (âm)
-                        if (not integer_part.startswith('-') and len(integer_part) >= 2) or \
-                           (integer_part.startswith('-') and len(integer_part) >= 3):
-                            # Chia nhỏ số để vừa format
-                            if integer_part.startswith('-'):
-                                # Số âm: giữ 1 chữ số sau dấu trừ
-                                result = f"-{integer_part[-1]},{decimal_part}"
+                # Xử lý theo quy tắc mới
+                if float_num == int(float_num):
+                    # Số nguyên - kiểm tra độ dài
+                    result = str(int(float_num))
+                    if len(result) > 4:
+                        # Cắt bớt nếu quá dài
+                        result = result[:4]
+                else:
+                    # Số thập phân - áp dụng quy tắc format
+                    if float_num < 0:
+                        # Số âm
+                        if abs(float_num) >= 100:
+                            # VD: -123.45 → -123 (ưu tiên phần nguyên)
+                            result = str(int(float_num))[:4]
+                        elif abs(float_num) >= 10:
+                            # VD: -12.34 → -12 (cắt phần thập phân để vừa 4 ký tự)
+                            result = str(int(float_num))
+                        else:
+                            # VD: -1.56 → -1,5 (đủ 4 ký tự)
+                            # VD: -0.5 → -0,5 (số âm nhỏ)
+                            if abs(float_num) < 1:
+                                # Trường hợp đặc biệt: -0.5 → -0,5
+                                decimal_str = f"{abs(float_num):.10f}"[2:]  # Bỏ "0."
+                                available_chars = 4 - 2 - 1  # -0, = 3 ký tự đã dùng
+                                if available_chars > 0:
+                                    decimal_truncated = decimal_str[:available_chars]
+                                    result = f"-0,{decimal_truncated}"
+                                else:
+                                    result = "-0"
                             else:
-                                # Số dương: giữ 1 chữ số cuối
-                                result = f"{integer_part[-1]},{decimal_part}"
+                                integer_part = int(float_num)
+                                decimal_part = abs(float_num) - abs(integer_part)
+
+                                # Tính số chữ số thập phân có thể có
+                                available_chars = 4 - len(str(integer_part)) - 1  # -1 cho dấu phẩy
+                                if available_chars > 0:
+                                    # Lấy phần thập phân và cắt theo số ký tự có thể
+                                    decimal_str = f"{decimal_part:.10f}"[2:]  # Bỏ "0."
+                                    decimal_truncated = decimal_str[:available_chars]
+                                    result = f"{integer_part},{decimal_truncated}"
+                                else:
+                                    result = str(integer_part)
+                    else:
+                        # Số dương
+                        if float_num >= 1000:
+                            # VD: 1234.56 → 1234 (ưu tiên phần nguyên)
+                            result = str(int(float_num))[:4]
+                        elif float_num >= 100:
+                            # VD: 123.45 → 123 (ưu tiên phần nguyên)
+                            result = str(int(float_num))
+                        elif float_num >= 10:
+                            # VD: 12.34 → 12,3 (cắt còn 4 ký tự)
+                            integer_part = int(float_num)
+                            decimal_part = float_num - integer_part
+
+                            # Có thể có 1 chữ số thập phân (XX,Y = 4 ký tự)
+                            decimal_str = f"{decimal_part:.10f}"[2:]  # Bỏ "0."
+                            result = f"{integer_part},{decimal_str[0]}"
+                        elif float_num >= 1:
+                            # VD: 3.5 → 3,5 (dưới 4 ký tự)
+                            integer_part = int(float_num)
+                            decimal_part = float_num - integer_part
+
+                            # Có thể có 2 chữ số thập phân (X,YZ = 4 ký tự)
+                            available_chars = 4 - len(str(integer_part)) - 1  # -1 cho dấu phẩy
+                            decimal_str = f"{decimal_part:.10f}"[2:]  # Bỏ "0."
+                            decimal_truncated = decimal_str[:available_chars]
+                            result = f"{integer_part},{decimal_truncated}"
+                        else:
+                            # VD: 0.123 → 0,12 (cắt, đổi . → ,)
+                            # VD: 0.0025 → 0,00 (số rất nhỏ)
+                            # VD: 0.9 → 0,9 (không thêm số 0 thừa)
+                            decimal_str = f"{float_num:.10f}"[2:]  # Bỏ "0."
+                            # Có thể có 2 chữ số thập phân (0,YZ = 4 ký tự)
+                            if len(decimal_str) >= 2:
+                                result = f"0,{decimal_str[:2]}"
+                            else:
+                                result = f"0,{decimal_str}"  # Không thêm số 0 thừa
+
+                # Loại bỏ dấu phẩy ở cuối và số 0 thừa (nhưng giữ lại số 0 có ý nghĩa)
+                if result.endswith(','):
+                    result = result[:-1]
+                elif ',' in result:
+                    # Loại bỏ số 0 thừa ở cuối, nhưng giữ lại ít nhất 1 chữ số sau dấu phẩy
+                    # Trường hợp đặc biệt: 0,00 (số rất nhỏ) thì giữ nguyên
+                    if result.startswith('0,00'):
+                        pass  # Giữ nguyên 0,00
+                    else:
+                        # Loại bỏ số 0 thừa: 0,90 → 0,9, 1,50 → 1,5
+                        result = result.rstrip('0')
+                        if result.endswith(','):
+                            result = result[:-1]
+
+                # Đảm bảo không vượt quá 4 ký tự
+                if len(result) > 4:
+                    result = result[:4]
+                    if result.endswith(','):
+                        result = result[:-1]
 
                 return result
 
             except ValueError:
-                # Nếu không parse được, trả về 0,00
-                return "0,00"
+                return "0"
 
-        # Fallback: không tìm thấy số
-        return "0,00"
+        return "0"
 
     def _setup_document_style(self, doc: Document):
         """Thiết lập style cho document"""
@@ -482,8 +549,9 @@ class SmartExamDocxService:
             format_note_run = format_note.add_run("Lưu ý: ")
             format_note_run.bold = True
             format_note.add_run("Đáp án phần III chỉ ghi số (không ghi đơn vị, không ghi chữ). ")
-            format_note.add_run("Làm tròn 2 chữ số thập phân, sử dụng dấu phẩy (,), tối đa 4 ký tự. ")
-            format_note.add_run("Ví dụ: -1,50; 0,25; 3,14")
+            format_note.add_run("Sử dụng dấu phẩy (,), tối đa 4 ký tự. ")
+            format_note.add_run("Đáp án chỉ lấy số nguyên không tính phần lẻ, học sinh tự làm tròn. ")
+            format_note.add_run("Ví dụ: 12,3; -1,5; 0,12; 123")
 
             doc.add_paragraph()
 
@@ -787,8 +855,10 @@ class SmartExamDocxService:
                 # Sử dụng field "answer" thay vì "dap_an"
                 dap_an = question.get("answer", question.get("dap_an", {}))
                 # Cho Part 3, đáp án có thể ở field "dap_an" trong answer object
-                answer = dap_an.get("dap_an", dap_an.get("answer", ""))
-                table.cell(1, i + 1).text = str(answer)
+                raw_answer = dap_an.get("dap_an", dap_an.get("answer", ""))
+                # Đảm bảo đáp án có đúng format 4 ký tự cho phiếu tô trắc nghiệm
+                formatted_answer = self._extract_numeric_answer(str(raw_answer))
+                table.cell(1, i + 1).text = formatted_answer
 
         except Exception as e:
             logger.error(f"Error creating part 3 answer table: {e}")
