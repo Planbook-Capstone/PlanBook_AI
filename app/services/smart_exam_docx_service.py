@@ -637,47 +637,97 @@ class SmartExamDocxService:
             return "four_rows"
 
     def _create_options_single_row(self, doc: Document, options: Dict[str, str]):
-        """Tạo các lựa chọn trên 1 hàng (A. xxx     B. yyy     C. zzz     D. www)"""
+        """Tạo các lựa chọn trên 1 hàng với căn lề trái và giãn đều bằng bảng"""
         try:
-            option_para = doc.add_paragraph()
-            option_texts = []
-            
-            for option in ["A", "B", "C", "D"]:
-                if option in options:
-                    option_texts.append(f"{option}. {options[option]}")
-            
-            # Nối các đáp án với khoảng cách phù hợp (7 spaces để trải đều)
-            combined_text = "       ".join(option_texts)
-            option_para.add_run(combined_text)
-            
+            # Đếm số lựa chọn có sẵn
+            available_options = [option for option in ["A", "B", "C", "D"] if option in options]
+            if not available_options:
+                return
+
+            # Tạo bảng với số cột bằng số lựa chọn
+            table = doc.add_table(rows=1, cols=len(available_options))
+            table.alignment = WD_TABLE_ALIGNMENT.LEFT
+
+            # Loại bỏ border của bảng để trông như text bình thường
+            for row in table.rows:
+                for cell in row.cells:
+                    # Xóa border
+                    cell._element.get_or_add_tcPr().append(
+                        self._create_no_border_element()
+                    )
+                    # Căn lề trái nội dung trong cell
+                    cell.paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+
+            # Điền nội dung vào các cell
+            for i, option in enumerate(available_options):
+                cell = table.cell(0, i)
+                cell.text = f"{option}. {options[option]}"
+                # Đảm bảo căn lề trái
+                cell.paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+
         except Exception as e:
             logger.error(f"Error creating single row options: {e}")
 
+    def _create_no_border_element(self):
+        """Tạo element XML để loại bỏ border của table cell"""
+        try:
+            from docx.oxml import parse_xml
+            no_border_xml = """
+            <w:tcBorders xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                <w:top w:val="nil"/>
+                <w:left w:val="nil"/>
+                <w:bottom w:val="nil"/>
+                <w:right w:val="nil"/>
+            </w:tcBorders>
+            """
+            return parse_xml(no_border_xml)
+        except Exception as e:
+            logger.error(f"Error creating no border element: {e}")
+            return None
+
     def _create_options_double_row(self, doc: Document, options: Dict[str, str]):
-        """Tạo các lựa chọn trên 2 hàng (A, B trên hàng 1; C, D trên hàng 2)"""
+        """Tạo các lựa chọn trên 2 hàng với căn lề trái và giãn đều bằng bảng"""
         try:
             # Hàng 1: A và B
             row1_options = []
             for option in ["A", "B"]:
                 if option in options:
-                    row1_options.append(f"{option}. {options[option]}")
-        
+                    row1_options.append((option, options[option]))
+
             if row1_options:
-                row1_para = doc.add_paragraph()
-                # Tăng khoảng cách để trải đều trên hàng
-                row1_para.add_run("       ".join(row1_options))
-            
-            # Hàng 2: C và D  
+                # Tạo bảng cho hàng 1
+                table1 = doc.add_table(rows=1, cols=len(row1_options))
+                table1.alignment = WD_TABLE_ALIGNMENT.LEFT
+
+                # Loại bỏ border và căn lề trái
+                for i, (option, text) in enumerate(row1_options):
+                    cell = table1.cell(0, i)
+                    cell._element.get_or_add_tcPr().append(
+                        self._create_no_border_element()
+                    )
+                    cell.text = f"{option}. {text}"
+                    cell.paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+
+            # Hàng 2: C và D
             row2_options = []
             for option in ["C", "D"]:
                 if option in options:
-                    row2_options.append(f"{option}. {options[option]}")
-        
+                    row2_options.append((option, options[option]))
+
             if row2_options:
-                row2_para = doc.add_paragraph()
-                # Tăng khoảng cách để trải đều trên hàng
-                row2_para.add_run("       ".join(row2_options))
-                
+                # Tạo bảng cho hàng 2
+                table2 = doc.add_table(rows=1, cols=len(row2_options))
+                table2.alignment = WD_TABLE_ALIGNMENT.LEFT
+
+                # Loại bỏ border và căn lề trái
+                for i, (option, text) in enumerate(row2_options):
+                    cell = table2.cell(0, i)
+                    cell._element.get_or_add_tcPr().append(
+                        self._create_no_border_element()
+                    )
+                    cell.text = f"{option}. {text}"
+                    cell.paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+
         except Exception as e:
             logger.error(f"Error creating double row options: {e}")
 
@@ -688,7 +738,9 @@ class SmartExamDocxService:
                 if option in options:
                     option_para = doc.add_paragraph()
                     option_para.add_run(f"{option}. {options[option]}")
-                
+                    # Thêm căn lề trái nhẹ để đồng nhất với các đáp án khác
+                    option_para.paragraph_format.left_indent = Inches(0.2)
+
         except Exception as e:
             logger.error(f"Error creating four rows options: {e}")
 
