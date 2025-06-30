@@ -170,13 +170,13 @@ class ExamDocxService:
     def _create_exam_header(
         self, doc: Document, exam_request: Dict[str, Any], exam_data: Dict[str, Any]
     ):
-        """Tạo header cho đề thi theo chuẩn THPT"""
+        """Tạo header cho đề thi theo chuẩn THPT với mã đề"""
         try:
-            # Tạo bảng header 2 cột
+            # Tạo bảng header 2 cột: thông tin trường, thông tin đề thi
             header_table = doc.add_table(rows=1, cols=2)
             header_table.autofit = False
-            header_table.columns[0].width = Inches(3.0)
-            header_table.columns[1].width = Inches(3.5)
+            header_table.columns[0].width = Inches(3.0)  # Cột trái - thông tin trường
+            header_table.columns[1].width = Inches(4.0)  # Cột phải - thông tin đề thi
 
             # Cột trái - Thông tin trường/sở
             left_cell = header_table.cell(0, 0)
@@ -184,10 +184,9 @@ class ExamDocxService:
             left_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
 
             # Logo/Tên cơ quan
-            left_para.add_run("BỘ GIÁO DỤC VÀ ĐÀO TạO\n").bold = True
+            left_para.add_run("BỘ GIÁO DỤC VÀ ĐÀO TẠO\n").bold = True
             school_name = exam_request.get('ten_truong', 'TRƯỜNG ...')
             left_para.add_run(f"{school_name}\n").bold = True
-            # Bỏ text "(Đề có ... trang)" theo yêu cầu
 
             # Cột phải - Thông tin đề thi
             right_cell = header_table.cell(0, 1)
@@ -207,12 +206,9 @@ class ExamDocxService:
             time_minutes = 45 if total_questions <= 20 else 50 if total_questions <= 30 else 90
             right_para.add_run(f"Thời gian làm bài: {time_minutes} phút, không kể thời gian phát đề")
 
-            # Xóa border của bảng
-            for row in header_table.rows:
-                for cell in row.cells:
-                    cell._element.get_or_add_tcPr().append(
-                        OxmlElement('w:tcBorders')
-                    )
+            # Xóa border cho cả 2 ô
+            self._remove_cell_borders(left_cell)
+            self._remove_cell_borders(right_cell)
 
             # Khoảng trống
             doc.add_paragraph()
@@ -232,15 +228,52 @@ class ExamDocxService:
     ):
         """Tạo thông tin đề thi theo chuẩn THPT"""
         try:
-            # Thông tin học sinh theo format chuẩn THPT
-            info_para = doc.add_paragraph()
-            info_para.add_run("Họ, tên thí sinh: ").bold = True
-            info_para.add_run("." * 70)
+            # Tạo hoặc lấy mã đề
+            exam_code = self._get_or_generate_exam_code(exam_request, exam_data)
 
-            # Số báo danh
-            sbd_para = doc.add_paragraph()
+            # Thông tin thí sinh với mã đề cùng hàng
+            info_table = doc.add_table(rows=2, cols=2)
+            info_table.autofit = False
+
+            # Thiết lập độ rộng cột cho bảng thông tin
+            info_table.columns[0].width = Inches(4.5)  # Cột trái - thông tin thí sinh
+            info_table.columns[1].width = Inches(2.5)  # Cột phải - mã đề
+
+            # Hàng 1: Họ tên thí sinh và mã đề
+            name_cell = info_table.cell(0, 0)
+            name_para = name_cell.paragraphs[0]
+            name_para.add_run("Họ, tên thí sinh: ").bold = True
+            name_para.add_run("." * 50)
+
+            # Ô mã đề cùng hàng với họ tên
+            code_cell = info_table.cell(0, 1)
+            code_para = code_cell.paragraphs[0]
+            code_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+
+            # Nội dung mã đề
+            ma_de_run = code_para.add_run("Mã đề: ")
+            ma_de_run.bold = True
+            ma_de_run.font.size = Pt(11)
+            code_run = code_para.add_run(exam_code)
+            code_run.bold = True
+            code_run.font.size = Pt(12)
+
+            # Thiết lập border cho ô mã đề
+            self._set_cell_border_for_exam_code(code_cell)
+
+            # Hàng 2: Số báo danh (ô thứ 2 để trống)
+            sbd_cell = info_table.cell(1, 0)
+            sbd_para = sbd_cell.paragraphs[0]
             sbd_para.add_run("Số báo danh: ").bold = True
-            sbd_para.add_run("." * 70)
+            sbd_para.add_run("." * 55)
+
+            # Ô trống bên phải số báo danh
+            empty_cell = info_table.cell(1, 1)
+
+            # Loại bỏ border cho các ô không phải mã đề
+            self._remove_cell_borders(name_cell)
+            self._remove_cell_borders(sbd_cell)
+            self._remove_cell_borders(empty_cell)
 
             # Thống kê đề thi theo chuẩn THPT
             stats = exam_data.get("statistics", {})
@@ -666,12 +699,20 @@ class ExamDocxService:
 
                         # Đáp án
                         dap_an = tn_questions[question_idx].get("dap_an", {})
+                        logger.info(f"DEBUG: Question {question_idx + 1} dap_an structure: {dap_an}")
+
                         correct_answer = dap_an.get("dung", "")
+                        logger.info(f"DEBUG: Question {question_idx + 1} correct_answer from 'dung': '{correct_answer}'")
+
                         if not correct_answer:
                             giai_thich = tn_questions[question_idx].get("giai_thich", "")
+                            logger.info(f"DEBUG: Question {question_idx + 1} giai_thich: '{giai_thich}'")
                             correct_answer = self._extract_correct_answer_from_explanation(giai_thich, dap_an)
+                            logger.info(f"DEBUG: Question {question_idx + 1} extracted answer: '{correct_answer}'")
+
                         if not correct_answer:
-                            correct_answer = "A"  # Default nếu không tìm được
+                            correct_answer = "Unknown"  # Thay đổi để dễ debug
+                            logger.warning(f"DEBUG: Question {question_idx + 1} - No answer found, using 'Unknown'")
 
                         table.cell(answer_row, col_idx).text = correct_answer
                         table.cell(answer_row, col_idx).paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
@@ -1011,6 +1052,77 @@ class ExamDocxService:
         except Exception as e:
             logger.error(f"Error extracting correct answer: {e}")
             return ""
+
+    def _get_or_generate_exam_code(self, exam_request: Dict[str, Any], exam_data: Dict[str, Any]) -> str:
+        """Lấy mã đề từ request hoặc tạo random nếu không có"""
+        try:
+            # Kiểm tra trong exam_request trước
+            exam_code = exam_request.get("exam_code") or exam_request.get("ma_de")
+            if exam_code:
+                return str(exam_code)
+
+            # Kiểm tra trong exam_data
+            exam_code = exam_data.get("exam_code") or exam_data.get("ma_de")
+            if exam_code:
+                return str(exam_code)
+
+            # Tạo mã đề random 4 số
+            import random
+            return f"{random.randint(1000, 9999)}"
+
+        except Exception as e:
+            logger.error(f"Error getting or generating exam code: {e}")
+            import random
+            return f"{random.randint(1000, 9999)}"
+
+    def _set_cell_border_for_exam_code(self, cell):
+        """Thiết lập border cho ô mã đề"""
+        try:
+            from docx.oxml.ns import qn
+            from docx.oxml import OxmlElement
+
+            # Tạo tcPr element nếu chưa có
+            tcPr = cell._element.get_or_add_tcPr()
+
+            # Tạo tcBorders element
+            tcBorders = OxmlElement('w:tcBorders')
+
+            # Tạo các border
+            for border_name in ['top', 'left', 'bottom', 'right']:
+                border = OxmlElement(f'w:{border_name}')
+                border.set(qn('w:val'), 'single')
+                border.set(qn('w:sz'), '12')  # Độ dày border
+                border.set(qn('w:space'), '0')
+                border.set(qn('w:color'), '000000')  # Màu đen
+                tcBorders.append(border)
+
+            tcPr.append(tcBorders)
+
+        except Exception as e:
+            logger.error(f"Error setting cell border for exam code: {e}")
+
+    def _remove_cell_borders(self, cell):
+        """Xóa border của cell"""
+        try:
+            from docx.oxml.ns import qn
+            from docx.oxml import OxmlElement
+
+            # Tạo tcPr element nếu chưa có
+            tcPr = cell._element.get_or_add_tcPr()
+
+            # Tạo tcBorders element với border nil
+            tcBorders = OxmlElement('w:tcBorders')
+
+            # Tạo các border nil
+            for border_name in ['top', 'left', 'bottom', 'right']:
+                border = OxmlElement(f'w:{border_name}')
+                border.set(qn('w:val'), 'nil')
+                tcBorders.append(border)
+
+            tcPr.append(tcBorders)
+
+        except Exception as e:
+            logger.error(f"Error removing cell borders: {e}")
 
 
 # Tạo instance global

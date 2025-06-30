@@ -76,6 +76,7 @@ class SmartExamRequest(BaseModel):
     subject: str = Field(..., description="Tên môn học")
     examTitle: str = Field(..., description="Tiêu đề đề thi (VD: Kiểm tra giữa kỳ 1)")
     duration: int = Field(..., ge=15, le=180, description="Thời gian làm bài (phút)")
+    examCode: Optional[str] = Field(None, description="Mã đề thi (4 số, VD: 0335). Nếu không truyền sẽ tự động random")
     outputFormat: Literal["docx"] = Field("docx", description="Định dạng file xuất ra")
     outputLink: Literal["online"] = Field("online", description="Loại link trả về")
     matrix: List[LessonMatrixModel] = Field(..., description="Ma trận đề thi theo bài học")
@@ -84,6 +85,14 @@ class SmartExamRequest(BaseModel):
     def validate_matrix_not_empty(cls, v):
         if not v:
             raise ValueError("Ma trận đề thi không được rỗng")
+        return v
+
+    @validator('examCode')
+    def validate_exam_code(cls, v):
+        if v is not None:
+            # Kiểm tra mã đề phải là 4 số
+            if not v.isdigit() or len(v) != 4:
+                raise ValueError("Mã đề phải là 4 số (VD: 0335)")
         return v
 
     @validator('subject')
@@ -105,6 +114,7 @@ class SmartExamRequest(BaseModel):
                 "subject": "Hóa học",
                 "examTitle": "Kiểm tra giữa kỳ 1",
                 "duration": 45,
+                "examCode": "0335",
                 "outputFormat": "docx",
                 "outputLink": "online",
                 "matrix": [
