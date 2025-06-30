@@ -9,6 +9,7 @@ from app.api.endpoints import (
     celery_health,
     lesson_plan,
     exam_generation,
+    exam_import,
 )
 from app.services.lesson_plan_framework_service import lesson_plan_framework_service
 from app.api.endpoints import auto_grading
@@ -46,6 +47,9 @@ api_router.include_router(
 )
 api_router.include_router(
     exam_generation.router, prefix="/exam", tags=["Exam Generation"]
+)
+api_router.include_router(
+    exam_import.router, prefix="/exam", tags=["Exam Import"]
 )
 # Add API router to app
 app.include_router(api_router, prefix=settings.API_PREFIX)
