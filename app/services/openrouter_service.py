@@ -173,3 +173,7 @@ class OpenRouterService:
                 "message": "OpenRouter API test failed",
                 "error": str(e)
             }
+
+
+# Tạo instance global
+openrouter_service = OpenRouterService()
