@@ -4,6 +4,7 @@ Service tạo file DOCX cho đề thi thông minh theo chuẩn THPT 2025
 
 import logging
 import os
+import random
 import tempfile
 import re
 from datetime import datetime
@@ -14,7 +15,8 @@ from docx import Document
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.oxml.shared import OxmlElement, qn
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 
 from app.models.smart_exam_models import SmartExamRequest
 
@@ -42,14 +44,17 @@ class SmartExamDocxService:
             Dict chứa thông tin file đã tạo
         """
         try:
+            # Tạo hoặc lấy mã đề
+            exam_code = self._get_or_generate_exam_code(exam_request)
+
             # Tạo document mới
             doc = Document()
 
             # Thiết lập style
             self._setup_document_style(doc)
 
-            # Tạo trang bìa
-            self._create_cover_page(doc, exam_request, exam_data)
+            # Tạo trang bìa với mã đề
+            self._create_cover_page(doc, exam_request, exam_data, exam_code)
 
             # Tạo bảng hóa trị cho môn Hóa học
             subject = self._get_field(exam_request, "subject", "")
@@ -272,6 +277,20 @@ class SmartExamDocxService:
 
         return "0"
 
+    def _get_or_generate_exam_code(self, exam_request: Union[SmartExamRequest, Dict[str, Any]]) -> str:
+        """Lấy mã đề từ request hoặc tạo random nếu không có"""
+        try:
+            exam_code = self._get_field(exam_request, "examCode", None)
+            if exam_code:
+                return exam_code
+
+            # Tạo mã đề random 4 số
+            return f"{random.randint(1000, 9999)}"
+
+        except Exception as e:
+            logger.error(f"Error getting or generating exam code: {e}")
+            return f"{random.randint(1000, 9999)}"
+
     def _setup_document_style(self, doc: Document):
         """Thiết lập style cho document"""
         try:
@@ -292,11 +311,16 @@ class SmartExamDocxService:
         except Exception as e:
             logger.error(f"Error setting up document style: {e}")
 
-    def _create_cover_page(self, doc: Document, exam_request: Union[SmartExamRequest, Dict[str, Any]], exam_data: Dict[str, Any]):
-        """Tạo trang bìa theo chuẩn THPT 2025"""
+    def _create_cover_page(self, doc: Document, exam_request: Union[SmartExamRequest, Dict[str, Any]], exam_data: Dict[str, Any], exam_code: str):
+        """Tạo trang bìa theo chuẩn THPT 2025 với mã đề"""
         try:
-            # Header với logo và thông tin trường
+            # Header với 2 cột: thông tin trường, thông tin đề thi
             header_table = doc.add_table(rows=1, cols=2)
+            header_table.autofit = False
+
+            # Thiết lập độ rộng cột
+            header_table.columns[0].width = Inches(3.0)  # Cột trái - thông tin trường
+            header_table.columns[1].width = Inches(4.0)  # Cột phải - thông tin đề thi
 
             # Cột trái - Logo và thông tin bộ
             left_cell = header_table.cell(0, 0)
@@ -310,22 +334,67 @@ class SmartExamDocxService:
             right_cell = header_table.cell(0, 1)
             right_para = right_cell.paragraphs[0]
             right_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-            right_para.add_run("ĐỀ KIỂM TRA LỚP 10").bold = True
+
+            # Lấy grade từ request để hiển thị đúng lớp
+            grade = self._get_field(exam_request, "grade", 10)
+            right_para.add_run(f"ĐỀ KIỂM TRA LỚP {grade}").bold = True
             right_para.add_run(f"\nMôn: {self._get_field(exam_request, 'subject', 'HÓA HỌC').upper()}")
             right_para.add_run(f"\nThời gian làm bài: {self._get_field(exam_request, 'duration', 50)} phút, không kể thời gian phát đề")
 
-            # Khoảng trắng
+            # Loại bỏ border cho cả 2 ô
+            left_cell._element.get_or_add_tcPr().append(
+                self._create_no_border_element()
+            )
+            right_cell._element.get_or_add_tcPr().append(
+                self._create_no_border_element()
+            )
+
+            # Khoảng trắng sau header
             doc.add_paragraph()
 
-            # Thông tin thí sinh
-            doc.add_paragraph()
-            info_para = doc.add_paragraph()
-            info_para.add_run("Họ, tên thí sinh: ").bold = True
-            info_para.add_run("." * 50)
-            
-            info_para2 = doc.add_paragraph()
-            info_para2.add_run("Số báo danh: ").bold = True
-            info_para2.add_run("." * 50)
+            # Thông tin thí sinh với mã đề cùng hàng
+            info_table = doc.add_table(rows=2, cols=2)
+            info_table.autofit = False
+
+            # Thiết lập độ rộng cột cho bảng thông tin
+            info_table.columns[0].width = Inches(4.5)  # Cột trái - thông tin thí sinh
+            info_table.columns[1].width = Inches(2.5)  # Cột phải - mã đề
+
+            # Hàng 1: Họ tên thí sinh và mã đề
+            name_cell = info_table.cell(0, 0)
+            name_para = name_cell.paragraphs[0]
+            name_para.add_run("Họ, tên thí sinh: ").bold = True
+            name_para.add_run("." * 50)
+
+            # Ô mã đề cùng hàng với họ tên
+            code_cell = info_table.cell(0, 1)
+            code_para = code_cell.paragraphs[0]
+            code_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+
+            # Nội dung mã đề
+            ma_de_run = code_para.add_run("Mã đề: ")
+            ma_de_run.bold = True
+            ma_de_run.font.size = Pt(11)
+            code_run = code_para.add_run(exam_code)
+            code_run.bold = True
+            code_run.font.size = Pt(12)
+
+            # Thiết lập border cho ô mã đề
+            self._set_cell_border_enhanced(code_cell)
+
+            # Hàng 2: Số báo danh (ô thứ 2 để trống)
+            sbd_cell = info_table.cell(1, 0)
+            sbd_para = sbd_cell.paragraphs[0]
+            sbd_para.add_run("Số báo danh: ").bold = True
+            sbd_para.add_run("." * 55)
+
+            # Ô trống bên phải số báo danh
+            empty_cell = info_table.cell(1, 1)
+
+            # Loại bỏ border cho các ô không phải mã đề
+            name_cell._element.get_or_add_tcPr().append(self._create_no_border_element())
+            sbd_cell._element.get_or_add_tcPr().append(self._create_no_border_element())
+            empty_cell._element.get_or_add_tcPr().append(self._create_no_border_element())
 
             # Thống kê đề thi
             doc.add_paragraph()
@@ -684,6 +753,121 @@ class SmartExamDocxService:
         except Exception as e:
             logger.error(f"Error creating no border element: {e}")
             return None
+
+    def _create_exam_code_border(self):
+        """Tạo element XML để tạo border đậm cho ô mã đề"""
+        try:
+            from docx.oxml import parse_xml
+            border_xml = """
+            <w:tcBorders xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                <w:top w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+                <w:left w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+                <w:bottom w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+                <w:right w:val="single" w:sz="12" w:space="0" w:color="000000"/>
+            </w:tcBorders>
+            """
+            return parse_xml(border_xml)
+        except Exception as e:
+            logger.error(f"Error creating exam code border element: {e}")
+            return None
+
+    def _create_cell_padding(self):
+        """Tạo element XML để thêm padding cho cell"""
+        try:
+            from docx.oxml import parse_xml
+            padding_xml = """
+            <w:tcMar xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                <w:top w:w="100" w:type="dxa"/>
+                <w:left w:w="100" w:type="dxa"/>
+                <w:bottom w:w="100" w:type="dxa"/>
+                <w:right w:w="100" w:type="dxa"/>
+            </w:tcMar>
+            """
+            return parse_xml(padding_xml)
+        except Exception as e:
+            logger.error(f"Error creating cell padding element: {e}")
+            return None
+
+    def _set_cell_border(self, cell):
+        """Thiết lập border rõ ràng cho cell"""
+        try:
+            from docx.oxml.ns import qn
+            from docx.oxml import OxmlElement
+
+            # Tạo tcPr element nếu chưa có
+            tcPr = cell._element.get_or_add_tcPr()
+
+            # Tạo tcBorders element
+            tcBorders = OxmlElement('w:tcBorders')
+
+            # Thiết lập border cho 4 phía
+            for border_name in ['top', 'left', 'bottom', 'right']:
+                border = OxmlElement(f'w:{border_name}')
+                border.set(qn('w:val'), 'single')
+                border.set(qn('w:sz'), '12')  # Độ dày border
+                border.set(qn('w:space'), '0')
+                border.set(qn('w:color'), '000000')  # Màu đen
+                tcBorders.append(border)
+
+            # Thêm tcBorders vào tcPr
+            tcPr.append(tcBorders)
+
+            # Thêm padding
+            tcMar = OxmlElement('w:tcMar')
+            for margin_name in ['top', 'left', 'bottom', 'right']:
+                margin = OxmlElement(f'w:{margin_name}')
+                margin.set(qn('w:w'), '100')
+                margin.set(qn('w:type'), 'dxa')
+                tcMar.append(margin)
+
+            tcPr.append(tcMar)
+
+        except Exception as e:
+            logger.error(f"Error setting cell border: {e}")
+
+    def _set_cell_border_enhanced(self, cell):
+        """Thiết lập border rất mỏng và padding tối thiểu cho ô mã đề"""
+        try:
+            from docx.oxml.ns import qn
+            from docx.oxml import OxmlElement
+
+            # Tạo tcPr element nếu chưa có
+            tcPr = cell._element.get_or_add_tcPr()
+
+            # Xóa border cũ nếu có
+            existing_borders = tcPr.find(qn('w:tcBorders'))
+            if existing_borders is not None:
+                tcPr.remove(existing_borders)
+
+            # Tạo tcBorders element mới
+            tcBorders = OxmlElement('w:tcBorders')
+
+            # Thiết lập border cực mỏng cho 4 phía
+            for border_name in ['top', 'left', 'bottom', 'right']:
+                border = OxmlElement(f'w:{border_name}')
+                border.set(qn('w:val'), 'single')
+                border.set(qn('w:sz'), '2')  # Border cực mỏng
+                border.set(qn('w:space'), '0')
+                border.set(qn('w:color'), '000000')  # Màu đen
+                tcBorders.append(border)
+
+            # Thêm tcBorders vào tcPr
+            tcPr.append(tcBorders)
+
+            # Thêm padding tối thiểu
+            tcMar = OxmlElement('w:tcMar')
+            for margin_name in ['top', 'left', 'bottom', 'right']:
+                margin = OxmlElement(f'w:{margin_name}')
+                margin.set(qn('w:w'), '20')  # Padding tối thiểu (giảm từ 40 xuống 20)
+                margin.set(qn('w:type'), 'dxa')
+                tcMar.append(margin)
+
+            tcPr.append(tcMar)
+
+            # Không thêm background color (loại bỏ màu nền)
+
+        except Exception as e:
+            logger.error(f"Error setting enhanced cell border: {e}")
 
     def _create_options_double_row(self, doc: Document, options: Dict[str, str]):
         """Tạo các lựa chọn trên 2 hàng với căn lề trái và giãn đều bằng bảng"""

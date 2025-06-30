@@ -790,76 +790,9 @@ async def generate_smart_exam(request: SmartExamRequest):
     Example:
         POST /api/v1/exam/generate-smart-exam
         {
-  "school": "Trường THPT Hong Thinh",
-  "grade": 12,
-  "subject": "Hoa hoc",
-  "examTitle": "Kiểm tra con cat",
-  "duration": 90,
-  "outputFormat": "docx",
-  "outputLink": "online",
-  "matrix": [
-    {
-      "lessonId": "234",
-      "totalQuestions": 10,
-      "parts": [
-        {
-          "part": 1,
-          "objectives": {
-            "Biết": 3,
-            "Hiểu": 1,
-            "Vận_dụng": 0
-          }
-        },
-        {
-          "part": 2,
-          "objectives": {
-            "Biết": 1,
-            "Hiểu": 3,
-            "Vận_dụng": 0
-          }
-        },
-        {
-          "part": 3,
-          "objectives": {
-            "Biết": 0,
-            "Hiểu": 1,
-            "Vận_dụng": 1
-          }
-        }
-      ]
-    },
-    {
-      "lessonId": "test1",
-      "totalQuestions": 8,
-      "parts": [
-        {
-          "part": 1,
-          "objectives": {
-            "Biết": 2,
-            "Hiểu": 1,
-            "Vận_dụng": 0
-          }
-        },
-        {
-          "part": 2,
-          "objectives": {
-            "Biết": 0,
-            "Hiểu": 3,
-            "Vận_dụng": 0
-          }
-        },
-        {
-          "part": 3,
-          "objectives": {
-            "Biết": 0,
-            "Hiểu": 1,
-            "Vận_dụng": 1
-          }
-        }
-      ]
-    }
-  ]
-}
+"school": "Trường THPT Hong Thinh",
+ "examCode": "1234",
+ "grade": 12, "subject": "Hoa hoc", "examTitle": "Kiểm tra ne", "duration": 90, "outputFormat": "docx", "outputLink": "online", "matrix": [ { "lessonId": "234", "totalQuestions": 10, "parts": [ { "part": 1, "objectives": { "Biết": 3, "Hiểu": 1, "Vận_dụng": 0 } }, { "part": 2, "objectives": { "Biết": 1, "Hiểu": 3, "Vận_dụng": 0 } }, { "part": 3, "objectives": { "Biết": 0, "Hiểu": 1, "Vận_dụng": 1 } } ] }, { "lessonId": "test1", "totalQuestions": 8, "parts": [ { "part": 1, "objectives": { "Biết": 2, "Hiểu": 1, "Vận_dụng": 0 } }, { "part": 2, "objectives": { "Biết": 0, "Hiểu": 3, "Vận_dụng": 0 } }, { "part": 3, "objectives": { "Biết": 0, "Hiểu": 1, "Vận_dụng": 1 } } ] } ] }
     """
     print("=== SMART EXAM ENDPOINT CALLED ===")
     try:
