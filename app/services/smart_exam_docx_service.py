@@ -540,6 +540,12 @@ class SmartExamDocxService:
             for i, q in enumerate(questions[:3]):  # Show first 3 questions
                 print(f"DEBUG DOCX: Question {i+1} keys: {list(q.keys())}")
                 print(f"DEBUG DOCX: Question {i+1} part: {q.get('part', 'NO_PART')}")
+                print(f"DEBUG DOCX: Question {i+1} answer structure: {q.get('answer', 'NO_ANSWER')}")
+                print(f"DEBUG DOCX: Question {i+1} dap_an structure: {q.get('dap_an', 'NO_DAP_AN')}")
+                if q.get('answer'):
+                    print(f"DEBUG DOCX: Question {i+1} answer keys: {list(q.get('answer', {}).keys())}")
+                if q.get('dap_an'):
+                    print(f"DEBUG DOCX: Question {i+1} dap_an keys: {list(q.get('dap_an', {}).keys())}")
 
             # Phân loại câu hỏi theo phần
             part_1_questions = [q for q in questions if q.get("part") == 1]
@@ -1162,9 +1168,9 @@ class SmartExamDocxService:
             for i, question in enumerate(questions):
                 table.cell(0, i + 1).text = str(i + 1)
 
-                # Lấy đáp án đúng
-                dap_an = question.get("dap_an", {})
-                correct_answer = dap_an.get("dung", "Unknow")
+                # Lấy đáp án đúng - thống nhất với cách lấy trong phần tạo câu hỏi
+                dap_an = question.get("answer", question.get("dap_an", {}))
+                correct_answer = dap_an.get("dung", dap_an.get("correct", "A"))
                 table.cell(1, i + 1).text = correct_answer
 
         except Exception as e:
@@ -1191,8 +1197,8 @@ class SmartExamDocxService:
             for i in range(min(questions_per_row, num_questions)):
                 table.cell(0, i + 1).text = str(i + 1)
 
-                dap_an = questions[i].get("dap_an", {})
-                correct_answer = dap_an.get("dung", "A")
+                dap_an = questions[i].get("answer", questions[i].get("dap_an", {}))
+                correct_answer = dap_an.get("dung", dap_an.get("correct", "A"))
                 table.cell(1, i + 1).text = correct_answer
 
             # Điền đáp án hàng 2 (nếu có)
@@ -1201,8 +1207,8 @@ class SmartExamDocxService:
                 if col_idx <= questions_per_row:
                     table.cell(2, col_idx).text = str(i + 1)
 
-                    dap_an = questions[i].get("dap_an", {})
-                    correct_answer = dap_an.get("dung", "A")
+                    dap_an = questions[i].get("answer", questions[i].get("dap_an", {}))
+                    correct_answer = dap_an.get("dung", dap_an.get("correct", "A"))
                     table.cell(3, col_idx).text = correct_answer
 
         except Exception as e:
@@ -1234,8 +1240,8 @@ class SmartExamDocxService:
                 for i, question in enumerate(current_questions):
                     table.cell(0, i + 1).text = str(start_idx + i + 1)
 
-                    dap_an = question.get("dap_an", {})
-                    correct_answer = dap_an.get("dung", "A")
+                    dap_an = question.get("answer", question.get("dap_an", {}))
+                    correct_answer = dap_an.get("dung", dap_an.get("correct", "A"))
                     table.cell(1, i + 1).text = correct_answer
 
                 # Thêm khoảng cách giữa các bảng

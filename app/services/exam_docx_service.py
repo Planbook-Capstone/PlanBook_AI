@@ -699,12 +699,20 @@ class ExamDocxService:
 
                         # Đáp án
                         dap_an = tn_questions[question_idx].get("dap_an", {})
+                        logger.info(f"DEBUG: Question {question_idx + 1} dap_an structure: {dap_an}")
+
                         correct_answer = dap_an.get("dung", "")
+                        logger.info(f"DEBUG: Question {question_idx + 1} correct_answer from 'dung': '{correct_answer}'")
+
                         if not correct_answer:
                             giai_thich = tn_questions[question_idx].get("giai_thich", "")
+                            logger.info(f"DEBUG: Question {question_idx + 1} giai_thich: '{giai_thich}'")
                             correct_answer = self._extract_correct_answer_from_explanation(giai_thich, dap_an)
+                            logger.info(f"DEBUG: Question {question_idx + 1} extracted answer: '{correct_answer}'")
+
                         if not correct_answer:
-                            correct_answer = "A"  # Default nếu không tìm được
+                            correct_answer = "Unknown"  # Thay đổi để dễ debug
+                            logger.warning(f"DEBUG: Question {question_idx + 1} - No answer found, using 'Unknown'")
 
                         table.cell(answer_row, col_idx).text = correct_answer
                         table.cell(answer_row, col_idx).paragraphs[0].alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
