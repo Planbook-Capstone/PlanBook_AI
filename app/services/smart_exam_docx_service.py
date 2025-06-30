@@ -563,28 +563,134 @@ class SmartExamDocxService:
             logger.error(f"Error creating part 3 section: {e}")
 
     def _create_multiple_choice_question(self, doc: Document, question: Dict[str, Any], question_num: int):
-        """Tạo câu hỏi trắc nghiệm nhiều phương án"""
+        """Tạo câu hỏi trắc nghiệm nhiều phương án với layout thông minh"""
         try:
             # Câu hỏi
             q_para = doc.add_paragraph()
             q_para.add_run(f"Câu {question_num}. ").bold = True
-            # Sử dụng field "question" thay vì "cau_hoi" và chuẩn hóa định dạng hóa học
             question_text = question.get("question", question.get("cau_hoi", ""))
             q_para.add_run(self._normalize_chemistry_format(question_text))
 
-            # Các phương án
-            # Sử dụng field "answer" thay vì "dap_an"
+            # Lấy các phương án
             dap_an = question.get("answer", question.get("dap_an", {}))
+            options = {}
             for option in ["A", "B", "C", "D"]:
                 if option in dap_an:
-                    option_para = doc.add_paragraph()
-                    option_text = self._normalize_chemistry_format(str(dap_an[option]))
-                    option_para.add_run(f"{option}. {option_text}")
+                    options[option] = self._normalize_chemistry_format(str(dap_an[option]))
 
-            doc.add_paragraph()
+            # Quyết định layout dựa trên độ dài đáp án và tạo hiển thị
+            self._create_options_with_smart_layout(doc, options)
 
         except Exception as e:
             logger.error(f"Error creating multiple choice question: {e}")
+
+    def _create_options_with_smart_layout(self, doc: Document, options: Dict[str, str]):
+        """Tạo các lựa chọn với layout thông minh dựa trên độ dài nội dung"""
+        try:
+            if not options:
+                return
+
+            # Quyết định layout dựa trên độ dài đáp án
+            layout = self._determine_options_layout(options)
+            
+            if layout == "single_row":
+                self._create_options_single_row(doc, options)
+            elif layout == "double_row":
+                self._create_options_double_row(doc, options)
+            else:  # four_rows
+                self._create_options_four_rows(doc, options)
+
+        except Exception as e:
+            logger.error(f"Error creating options with smart layout: {e}")
+
+    def _determine_options_layout(self, options: Dict[str, str]) -> str:
+        """
+        Quyết định layout hiển thị các lựa chọn dựa trên độ dài nội dung
+        
+        Logic:
+        - Nếu tất cả đáp án ngắn (≤ 25 ký tự): 1 hàng
+        - Nếu đáp án vừa phải (26-60 ký tự): 2 hàng (mỗi hàng 2 đáp án)  
+        - Nếu có đáp án dài (> 60 ký tự): 4 hàng (mỗi đáp án 1 hàng)
+        """
+        if not options:
+            return "four_rows"
+
+        max_length = 0
+        total_length = 0
+        
+        for option_text in options.values():
+            length = len(option_text.strip())
+            max_length = max(max_length, length)
+            total_length += length
+        
+        avg_length = total_length / len(options)
+        
+        # Logic quyết định layout
+        if max_length <= 25 and avg_length <= 20:
+            # Tất cả đáp án ngắn -> 1 hàng
+            return "single_row"
+        elif max_length <= 60 and avg_length <= 45:
+            # Đáp án vừa phải -> 2 hàng
+            return "double_row"
+        else:
+            # Có đáp án dài -> 4 hàng (giữ nguyên format cũ)
+            return "four_rows"
+
+    def _create_options_single_row(self, doc: Document, options: Dict[str, str]):
+        """Tạo các lựa chọn trên 1 hàng (A. xxx     B. yyy     C. zzz     D. www)"""
+        try:
+            option_para = doc.add_paragraph()
+            option_texts = []
+            
+            for option in ["A", "B", "C", "D"]:
+                if option in options:
+                    option_texts.append(f"{option}. {options[option]}")
+            
+            # Nối các đáp án với khoảng cách phù hợp (7 spaces để trải đều)
+            combined_text = "       ".join(option_texts)
+            option_para.add_run(combined_text)
+            
+        except Exception as e:
+            logger.error(f"Error creating single row options: {e}")
+
+    def _create_options_double_row(self, doc: Document, options: Dict[str, str]):
+        """Tạo các lựa chọn trên 2 hàng (A, B trên hàng 1; C, D trên hàng 2)"""
+        try:
+            # Hàng 1: A và B
+            row1_options = []
+            for option in ["A", "B"]:
+                if option in options:
+                    row1_options.append(f"{option}. {options[option]}")
+        
+            if row1_options:
+                row1_para = doc.add_paragraph()
+                # Tăng khoảng cách để trải đều trên hàng
+                row1_para.add_run("       ".join(row1_options))
+            
+            # Hàng 2: C và D  
+            row2_options = []
+            for option in ["C", "D"]:
+                if option in options:
+                    row2_options.append(f"{option}. {options[option]}")
+        
+            if row2_options:
+                row2_para = doc.add_paragraph()
+                # Tăng khoảng cách để trải đều trên hàng
+                row2_para.add_run("       ".join(row2_options))
+                
+        except Exception as e:
+            logger.error(f"Error creating double row options: {e}")
+
+    def _create_options_four_rows(self, doc: Document, options: Dict[str, str]):
+        """Tạo các lựa chọn trên 4 hàng (mỗi đáp án 1 hàng - format gốc cho đáp án dài)"""
+        try:
+            for option in ["A", "B", "C", "D"]:
+                if option in options:
+                    option_para = doc.add_paragraph()
+                    option_para.add_run(f"{option}. {options[option]}")
+                
+        except Exception as e:
+            logger.error(f"Error creating four rows options: {e}")
 
     def _create_true_false_question(self, doc: Document, question: Dict[str, Any], question_num: int):
         """Tạo câu hỏi đúng sai"""
@@ -734,7 +840,7 @@ class SmartExamDocxService:
             logger.error(f"Error creating THPT 2025 answer section: {e}")
 
     def _create_part_1_answer_table(self, doc: Document, questions: List[Dict[str, Any]]):
-        """Tạo bảng đáp án Phần I"""
+        """Tạo bảng đáp án Phần I với logic thông minh cho format hiển thị"""
         try:
             # Tiêu đề
             section_para = doc.add_paragraph()
@@ -745,34 +851,163 @@ class SmartExamDocxService:
             note_para = doc.add_paragraph()
             note_para.add_run("(Mỗi câu trả lời đúng thí sinh được 0,25 điểm)")
 
-            # Tạo bảng đáp án
-            cols_per_row = 10
-            questions_per_row = 9
-            num_rows = (len(questions) + questions_per_row - 1) // questions_per_row
+            # Logic thông minh để quyết định format hiển thị đáp án
+            num_questions = len(questions)
+            layout_config = self._determine_answer_layout(num_questions)
 
-            table = doc.add_table(rows=num_rows * 2, cols=cols_per_row)
-            table.style = 'Table Grid'
-
-            # Điền dữ liệu
-            for row_idx in range(num_rows):
-                header_row = row_idx * 2
-                answer_row = row_idx * 2 + 1
-
-                table.cell(header_row, 0).text = "Câu"
-                table.cell(answer_row, 0).text = "Chọn"
-
-                for col_idx in range(1, cols_per_row):
-                    question_idx = row_idx * questions_per_row + col_idx - 1
-                    if question_idx < len(questions):
-                        table.cell(header_row, col_idx).text = str(question_idx + 1)
-                        
-                        # Lấy đáp án đúng
-                        dap_an = questions[question_idx].get("dap_an", {})
-                        correct_answer = dap_an.get("dung", "A")
-                        table.cell(answer_row, col_idx).text = correct_answer
+            # Tạo bảng đáp án theo layout được quyết định
+            self._create_smart_answer_table(doc, questions, layout_config)
 
         except Exception as e:
             logger.error(f"Error creating part 1 answer table: {e}")
+
+    def _determine_answer_layout(self, num_questions: int) -> Dict[str, Any]:
+        """
+        Quyết định layout hiển thị đáp án dựa trên số lượng câu hỏi
+
+        Logic:
+        - Nếu đáp án ngắn (≤ 20 câu): 1 hàng
+        - Nếu đáp án vừa phải (21-40 câu): 2 hàng, mỗi hàng 2 câu
+        - Nếu đáp án dài (> 40 câu): 1 hàng (không auto)
+        """
+        if num_questions <= 20:
+            # Đáp án ngắn - 1 hàng
+            return {
+                "type": "single_row",
+                "questions_per_row": num_questions,
+                "cols_per_row": num_questions + 1,  # +1 cho cột header
+                "num_rows": 1
+            }
+        elif num_questions <= 40:
+            # Đáp án vừa phải - 2 hàng, mỗi hàng tối đa 20 câu
+            questions_per_row = (num_questions + 1) // 2  # Chia đều cho 2 hàng
+            return {
+                "type": "double_row",
+                "questions_per_row": questions_per_row,
+                "cols_per_row": questions_per_row + 1,
+                "num_rows": 2
+            }
+        else:
+            # Đáp án dài - 1 hàng (không auto)
+            return {
+                "type": "single_row_long",
+                "questions_per_row": num_questions,
+                "cols_per_row": min(num_questions + 1, 50),  # Giới hạn tối đa 50 cột
+                "num_rows": 1
+            }
+
+    def _create_smart_answer_table(self, doc: Document, questions: List[Dict[str, Any]], layout_config: Dict[str, Any]):
+        """Tạo bảng đáp án theo layout config thông minh"""
+        try:
+            layout_type = layout_config["type"]
+
+            if layout_type == "single_row":
+                self._create_single_row_answer_table(doc, questions, layout_config)
+            elif layout_type == "double_row":
+                self._create_double_row_answer_table(doc, questions, layout_config)
+            elif layout_type == "single_row_long":
+                self._create_single_row_long_answer_table(doc, questions, layout_config)
+
+        except Exception as e:
+            logger.error(f"Error creating smart answer table: {e}")
+
+    def _create_single_row_answer_table(self, doc: Document, questions: List[Dict[str, Any]], layout_config: Dict[str, Any]):
+        """Tạo bảng đáp án 1 hàng cho đáp án ngắn"""
+        try:
+            num_questions = len(questions)
+            table = doc.add_table(rows=2, cols=num_questions + 1)
+            table.style = 'Table Grid'
+
+            # Header row
+            table.cell(0, 0).text = "Câu"
+            table.cell(1, 0).text = "Chọn"
+
+            # Điền đáp án
+            for i, question in enumerate(questions):
+                table.cell(0, i + 1).text = str(i + 1)
+
+                # Lấy đáp án đúng
+                dap_an = question.get("dap_an", {})
+                correct_answer = dap_an.get("dung", "Unknow")
+                table.cell(1, i + 1).text = correct_answer
+
+        except Exception as e:
+            logger.error(f"Error creating single row answer table: {e}")
+
+    def _create_double_row_answer_table(self, doc: Document, questions: List[Dict[str, Any]], layout_config: Dict[str, Any]):
+        """Tạo bảng đáp án 2 hàng cho đáp án vừa phải"""
+        try:
+            num_questions = len(questions)
+            questions_per_row = layout_config["questions_per_row"]
+
+            table = doc.add_table(rows=4, cols=questions_per_row + 1)  # 2 hàng header + 2 hàng đáp án
+            table.style = 'Table Grid'
+
+            # Hàng 1
+            table.cell(0, 0).text = "Câu"
+            table.cell(1, 0).text = "Chọn"
+
+            # Hàng 2
+            table.cell(2, 0).text = "Câu"
+            table.cell(3, 0).text = "Chọn"
+
+            # Điền đáp án hàng 1
+            for i in range(min(questions_per_row, num_questions)):
+                table.cell(0, i + 1).text = str(i + 1)
+
+                dap_an = questions[i].get("dap_an", {})
+                correct_answer = dap_an.get("dung", "A")
+                table.cell(1, i + 1).text = correct_answer
+
+            # Điền đáp án hàng 2 (nếu có)
+            for i in range(questions_per_row, num_questions):
+                col_idx = i - questions_per_row + 1
+                if col_idx <= questions_per_row:
+                    table.cell(2, col_idx).text = str(i + 1)
+
+                    dap_an = questions[i].get("dap_an", {})
+                    correct_answer = dap_an.get("dung", "A")
+                    table.cell(3, col_idx).text = correct_answer
+
+        except Exception as e:
+            logger.error(f"Error creating double row answer table: {e}")
+
+    def _create_single_row_long_answer_table(self, doc: Document, questions: List[Dict[str, Any]], layout_config: Dict[str, Any]):
+        """Tạo bảng đáp án 1 hàng cho đáp án dài (không auto)"""
+        try:
+            num_questions = len(questions)
+            max_cols = layout_config["cols_per_row"]
+
+            # Nếu quá nhiều câu, chia thành nhiều bảng
+            questions_per_table = max_cols - 1  # -1 cho cột header
+            num_tables = (num_questions + questions_per_table - 1) // questions_per_table
+
+            for table_idx in range(num_tables):
+                start_idx = table_idx * questions_per_table
+                end_idx = min(start_idx + questions_per_table, num_questions)
+                current_questions = questions[start_idx:end_idx]
+
+                table = doc.add_table(rows=2, cols=len(current_questions) + 1)
+                table.style = 'Table Grid'
+
+                # Header row
+                table.cell(0, 0).text = "Câu"
+                table.cell(1, 0).text = "Chọn"
+
+                # Điền đáp án
+                for i, question in enumerate(current_questions):
+                    table.cell(0, i + 1).text = str(start_idx + i + 1)
+
+                    dap_an = question.get("dap_an", {})
+                    correct_answer = dap_an.get("dung", "A")
+                    table.cell(1, i + 1).text = correct_answer
+
+                # Thêm khoảng cách giữa các bảng
+                if table_idx < num_tables - 1:
+                    doc.add_paragraph()
+
+        except Exception as e:
+            logger.error(f"Error creating single row long answer table: {e}")
 
     def _create_part_2_answer_table(self, doc: Document, questions: List[Dict[str, Any]]):
         """Tạo bảng đáp án Phần II theo chuẩn THPT - format gộp a,b,c,d trong 1 cột"""
