@@ -59,7 +59,24 @@ class ExamImportService:
 
             logger.info(f"Extracted {len(extracted_text)} characters from DOCX")
 
-            # 2. Gửi cho LLM để phân tích và chuyển đổi
+            # 2. Validate format đề thi trước khi gọi LLM
+            logger.info("Validating exam format...")
+            format_validation = self._validate_exam_format(extracted_text)
+
+            if not format_validation["is_valid"]:
+                return ExamImportError(
+                    message="Invalid exam format",
+                    error=f"Đề thi không đúng format chuẩn: {format_validation['error']}",
+                    error_code="INVALID_FORMAT",
+                    details={
+                        "filename": filename,
+                        "validation_details": format_validation["details"]
+                    }
+                ).model_dump()
+
+            logger.info("Exam format validation passed")
+
+            # 3. Gửi cho LLM để phân tích và chuyển đổi
             logger.info("Sending content to LLM for analysis...")
             llm_result = await self._analyze_exam_with_llm(extracted_text, filename)
 
@@ -150,6 +167,58 @@ class ExamImportService:
         except Exception as e:
             logger.error(f"Error extracting text from DOCX: {e}")
             return ""
+
+    def _validate_exam_format(self, exam_text: str) -> Dict[str, Any]:
+        """
+        Validate format đề thi cơ bản - chỉ kiểm tra cấu trúc 3 phần và đáp án
+
+        Args:
+            exam_text: Nội dung đề thi đã extract
+
+        Returns:
+            Dict chứa kết quả validation
+        """
+        try:
+            # Normalize text để dễ kiểm tra
+            normalized_text = exam_text.upper().replace('\n', ' ').replace('\r', '')
+
+            validation_result = {
+                "is_valid": True,
+                "error": "",
+                "details": {}
+            }
+
+            # 1. Kiểm tra cấu trúc 3 phần
+            required_parts = ["PHẦN I", "PHẦN II", "PHẦN III"]
+            missing_parts = []
+
+            for part in required_parts:
+                if part not in normalized_text:
+                    missing_parts.append(part)
+
+            if missing_parts:
+                validation_result["is_valid"] = False
+                validation_result["error"] = f"Thiếu cấu trúc phần: {', '.join(missing_parts)}"
+                validation_result["details"]["missing_parts"] = missing_parts
+                return validation_result
+
+            # 2. Kiểm tra phần đáp án
+            if "ĐÁP ÁN" not in normalized_text:
+                validation_result["is_valid"] = False
+                validation_result["error"] = "Thiếu phần đáp án"
+                validation_result["details"]["missing_answer_section"] = True
+                return validation_result
+
+            logger.info("Exam format validation passed successfully")
+            return validation_result
+
+        except Exception as e:
+            logger.error(f"Error in format validation: {e}")
+            return {
+                "is_valid": False,
+                "error": f"Lỗi trong quá trình validate format: {str(e)}",
+                "details": {"exception": str(e)}
+            }
 
     async def _analyze_exam_with_llm(self, exam_text: str, filename: str) -> Dict[str, Any]:
         """
