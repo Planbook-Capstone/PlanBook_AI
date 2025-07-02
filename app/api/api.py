@@ -10,8 +10,10 @@ from app.api.endpoints import (
     lesson_plan,
     exam_generation,
     exam_import,
+    kafka_endpoints,
 )
 from app.services.lesson_plan_framework_service import lesson_plan_framework_service
+from app.services.kafka_service import kafka_service
 from app.api.endpoints import auto_grading
 
 # Initialize FastAPI app
@@ -51,6 +53,9 @@ api_router.include_router(
 api_router.include_router(
     exam_import.router, prefix="/exam", tags=["Exam Import"]
 )
+api_router.include_router(
+    kafka_endpoints.router, prefix="/kafka", tags=["Kafka Integration"]
+)
 # Add API router to app
 app.include_router(api_router, prefix=settings.API_PREFIX)
 
@@ -71,3 +76,10 @@ async def startup_event():
         print("[OK] Lesson Plan Framework Service initialized successfully")
     except Exception as e:
         print(f"[ERROR] Failed to initialize Lesson Plan Framework Service: {e}")
+
+    try:
+        await kafka_service.initialize()
+        print("[OK] Kafka Service initialized successfully")
+    except Exception as e:
+        print(f"[ERROR] Failed to initialize Kafka Service: {e}")
+        print("[INFO] Kafka service will be available when Kafka server is running")

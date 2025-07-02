@@ -84,6 +84,13 @@ class Settings(BaseSettings):
     GOOGLE_DRIVE_AUTO_DELETE_DAYS: int = int(os.getenv("GOOGLE_DRIVE_AUTO_DELETE_DAYS", "7"))
     ENABLE_GOOGLE_DRIVE: bool = os.getenv("ENABLE_GOOGLE_DRIVE", "False").lower() == "true"
 
+    # Kafka Configuration
+    KAFKA_BOOTSTRAP_SERVERS: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+    KAFKA_TOPIC_NAME: str = os.getenv("KAFKA_TOPIC_NAME", "planbook")
+    KAFKA_CONNECTION_TIMEOUT: int = int(os.getenv("KAFKA_CONNECTION_TIMEOUT", "10"))
+    KAFKA_REQUEST_TIMEOUT: int = int(os.getenv("KAFKA_REQUEST_TIMEOUT", "30"))
+    KAFKA_AUTO_CREATE_TOPICS: bool = os.getenv("KAFKA_AUTO_CREATE_TOPICS", "True").lower() == "true"
+
     # Security
     SECRET_KEY: Optional[str] = os.getenv("SECRET_KEY")
     ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
