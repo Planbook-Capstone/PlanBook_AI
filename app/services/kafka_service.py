@@ -5,7 +5,7 @@ Service để handle Kafka producer và consumer
 import json
 import asyncio
 import logging
-from typing import Dict, Any, Optional, Callable, List
+from typing import Dict, Any, Optional, Callable, List, Union, Awaitable
 from datetime import datetime
 
 from kafka import KafkaProducer, KafkaConsumer
@@ -178,7 +178,7 @@ class KafkaService:
             logger.error(f"❌ Failed to send message: {e}")
             return False
     
-    async def consume_messages_async(self, handler: Callable[[Dict[str, Any]], None]):
+    async def consume_messages_async(self, handler: Union[Callable[[Dict[str, Any]], None], Callable[[Dict[str, Any]], Awaitable[None]]]):
         """Consume messages asynchronously"""
         try:
             if not self.async_consumer:

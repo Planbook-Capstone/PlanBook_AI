@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 
 from app.services.kafka_service import kafka_service
-from app.core.kafka_config import get_topic_name, get_kafka_servers
+from app.core.kafka_config import get_topic_name, get_kafka_servers, kafka_settings
 
 logger = logging.getLogger(__name__)
 
@@ -237,9 +237,9 @@ async def test_exam_generation_message():
                 "timestamp": datetime.now().isoformat()
             }
         }
-        
+
         success = await kafka_service.send_message_async(test_message)
-        
+
         if success:
             return KafkaResponse(
                 success=True,
@@ -248,10 +248,112 @@ async def test_exam_generation_message():
             )
         else:
             raise HTTPException(status_code=500, detail="Failed to send test message")
-            
+
     except Exception as e:
         logger.error(f"❌ Error sending test exam generation message: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to send test message: {str(e)}")
+
+
+@router.get("/consumer/status", response_model=KafkaResponse)
+async def get_consumer_status():
+    """
+    Kiểm tra trạng thái Kafka consumer
+    """
+    try:
+        # Check if consumer is initialized
+        consumer_status = {
+            "async_consumer_initialized": kafka_service.async_consumer is not None,
+            "sync_consumer_initialized": kafka_service.consumer is not None,
+            "topic": get_topic_name(),
+            "servers": get_kafka_servers(),
+            "consumer_group": kafka_settings.AIOKAFKA_CONSUMER_CONFIG.get("group_id"),
+        }
+
+        return KafkaResponse(
+            success=True,
+            message="Consumer status retrieved successfully",
+            data=consumer_status
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Error getting consumer status: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get consumer status: {str(e)}")
+
+
+@router.post("/test/simulate-external-message", response_model=KafkaResponse)
+async def simulate_external_message():
+    """
+    Simulate message từ service khác để test consumer
+    """
+    try:
+        # Simulate message from SpringBoot service
+        external_message = {
+            "timestamp": datetime.now().isoformat(),
+            "source": "springboot-service",
+            "data": {
+                "type": "lesson_plan_request",
+                "subject": "Hóa học",
+                "grade": 12,
+                "lesson_id": "lesson_001",
+                "requirements": ["Hiểu về phản ứng hóa học", "Áp dụng công thức"],
+                "request_id": "req_12345",
+                "user_id": "teacher_001"
+            }
+        }
+
+        success = await kafka_service.send_message_async(external_message)
+
+        if success:
+            return KafkaResponse(
+                success=True,
+                message="Simulated external message sent successfully - check logs for consumer processing",
+                data=external_message
+            )
+        else:
+            raise HTTPException(status_code=500, detail="Failed to send simulated message")
+
+    except Exception as e:
+        logger.error(f"❌ Error sending simulated external message: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to send simulated message: {str(e)}")
+
+
+@router.post("/test/simulate-grading-request", response_model=KafkaResponse)
+async def simulate_grading_request():
+    """
+    Simulate grading request từ service khác
+    """
+    try:
+        # Simulate grading request from SpringBoot service
+        grading_message = {
+            "timestamp": datetime.now().isoformat(),
+            "source": "springboot-service",
+            "data": {
+                "type": "grading_request",
+                "exam_id": "exam_001",
+                "student_id": "student_001",
+                "student_answers": [
+                    {"question_id": 1, "answer": "A"},
+                    {"question_id": 2, "answer": "B"},
+                    {"question_id": 3, "answer": "C"}
+                ],
+                "request_id": "grading_req_001"
+            }
+        }
+
+        success = await kafka_service.send_message_async(grading_message)
+
+        if success:
+            return KafkaResponse(
+                success=True,
+                message="Simulated grading request sent successfully - check logs for consumer processing",
+                data=grading_message
+            )
+        else:
+            raise HTTPException(status_code=500, detail="Failed to send simulated grading request")
+
+    except Exception as e:
+        logger.error(f"❌ Error sending simulated grading request: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to send simulated grading request: {str(e)}")
 
 
 @router.post("/test/grading", response_model=KafkaResponse)
