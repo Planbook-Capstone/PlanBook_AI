@@ -6,7 +6,6 @@ import logging
 from typing import Dict, Any, List, Optional, Union, cast
 import uuid
 import datetime
-import json
 
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
@@ -104,10 +103,11 @@ class QdrantService:
     async def process_textbook(
         self,
         book_id: str,
-        book_structure: Dict[str, Any],
-        associated_lesson_id: Optional[str] = None,
+        text_content: str,
+        lesson_id: str,
+        book_title: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Xử lý sách giáo khoa và lưu embeddings vào Qdrant"""
+        """Xử lý sách giáo khoa đơn giản - chỉ lưu text content"""
 
         if (
             not self.qdrant_client
@@ -120,24 +120,6 @@ class QdrantService:
             }
 
         try:
-            # Kiểm tra và xử lý book_structure
-            if isinstance(book_structure, str):
-                import json
-
-                try:
-                    book_structure = json.loads(book_structure)
-                except json.JSONDecodeError as e:
-                    return {
-                        "success": False,
-                        "error": f"Invalid JSON in book_structure: {e}",
-                    }
-
-            if not isinstance(book_structure, dict):
-                return {
-                    "success": False,
-                    "error": f"book_structure must be dict, got {type(book_structure)}",
-                }
-
             # Tạo collection cho sách
             collection_name = f"textbook_{book_id}"
             collection_created = await self.create_collection(collection_name)
@@ -145,127 +127,37 @@ class QdrantService:
             if not collection_created:
                 return {"success": False, "error": "Failed to create collection"}
 
+            # Tạo chunks từ text content
+            text_chunks = self._create_text_chunks_from_text(
+                text_content,
+                settings.MAX_CHUNK_SIZE,
+                settings.CHUNK_OVERLAP,
+            )
+
             # Chuẩn bị dữ liệu
             points = []
-            total_chunks = 0  # Duyệt qua cấu trúc sách
-            for chapter_index, chapter in enumerate(book_structure.get("chapters", [])):
-                chapter_id = chapter.get("chapter_id", f"chapter_{chapter_index}")
-                chapter_title = chapter.get("title", f"Chương {chapter_index + 1}")
-                chapter_start_page = chapter.get("start_page")
-                chapter_end_page = chapter.get("end_page")
+            import uuid
 
-                for lesson_index, lesson in enumerate(chapter.get("lessons", [])):
-                    # Ưu tiên associated_lesson_id nếu có, nếu không thì dùng lesson_id từ structure
-                    lesson_title = lesson.get("title", f"Bài {lesson_index + 1}")
-                    lesson_content = lesson.get("content", "")
-                    lesson_page_numbers = lesson.get("page_numbers", [])
-                    lesson_images = lesson.get("images", [])
-                    lesson_image_count = lesson.get("image_count", 0)
-                    lesson_has_images = lesson.get("has_images", False)
+            # Tạo embeddings cho từng chunk
+            for i, chunk_text in enumerate(text_chunks):
+                chunk_id = str(uuid.uuid4())
+                chunk_vector = self.embedding_model.encode(chunk_text).tolist()
 
-                    # Get start and end pages from page_numbers
-                    lesson_start_page = (
-                        lesson_page_numbers[0] if lesson_page_numbers else None
+                points.append(
+                    qdrant_models.PointStruct(
+                        id=chunk_id,
+                        vector=chunk_vector,
+                        payload={
+                            "book_id": book_id,
+                            "lesson_id": lesson_id,
+                            "chunk_index": i,
+                            "type": "lesson_content",
+                            "text": chunk_text,
+                        },
                     )
-                    lesson_end_page = (
-                        lesson_page_numbers[-1] if lesson_page_numbers else None
-                    )
-                    lesson_total_pages = len(lesson_page_numbers)
+                )
 
-                    # Tạo chunk cho tiêu đề bài học
-                    title_text = f"{chapter_title} - {lesson_title}"
-                    import uuid
-
-                    title_id = str(uuid.uuid4())  # Sử dụng UUID thay vì string ID
-                    title_vector = self.embedding_model.encode(title_text).tolist()
-
-                    points.append(
-                        qdrant_models.PointStruct(
-                            id=title_id,
-                            vector=title_vector,
-                            payload={
-                                "book_id": book_id,
-                                "chapter_id": chapter_id,
-                                "lesson_id": associated_lesson_id,
-                                "type": "title",
-                                "text": title_text,
-                                "chapter_title": chapter_title,
-                                "lesson_title": lesson_title,
-                                "chapter_start_page": chapter_start_page,
-                                "chapter_end_page": chapter_end_page,
-                                "lesson_start_page": lesson_start_page,
-                                "lesson_end_page": lesson_end_page,
-                                "lesson_images": lesson_images,
-                                "lesson_pages": lesson_page_numbers,
-                                "lesson_total_pages": lesson_total_pages,
-                                "lesson_has_images": lesson_has_images,
-                            },
-                        )
-                    )
-                    total_chunks += 1  # Xử lý nội dung bài học
-                    lesson_content_text = lesson.get("content", "")
-
-                    # In our new structure, content is a string
-                    if (
-                        isinstance(lesson_content_text, str)
-                        and lesson_content_text.strip()
-                    ):
-                        text_chunks = self._create_text_chunks_from_text(
-                            lesson_content_text,
-                            settings.MAX_CHUNK_SIZE,
-                            settings.CHUNK_OVERLAP,
-                        )
-                    elif isinstance(lesson_content_text, dict):
-                        # Legacy format - content as dict
-                        lesson_text = lesson_content_text.get("text", "")
-                        if lesson_text:
-                            text_chunks = self._create_text_chunks_from_text(
-                                lesson_text,
-                                settings.MAX_CHUNK_SIZE,
-                                settings.CHUNK_OVERLAP,
-                            )
-                        else:
-                            text_chunks = []
-                    elif isinstance(lesson_content_text, list):
-                        # Legacy format - content as array
-                        text_chunks = self._create_text_chunks(
-                            lesson_content_text,
-                            settings.MAX_CHUNK_SIZE,
-                            settings.CHUNK_OVERLAP,
-                        )
-                    else:
-                        text_chunks = []
-
-                    # Tạo embeddings cho từng chunk
-                    for i, chunk_text in enumerate(text_chunks):
-                        chunk_id = str(uuid.uuid4())  # Sử dụng UUID thay vì string ID
-                        chunk_vector = self.embedding_model.encode(chunk_text).tolist()
-
-                        points.append(
-                            qdrant_models.PointStruct(
-                                id=chunk_id,
-                                vector=chunk_vector,
-                                payload={
-                                    "book_id": book_id,
-                                    "chapter_id": chapter_id,
-                                    "lesson_id": associated_lesson_id,
-                                    "chunk_index": i,
-                                    "type": "content",
-                                    "text": chunk_text,
-                                    "chapter_title": chapter_title,
-                                    "lesson_title": lesson_title,
-                                    "chapter_start_page": chapter_start_page,
-                                    "chapter_end_page": chapter_end_page,
-                                    "lesson_start_page": lesson_start_page,
-                                    "lesson_end_page": lesson_end_page,
-                                    "lesson_images": lesson_images,
-                                    "lesson_pages": lesson_page_numbers,
-                                    "lesson_total_pages": lesson_total_pages,
-                                    "lesson_has_images": lesson_has_images,
-                                },
-                            )
-                        )
-                        total_chunks += 1
+            total_chunks = len(text_chunks)
 
             # Lưu vào Qdrant theo batch
             batch_size = 100
@@ -276,31 +168,22 @@ class QdrantService:
                     f"Uploaded batch {i//batch_size + 1}/{(len(points)-1)//batch_size + 1} to Qdrant"
                 )
 
-            # Lưu metadata về quá trình xử lý VÀ toàn bộ book_structure gốc
-            # Sửa lỗi: vector=[0.0] * self.vector_size
+            # Lưu metadata đơn giản
             zero_vector = [0.0] * self.vector_size
 
-            # Lưu book_info từ book_structure
-            book_info = book_structure.get("book_info", {})
-
             metadata_point = qdrant_models.PointStruct(
-                id=str(uuid.uuid4()),  # Sử dụng UUID cho metadata
-                vector=zero_vector,  # Vector rỗng cho metadata
+                id=str(uuid.uuid4()),
+                vector=zero_vector,
                 payload={
                     "book_id": book_id,
-                    "lesson_id": associated_lesson_id,
-                    "type": "metadata",  # Thêm type để identify metadata point
+                    "lesson_id": lesson_id,
+                    "type": "metadata",
                     "total_chunks": total_chunks,
                     "processed_at": datetime.datetime.now().isoformat(),
                     "model": settings.EMBEDDING_MODEL,
                     "chunk_size": settings.MAX_CHUNK_SIZE,
                     "chunk_overlap": settings.CHUNK_OVERLAP,
-                    # Lưu toàn bộ book_structure gốc để có thể tái tạo format đầy đủ
-                    "original_book_structure": book_structure,
-                    "book_title": book_info.get("title", "Unknown"),
-                    "book_subject": book_info.get("subject", "Unknown"),
-                    "book_grade": book_info.get("grade", "Unknown"),
-                    "book_total_pages": book_info.get("total_pages", 0),
+                    "book_title": book_title or "Unknown",
                 },
             )
 
@@ -311,7 +194,7 @@ class QdrantService:
             return {
                 "success": True,
                 "book_id": book_id,
-                "lesson_id": associated_lesson_id,
+                "lesson_id": lesson_id,
                 "collection_name": collection_name,
                 "total_chunks": total_chunks,
                 "vector_dimension": self.vector_size,
@@ -321,44 +204,7 @@ class QdrantService:
             logger.error(f"Error processing textbook: {e}")
             return {"success": False, "error": str(e)}
 
-    def _create_text_chunks(
-        self, content: List[Dict[str, Any]], max_size: int, overlap: int
-    ) -> List[str]:
-        """Tạo chunks từ nội dung bài học"""
-        chunks = []
-        current_chunk = ""
 
-        for item in content:
-            if item.get("type") == "text":
-                text = item.get("text", "")
-
-                # Nếu text ngắn, thêm vào chunk hiện tại
-                if len(current_chunk) + len(text) <= max_size:
-                    current_chunk += " " + text
-                else:
-                    # Lưu chunk hiện tại
-                    if current_chunk:
-                        chunks.append(current_chunk.strip())
-
-                    # Bắt đầu chunk mới
-                    current_chunk = text
-
-            elif item.get("type") == "image" and item.get("description"):
-                # Thêm mô tả hình ảnh
-                desc = f"[Hình ảnh: {item.get('description')}]"
-
-                if len(current_chunk) + len(desc) <= max_size:
-                    current_chunk += " " + desc
-                else:
-                    if current_chunk:
-                        chunks.append(current_chunk.strip())
-                    current_chunk = desc
-
-        # Thêm chunk cuối cùng
-        if current_chunk:
-            chunks.append(current_chunk.strip())
-
-        return chunks
 
     def _create_text_chunks_from_text(
         self, text: str, max_size: int, overlap: int
@@ -469,153 +315,9 @@ class QdrantService:
             logger.error(f"Error searching textbook: {e}")
             return {"success": False, "error": str(e)}
 
-    async def save_textbook_images(
-        self,
-        book_id: str,
-        images_data: List[Dict[str, Any]],
-        storage_path: str = "data/textbook_images",
-    ) -> Dict[str, Any]:
-        """Save textbook images to file system and return mapping
 
-        Args:
-            book_id: Unique book identifier
-            images_data: List of image objects with metadata and base64 data
-            storage_path: Path where images will be stored
 
-        Returns:
-            Dict with success status and image file mapping
-        """
-        import os
-        import base64
-        from pathlib import Path
 
-        try:
-            # Create storage directory
-            book_storage_path = Path(storage_path) / book_id
-            book_storage_path.mkdir(parents=True, exist_ok=True)
-
-            saved_images = []
-
-            for image in images_data:
-                if not image.get("has_data", False) or not image.get("base64_data"):
-                    continue
-
-                try:
-                    # Decode base64 data
-                    image_data = base64.b64decode(image["base64_data"])
-
-                    # Generate filename
-                    image_id = image.get("image_id", "unknown")
-                    lesson_id = image.get("lesson_id", "unknown")
-                    page = image.get("page", 0)
-                    format_ext = image.get("format", "png")
-
-                    filename = f"{lesson_id}_{image_id}_page{page}.{format_ext}"
-                    file_path = book_storage_path / filename
-
-                    # Save file
-                    with open(file_path, "wb") as f:
-                        f.write(image_data)
-
-                    # Create image record
-                    image_record = {
-                        "image_id": image_id,
-                        "lesson_id": lesson_id,
-                        "file_path": str(file_path),
-                        "filename": filename,
-                        "page": page,
-                        "description": image.get("description", ""),
-                        "lesson_title": image.get("lesson_title", ""),
-                        "chapter_title": image.get("chapter_title", ""),
-                        "saved_at": datetime.datetime.now().isoformat(),
-                    }
-                    saved_images.append(image_record)
-
-                except Exception as e:
-                    logger.warning(f"Failed to save image {image.get('image_id')}: {e}")
-                    continue
-
-            # Save image manifest
-            manifest = {
-                "book_id": book_id,
-                "total_images": len(saved_images),
-                "saved_at": datetime.datetime.now().isoformat(),
-                "images": saved_images,
-            }
-
-            manifest_path = book_storage_path / "images_manifest.json"
-            with open(manifest_path, "w", encoding="utf-8") as f:
-                json.dump(manifest, f, indent=2, ensure_ascii=False)
-
-            logger.info(f"Saved {len(saved_images)} images for book {book_id}")
-
-            return {
-                "success": True,
-                "book_id": book_id,
-                "images_saved": len(saved_images),
-                "storage_path": str(book_storage_path),
-                "manifest_path": str(manifest_path),
-                "images": saved_images,
-            }
-
-        except Exception as e:
-            logger.error(f"Error saving images for book {book_id}: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-            }
-
-    async def process_textbook_with_images(
-        self,
-        book_id: str,
-        book_structure: Dict[str, Any],
-        images_data: Optional[List[Dict[str, Any]]] = None,
-        associated_lesson_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Enhanced textbook processing that handles both embeddings and image storage
-
-        Args:
-            book_id: Unique book identifier
-            book_structure: Clean book structure for embeddings (without image data)
-            images_data: Separate image data for file storage
-
-        Returns:
-            Dict with processing results including image storage info
-        """
-        try:  # Process text embeddings using existing method
-            embedding_result = await self.process_textbook(
-                book_id, book_structure, associated_lesson_id
-            )
-
-            # Save images if provided
-            image_result = {"success": True, "images_saved": 0}
-            if images_data and len(images_data) > 0:
-                image_result = await self.save_textbook_images(book_id, images_data)
-
-            # Combine results
-            return {
-                "success": embedding_result.get("success", False)
-                and image_result.get("success", False),
-                "book_id": book_id,
-                "embeddings": {
-                    "collection_name": embedding_result.get("collection_name"),
-                    "total_chunks": embedding_result.get("total_chunks", 0),
-                    "vector_dimension": embedding_result.get("vector_dimension"),
-                },
-                "images": {
-                    "images_saved": image_result.get("images_saved", 0),
-                    "storage_path": image_result.get("storage_path"),
-                    "manifest_path": image_result.get("manifest_path"),
-                },
-                "error": embedding_result.get("error") or image_result.get("error"),
-            }
-
-        except Exception as e:
-            logger.error(f"Error in enhanced textbook processing: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-            }
 
     async def delete_textbook_by_id(self, book_id: str) -> Dict[str, Any]:
         """

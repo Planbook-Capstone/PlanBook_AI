@@ -5,8 +5,6 @@ Trả về cấu trúc: Sách → Chương → Bài → Nội dung
 
 import logging
 import asyncio
-import json
-import uuid
 import re
 from typing import Dict, Any, List, Optional
 from concurrent.futures import ThreadPoolExecutor
@@ -71,26 +69,17 @@ class EnhancedTextbookService:
             refined_content = await self.refine_raw_content_with_llm(full_text)
             logger.info("✅ Content refinement completed")
             logger.info("✅ Content refinement {refined_content}")
-            # Step 4: Create simple final structure with refined content
-            logger.info("🏗️ Creating final structure...")
-            # refined_book_structure = self.create_simple_final_structure(
-            #     refined_content, book_metadata or {}, lesson_id, all_page_numbers
-            # )
-            logger.info("✅ Final structure created")
+            # Step 4: Return clean text content directly
+            logger.info("✅ Content processing completed")
 
             # Skip image extraction for faster processing
             images_data = []
             logger.info("⚡ Skipping image extraction for faster processing")
 
-            # Prepare clean structure for Qdrant
-            clean_book_structure = self.prepare_structure_for_qdrant(refined_content)
-
-            # Tính toán thống kê đơn giản cho 1 bài học
-
             return {
                 "success": True,
-                "clean_book_structure": clean_book_structure,
-                "images_data": images_data,  # Separate image data for external storage
+                "clean_book_structure": refined_content,  # Return clean text directly
+                "images_data": images_data,  # Empty array
                 "total_pages": len(pages_data),
                 "message": f"Textbook processed successfully with LLM content refinement",
             }
@@ -232,12 +221,7 @@ class EnhancedTextbookService:
 
 
 
-    def prepare_structure_for_qdrant(
-        self, book_structure: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Prepare book structure for Qdrant storage (no image processing needed)"""
-        # Since we skip image processing, just return the structure as-is
-        return book_structure
+
 
     def clean_text_content(self, text: str) -> str:
         """Làm sạch nội dung text - loại bỏ ký tự đặc biệt, format không cần thiết"""
@@ -336,49 +320,7 @@ Trả về nội dung đã được lọc và chỉnh sửa (chỉ text thuần 
             logger.error(f"❌ Error refining content with OpenRouter: {e}")
             return self.clean_text_content(raw_text)
 
-    def create_simple_final_structure(
-        self,
-        refined_content: str,
-        book_metadata: Dict[str, Any],
-        lesson_id: Optional[str] = None,
-        page_numbers: List[int] = None
-    ) -> Dict[str, Any]:
-        """Tạo cấu trúc cuối cùng đơn giản với nội dung đã refined"""
 
-        # Tạo lesson_id
-        if lesson_id:
-            final_lesson_id = lesson_id
-            logger.info(f"Using provided lesson_id: {final_lesson_id}")
-        else:
-            final_lesson_id = str(uuid.uuid4())
-            logger.info(f"Generated new lesson_id: {final_lesson_id}")
-
-        # Lấy tiêu đề từ metadata
-        title = book_metadata.get("title", "Bài học")
-
-        # Tạo cấu trúc đơn giản
-        structure = {
-            "title": title,
-            "subject": book_metadata.get("subject", "Chưa xác định"),
-            "grade": book_metadata.get("grade", "Chưa xác định"),
-            "chapters": [
-                {
-                    "chapter_id": "chapter_01",
-                    "title": "Nội dung chính",
-                    "lessons": [
-                        {
-                            "lesson_id": final_lesson_id,
-                            "title": title,
-                            "content": refined_content,
-                            "page_numbers": page_numbers or [],
-                        }
-                    ]
-                }
-            ]
-        }
-
-        logger.info(f"✅ Created simple final structure with lesson_id: {final_lesson_id}")
-        return structure
 
 
 # Global instance

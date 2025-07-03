@@ -197,12 +197,12 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
                 )
 
                 try:
-                    # Use the enhanced processing method that handles both embeddings and images
-                    embeddings_result = await qdrant_service.process_textbook_with_images(
+                    # Use the simplified processing method for text content only
+                    embeddings_result = await qdrant_service.process_textbook(
                         book_id=book_metadata.get("id", "unknown"),
-                        book_structure=clean_book_structure,  # Use clean structure for embeddings
-                        images_data=images_data,  # Save images separately
-                        associated_lesson_id=lesson_id,
+                        text_content=clean_book_structure,  # Clean text content
+                        lesson_id=lesson_id or "1",
+                        book_title=book_metadata.get("title", "Unknown"),
                     )
 
                     if embeddings_result and embeddings_result.get("success"):
@@ -218,25 +218,22 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
                 except Exception as e:
                     logger.warning(
                         f"Embeddings creation failed: {str(e)}"
-                    )  # Calculate statistics
-            total_chapters = len(book_structure.get("chapters", []))
-            total_lessons = sum(
-                len(chapter.get("lessons", []))
-                for chapter in book_structure.get("chapters", [])
-            )
+                    )  # Calculate simple statistics for 1 lesson per PDF
+            total_chapters = 1  # Always 1 chapter for simplified structure
+            total_lessons = 1   # Always 1 lesson per PDF
 
             # Create final result
             result = {
                 "success": True,
                 "book_id": book_metadata.get("id"),
                 "filename": filename,
-                "book_structure": book_structure,
+                "book_structure": {"text": clean_book_structure},  # Simple structure with text content
                 "lesson_id": lesson_id,  # Include lesson_id if provided
                 "statistics": {
                     "total_pages": processing_result.get("total_pages", 0),
                     "total_chapters": total_chapters,
                     "total_lessons": total_lessons,
-                    "total_images": total_images,
+                    "total_images": 0,  # No images processed
                 },
                 "processing_info": {
                     "ocr_applied": True,
@@ -244,9 +241,9 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
                     "processing_method": "celery_enhanced_analysis",
                     "task_id": task_id,
                     "associated_lesson_id": lesson_id,
-                    "images_processed": total_images > 0,
+                    "images_processed": False,  # No images processed
                 },
-                "message": "Enhanced textbook analysis completed successfully with LLM and image processing",
+                "message": "Enhanced textbook analysis completed successfully with LLM content refinement",
                 "embeddings_created": embeddings_created,
                 "embeddings_info": {
                     "collection_name": embeddings_result.get("embeddings", {}).get(
