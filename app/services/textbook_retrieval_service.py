@@ -70,12 +70,22 @@ class TextbookRetrievalService:
                             collection_name = collection.name
                             # Extract book_id từ collection name (textbook_abc123 -> abc123)
                             book_id = collection.name.replace("textbook_", "")
-                            
+
+                            # Collect points with chunk_index for sorting
+                            chunks_with_index = []
                             for point in search_result[0]:
                                 payload = point.payload or {}
                                 text_content = payload.get("text", "")
+                                chunk_index = payload.get("chunk_index", 0)
                                 if text_content and text_content.strip():
-                                    lesson_content.append(text_content.strip())
+                                    chunks_with_index.append((chunk_index, text_content.strip()))
+
+                            # Sort by chunk_index to maintain correct order
+                            chunks_with_index.sort(key=lambda x: x[0])
+
+                            # Extract sorted text content
+                            for _, text_content in chunks_with_index:
+                                lesson_content.append(text_content)
                             break
                             
                     except Exception as e:

@@ -177,11 +177,8 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
                     f"Textbook processing failed: {processing_result.get('error', 'Unknown error')}"
                 )
 
-            # Extract the results
-            book_structure = processing_result.get("book", {})
-            clean_book_structure = processing_result.get(
-                "clean_book_structure", book_structure
-            )
+            # Extract the clean text content directly
+            clean_book_structure = processing_result.get("clean_book_structure", "")
            
             await mongodb_task_service.update_task_progress(
                 task_id, 60, "Book structure analysis and content refinement with OpenRouter LLM completed"

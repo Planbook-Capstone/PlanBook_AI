@@ -166,9 +166,11 @@ class ExamContentService:
                             lesson_chunks = []
                             lesson_info = {}
 
+                            # Collect chunks with index for sorting
+                            chunks_with_index = []
                             for point in search_result[0]:
                                 payload = point.payload or {}
-                                
+
                                 # Bỏ qua metadata points
                                 if payload.get("type") == "metadata":
                                     continue
@@ -182,13 +184,20 @@ class ExamContentService:
                                         "chapter_id": payload.get("chapter_id", ""),
                                     }
 
-                                # Lưu content chunks
-                                lesson_chunks.append({
+                                # Collect chunks with index for sorting
+                                chunk_index = payload.get("chunk_index", 0)
+                                chunks_with_index.append((chunk_index, {
                                     "text": payload.get("text", ""),
                                     "page": payload.get("page", 0),
                                     "type": payload.get("type", "content"),
                                     "section": payload.get("section", ""),
-                                })
+                                }))
+
+                            # Sort by chunk_index to maintain correct order
+                            chunks_with_index.sort(key=lambda x: x[0])
+
+                            # Extract sorted chunks
+                            lesson_chunks = [chunk for _, chunk in chunks_with_index]
 
                             return {
                                 "success": True,
