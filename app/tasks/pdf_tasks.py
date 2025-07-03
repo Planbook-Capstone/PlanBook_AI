@@ -143,17 +143,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
             from app.services.enhanced_textbook_service import enhanced_textbook_service
             from app.services.qdrant_service import qdrant_service
 
-            pages_data = await enhanced_textbook_service._extract_pages_with_ocr(
-                file_content
-            )
-
-            # Validate OCR extraction
-            if not pages_data or len(pages_data) == 0:
-                raise Exception("OCR extraction failed: No pages extracted")
-
-            logger.info(f"OCR completed. Extracted {len(pages_data)} pages")
-
-            # Skip image analysis for faster processing
+            # Skip separate OCR step - it's handled inside process_textbook_to_structure
             await mongodb_task_service.update_task_progress(
                 task_id, 35, "Skipping image analysis for faster processing..."
             )  # Create metadata
@@ -192,12 +182,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
             clean_book_structure = processing_result.get(
                 "clean_book_structure", book_structure
             )
-            images_data = processing_result.get("images_data", [])
-            total_images = processing_result.get("total_images", 0)
-
-            logger.info(
-                f"Enhanced analysis completed: {len(book_structure.get('chapters', []))} chapters, {total_images} images"
-            )  # Update progress: Structure completed
+           
             await mongodb_task_service.update_task_progress(
                 task_id, 60, "Book structure analysis and content refinement with OpenRouter LLM completed"
             )

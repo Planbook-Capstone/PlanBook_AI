@@ -7,6 +7,7 @@ import logging
 import asyncio
 import json
 import uuid
+import re
 from typing import Dict, Any, List, Optional
 from concurrent.futures import ThreadPoolExecutor
 import fitz  # PyMuPDF
@@ -54,51 +55,44 @@ class EnhancedTextbookService:
             # Skip image analysis to improve speed
             logger.info("⚡ Skipping image analysis for faster processing")
 
-            # Step 3: Analyze book structure with LLM
-            logger.info("🧠 Analyzing book structure...")
-            book_structure = await self._analyze_book_structure_enhanced(
-                pages_data, book_metadata
-            )
-            logger.info(
-                f"📚 Detected {len(book_structure.get('chapters', []))} chapters"
-            )
+            # Step 2: Combine all text from pages
+            logger.info("📝 Combining text from all pages...")
+            full_text = ""
+            all_page_numbers = []
+            for page in pages_data:
+                full_text += page.get("text", "") + "\n"
+                all_page_numbers.append(page.get("page_number", 0))
 
-            # Step 4: Build final structure with content and lesson IDs
-            logger.info("🔄 Building final lesson structure...")
-            processed_book = await self._build_final_structure(
-                book_structure,
-                pages_data,
-                book_metadata or {},
-                lesson_id,  # Pass lesson_id
-            )
+            logger.info(f"📄 ALl Data {len(pages_data)} pages")
+            logger.info(f"📄 Combined text from {len(pages_data)} pages")
 
-            logger.info("✅ Textbook processing completed successfully")
+            # Step 3: Refine content directly with OpenRouter LLM
+            logger.info("🤖 Refining content with OpenRouter LLM...")
+            refined_content = await self.refine_raw_content_with_llm(full_text)
+            logger.info("✅ Content refinement completed")
+            logger.info("✅ Content refinement {refined_content}")
+            # Step 4: Create simple final structure with refined content
+            logger.info("🏗️ Creating final structure...")
+            # refined_book_structure = self.create_simple_final_structure(
+            #     refined_content, book_metadata or {}, lesson_id, all_page_numbers
+            # )
+            logger.info("✅ Final structure created")
 
             # Skip image extraction for faster processing
             images_data = []
             logger.info("⚡ Skipping image extraction for faster processing")
 
-            # Refine content with OpenRouter LLM before saving to Qdrant
-            logger.info("🤖 Refining content with OpenRouter LLM...")
-            refined_book_structure = await self.refine_content_with_llm(processed_book)
-            logger.info("✅ Content refinement completed")
-
             # Prepare clean structure for Qdrant
-            clean_book_structure = self.prepare_structure_for_qdrant(refined_book_structure)
+            clean_book_structure = self.prepare_structure_for_qdrant(refined_content)
 
             # Tính toán thống kê đơn giản cho 1 bài học
-            total_lessons = sum(len(ch.get("lessons", [])) for ch in refined_book_structure.get("chapters", []))
 
             return {
                 "success": True,
-                "book": refined_book_structure,  # Full structure with refined content and image data
-                "clean_book_structure": clean_book_structure,  # Structure without image data for Qdrant
+                "clean_book_structure": clean_book_structure,
                 "images_data": images_data,  # Separate image data for external storage
                 "total_pages": len(pages_data),
-                "total_chapters": len(refined_book_structure.get("chapters", [])),
-                "total_lessons": total_lessons,
-                "total_images": len(images_data),
-                "message": f"Textbook processed successfully with LLM content refinement ({total_lessons} lesson{'s' if total_lessons != 1 else ''})",
+                "message": f"Textbook processed successfully with LLM content refinement",
             }
 
         except Exception as e:
@@ -220,58 +214,6 @@ class EnhancedTextbookService:
             logger.error(f"OCR failed for page {page_data['page_number']}: {e}")
             return ""
 
-    async def _analyze_book_structure_enhanced(
-        self,
-        pages_data: List[Dict[str, Any]],
-        book_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Tạo cấu trúc đơn giản: 1 PDF = 1 bài học"""
-
-        logger.info("📚 Creating simple structure: 1 PDF = 1 lesson")
-
-        # Tạo cấu trúc đơn giản cố định - không cần LLM phức tạp
-        total_pages = len(pages_data)
-
-        # Lấy tiêu đề từ metadata hoặc trang đầu
-        title = "Bài học"
-        if book_metadata and book_metadata.get("title"):
-            title = book_metadata["title"]
-        else:
-            # Thử extract tiêu đề từ trang đầu
-            if pages_data and pages_data[0]["text"].strip():
-                first_lines = pages_data[0]["text"].strip().split('\n')[:5]
-                for line in first_lines:
-                    if len(line.strip()) > 5 and len(line.strip()) < 100:
-                        title = line.strip()
-                        break
-
-        structure = {
-            "book_info": {
-                "title": title,
-                "subject": book_metadata.get("subject", "Chưa xác định") if book_metadata else "Chưa xác định",
-                "total_chapters": 1,
-                "total_lessons": 1
-            },
-            "chapters": [
-                {
-                    "chapter_id": "chapter_01",
-                    "chapter_title": "Nội dung chính",
-                    "start_page": 1,
-                    "end_page": total_pages,
-                    "lessons": [
-                        {
-                            "lesson_id": "lesson_01",
-                            "lesson_title": title,
-                            "start_page": 1,
-                            "end_page": total_pages
-                        }
-                    ]
-                }
-            ]
-        }
-
-        logger.info(f"✅ Created simple structure: 1 chapter, 1 lesson, {total_pages} pages")
-        return structure
 
 
 
@@ -283,130 +225,95 @@ class EnhancedTextbookService:
 
 
 
-    async def _build_final_structure(
-        self,
-        analysis_result: Dict[str, Any],
-        pages_data: List[Dict[str, Any]],
-        book_metadata: Dict[str, Any],
-        external_lesson_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Tạo cấu trúc đơn giản: 1 PDF = 1 bài học"""
-
-        logger.info("🏗️ Building simple structure: 1 PDF = 1 lesson")
-
-        # Tập hợp toàn bộ nội dung từ tất cả các trang
-        full_content = ""
-        all_page_numbers = []
-
-        for page in pages_data:
-            full_content += page.get("text", "") + "\n"
-            all_page_numbers.append(page.get("page_number", 0))
-
-        # Tạo lesson_id
-        if external_lesson_id:
-            lesson_id = external_lesson_id
-            logger.info(f"Using provided lesson_id: {lesson_id}")
-        else:
-            lesson_id = str(uuid.uuid4())
-            logger.info(f"Generated new lesson_id: {lesson_id}")
-
-        # Lấy tiêu đề từ analysis_result hoặc metadata
-        lesson_title = analysis_result.get("book_info", {}).get("title", book_metadata.get("title", "Bài học"))
-
-        # Tạo cấu trúc đơn giản
-        book_structure = {
-            "title": lesson_title,
-            "subject": analysis_result.get("book_info", {}).get("subject", book_metadata.get("subject", "Chưa xác định")),
-            "grade": analysis_result.get("book_info", {}).get("grade", book_metadata.get("grade", "Chưa xác định")),
-            "chapters": [
-                {
-                    "chapter_id": "chapter_01",
-                    "title": "Nội dung chính",
-                    "lessons": [
-                        {
-                            "lesson_id": lesson_id,
-                            "title": lesson_title,
-                            "content": full_content.strip(),
-                            "page_numbers": all_page_numbers,
-                        }
-                    ]
-                }
-            ]
-        }
-
-        logger.info(f"✅ Created simple structure with lesson_id: {lesson_id}")
-        return book_structure
 
 
 
-    async def refine_content_with_llm(
+
+
+
+
+    def prepare_structure_for_qdrant(
         self, book_structure: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Gửi nội dung đến OpenRouter LLM để lọc và chỉnh sửa nội dung bài giảng
+        """Prepare book structure for Qdrant storage (no image processing needed)"""
+        # Since we skip image processing, just return the structure as-is
+        return book_structure
 
-        Tối ưu cho việc xử lý 1 bài học duy nhất trong mỗi PDF
-        """
+    def clean_text_content(self, text: str) -> str:
+        """Làm sạch nội dung text - loại bỏ ký tự đặc biệt, format không cần thiết"""
+        if not text:
+            return ""
+
+        logger.info("🧹 Cleaning text content...")
+
+        # Loại bỏ các ký tự đặc biệt và format markdown
+        cleaned_text = text
+
+        # Loại bỏ dấu * (markdown bold/italic)
+        cleaned_text = re.sub(r'\*+', '', cleaned_text)
+
+        # Loại bỏ dấu # (markdown headers)
+        cleaned_text = re.sub(r'#+\s*', '', cleaned_text)
+
+        # Loại bỏ dấu _ (markdown underline)
+        cleaned_text = re.sub(r'_+', '', cleaned_text)
+
+        # Loại bỏ dấu ` (markdown code)
+        cleaned_text = re.sub(r'`+', '', cleaned_text)
+
+        # Loại bỏ dấu [] và () (markdown links)
+        cleaned_text = re.sub(r'\[([^\]]*)\]\([^\)]*\)', r'\1', cleaned_text)
+
+        # Loại bỏ ký tự \b (backspace)
+        cleaned_text = cleaned_text.replace('\b', '')
+
+        # Loại bỏ ký tự \r
+        cleaned_text = cleaned_text.replace('\r', '')
+
+        # Thay thế nhiều dấu xuống dòng liên tiếp bằng 1 dấu xuống dòng
+        cleaned_text = re.sub(r'\n\s*\n\s*\n+', '\n\n', cleaned_text)
+
+        # Loại bỏ khoảng trắng thừa ở đầu và cuối mỗi dòng
+        lines = cleaned_text.split('\n')
+        cleaned_lines = [line.strip() for line in lines if line.strip()]
+
+        # Ghép lại thành một đoạn text liên tục
+        final_text = ' '.join(cleaned_lines)
+
+        # Loại bỏ khoảng trắng thừa
+        final_text = re.sub(r'\s+', ' ', final_text).strip()
+
+        logger.info(f"🧹 Text cleaned: {len(text)} → {len(final_text)} chars")
+        return final_text
+
+    async def refine_raw_content_with_llm(self, raw_text: str) -> str:
+        """Gửi text thô trực tiếp đến OpenRouter LLM để lọc và chỉnh sửa nội dung"""
         try:
             from app.services.openrouter_service import OpenRouterService
 
             openrouter_service = OpenRouterService()
             if not openrouter_service.available:
-                logger.warning("OpenRouter service not available, skipping content refinement")
-                return book_structure
+                logger.warning("OpenRouter service not available, returning original content")
+                return self.clean_text_content(raw_text)
 
-            import copy
-            refined_structure = copy.deepcopy(book_structure)
+            logger.info("🤖 Sending raw content to OpenRouter for refinement...")
 
-            logger.info("🤖 Starting content refinement with OpenRouter LLM...")
-
-            # Tìm bài học đầu tiên để xử lý (vì chỉ có 1 bài/PDF)
-            first_lesson = None
-            for chapter in refined_structure.get("chapters", []):
-                for lesson in chapter.get("lessons", []):
-                    if lesson.get("content"):
-                        first_lesson = lesson
-                        break
-                if first_lesson:
-                    break
-
-            if not first_lesson:
-                logger.warning("No lesson content found to refine")
-                return book_structure
-
-            # Tập hợp tất cả text content từ lesson
-            all_text_content = []
-            for content_item in first_lesson.get("content", []):
-                if content_item.get("type") == "text" and content_item.get("text"):
-                    all_text_content.append(content_item.get("text", ""))
-
-            if not all_text_content:
-                logger.warning("No text content found in lesson")
-                return book_structure
-
-            # Ghép nội dung lại
-            combined_content = "\n\n".join(all_text_content)
-
-            # Tạo prompt để LLM lọc nội dung
             prompt = f"""
-Bạn là chuyên gia giáo dục, hãy lọc và chỉnh sửa nội dung bài giảng sau để chỉ giữ lại những thông tin quan trọng và chi tiết của bài giảng.
+Bạn là chuyên gia giáo dục, hãy lọc và chỉnh sửa nội dung sách giáo khoa sau đây.
 
 YÊU CẦU:
-1. Loại bỏ thông tin không liên quan đến nội dung bài học (header, footer, số trang, thông tin xuất bản, etc.)
-2. Giữ lại toàn bộ kiến thức chính, khái niệm, định nghĩa, công thức, ví dụ
-3. Giữ lại các bài tập, câu hỏi, hoạt động thực hành
-4. Sắp xếp nội dung theo logic rõ ràng, dễ hiểu
-5. Đảm bảo nội dung đầy đủ và chính xác, không bỏ sót thông tin quan trọng
-6. Trả về nội dung đã được chỉnh sửa bằng tiếng Việt
+1. Giữ lại toàn bộ nội dung giáo dục quan trọng (khái niệm, định nghĩa, công thức, ví dụ)
+2. Loại bỏ các thông tin không liên quan (header, footer, số trang, watermark)
+3. Sắp xếp lại nội dung theo logic rõ ràng
+4. Giữ nguyên thuật ngữ chuyên môn
+5. Đảm bảo nội dung đầy đủ và dễ hiểu cho học sinh
+6. Trả về CHỈ NỘI DUNG THUẦN TÚY, không có format markdown, không có ký tự đặc biệt
 
-TIÊU ĐỀ BÀI HỌC: {first_lesson.get("lesson_title", "Không có tiêu đề")}
+NỘI DUNG CẦN CHỈNH SỬA:
+{raw_text[:8000]}
 
-NỘI DUNG GỐC:
-{combined_content[:3000]}  # Giới hạn 3000 ký tự để tránh vượt quá token limit
+Trả về nội dung đã được lọc và chỉnh sửa (chỉ text thuần túy):"""
 
-Hãy trả về nội dung đã được lọc và chỉnh sửa:
-"""
-
-            # Gọi OpenRouter API
             result = await openrouter_service.generate_content(
                 prompt=prompt,
                 temperature=0.1,
@@ -415,36 +322,63 @@ Hãy trả về nội dung đã được lọc và chỉnh sửa:
 
             if result.get("success") and result.get("text"):
                 refined_content = result.get("text", "").strip()
-
-                # Cập nhật nội dung đã được chỉnh sửa
-                first_lesson["content"] = [
-                    {
-                        "type": "text",
-                        "text": refined_content,
-                        "page": first_lesson["content"][0].get("page", 1) if first_lesson["content"] else 1,
-                        "section": "refined_content",
-                        "refined_by_llm": True
-                    }
-                ]
-
-                logger.info(f"✅ Refined content for lesson: {first_lesson.get('lesson_title', 'Unknown')}")
+                # Làm sạch nội dung sau khi nhận từ OpenRouter
+                clean_content = self.clean_text_content(refined_content)
+                logger.info(f"🤖{prompt} ")
+                logger.info(f"🤖{refined_content} ")
+                logger.info(f"✅ Content refined and cleaned: {len(raw_text)} → {len(clean_content)} chars")
+                return clean_content
             else:
-                logger.warning(f"❌ Failed to refine content for lesson: {first_lesson.get('lesson_title', 'Unknown')}")
-
-            logger.info("🎯 Content refinement completed")
-            return refined_structure
+                logger.warning("OpenRouter returned insufficient content, using original")
+                return self.clean_text_content(raw_text)
 
         except Exception as e:
-            logger.error(f"Error in content refinement: {e}")
-            # Trả về cấu trúc gốc nếu có lỗi
-            return book_structure
+            logger.error(f"❌ Error refining content with OpenRouter: {e}")
+            return self.clean_text_content(raw_text)
 
-    def prepare_structure_for_qdrant(
-        self, book_structure: Dict[str, Any]
+    def create_simple_final_structure(
+        self,
+        refined_content: str,
+        book_metadata: Dict[str, Any],
+        lesson_id: Optional[str] = None,
+        page_numbers: List[int] = None
     ) -> Dict[str, Any]:
-        """Prepare book structure for Qdrant storage (no image processing needed)"""
-        # Since we skip image processing, just return the structure as-is
-        return book_structure
+        """Tạo cấu trúc cuối cùng đơn giản với nội dung đã refined"""
+
+        # Tạo lesson_id
+        if lesson_id:
+            final_lesson_id = lesson_id
+            logger.info(f"Using provided lesson_id: {final_lesson_id}")
+        else:
+            final_lesson_id = str(uuid.uuid4())
+            logger.info(f"Generated new lesson_id: {final_lesson_id}")
+
+        # Lấy tiêu đề từ metadata
+        title = book_metadata.get("title", "Bài học")
+
+        # Tạo cấu trúc đơn giản
+        structure = {
+            "title": title,
+            "subject": book_metadata.get("subject", "Chưa xác định"),
+            "grade": book_metadata.get("grade", "Chưa xác định"),
+            "chapters": [
+                {
+                    "chapter_id": "chapter_01",
+                    "title": "Nội dung chính",
+                    "lessons": [
+                        {
+                            "lesson_id": final_lesson_id,
+                            "title": title,
+                            "content": refined_content,
+                            "page_numbers": page_numbers or [],
+                        }
+                    ]
+                }
+            ]
+        }
+
+        logger.info(f"✅ Created simple final structure with lesson_id: {final_lesson_id}")
+        return structure
 
 
 # Global instance
