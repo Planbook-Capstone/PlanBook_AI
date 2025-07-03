@@ -214,7 +214,6 @@ async def get_task_status(task_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.get("/result/{task_id}", response_model=Dict[str, Any])
 async def get_task_result(task_id: str) -> Dict[str, Any]:
     """
     Lấy kết quả của task đã hoàn thành (chỉ trả về result, không trả về toàn bộ task info)
@@ -390,7 +389,6 @@ async def get_all_tasks(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.get("/getAllTask", response_model=Dict[str, Any])
 async def get_all_task() -> Dict[str, Any]:
     """
     Lấy danh sách tất cả tasks (alias cho endpoint chính)
@@ -503,7 +501,6 @@ async def cleanup_old_tasks(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.get("/statistics", response_model=Dict[str, Any])
 async def get_task_statistics() -> Dict[str, Any]:
     """
     Lấy thống kê tổng quan về tasks
@@ -563,7 +560,6 @@ async def get_task_types() -> Dict[str, Any]:
     }
 
 
-@router.get("/debug/{task_id}", response_model=Dict[str, Any])
 async def debug_task(task_id: str) -> Dict[str, Any]:
     """
     Debug task - Lấy toàn bộ thông tin task để debug
@@ -605,7 +601,6 @@ async def debug_task(task_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.get("/progress/{task_id}", response_model=Dict[str, Any])
 async def get_task_progress_detailed(task_id: str) -> Dict[str, Any]:
     """
     Lấy chi tiết progress history của task với timeline và statistics

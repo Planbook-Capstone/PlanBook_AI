@@ -369,7 +369,7 @@ async def upload_lesson_plan_framework(
 
 
 
-@router.post("/lesson-plan-generate-old", response_model=LessonPlanResponse)
+# @router.post("/lesson-plan-generate-old", response_model=LessonPlanResponse)
 async def generate_lesson_plan_old(request: LessonPlanRequest):
     """
     [DEPRECATED] Tạo giáo án dựa trên dữ liệu người dùng và khung giáo án (phiên bản cũ)
@@ -465,7 +465,7 @@ async def delete_framework(framework_id: str):
         raise HTTPException(status_code=500, detail=f"Lỗi khi xóa framework: {str(e)}")
 
 
-@router.post("/frameworks/seed")
+# @router.post("/frameworks/seed")
 async def seed_sample_frameworks():
     """
     Tạo dữ liệu mẫu cho frameworks (dev only)
@@ -563,7 +563,7 @@ async def export_lesson_plan_to_docx(lesson_plan_data: dict):
         raise HTTPException(status_code=500, detail=f"Lỗi khi xuất file DOCX: {str(e)}")
 
 
-@router.get("/lesson-plan-export-docx/{lesson_plan_id}")
+# @router.get("/lesson-plan-export-docx/{lesson_plan_id}")
 async def export_lesson_plan_by_id_to_docx(lesson_plan_id: str):
     """
     Xuất giáo án ra file DOCX theo ID (nếu có lưu trữ)
