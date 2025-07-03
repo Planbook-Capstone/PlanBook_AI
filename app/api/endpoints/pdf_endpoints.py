@@ -8,7 +8,6 @@ from typing import Dict, Any, Optional, Optional
 
 from app.services.llm_service import llm_service
 from app.services.enhanced_textbook_service import enhanced_textbook_service
-from app.services.textbook_parser_service import textbook_parser_service
 from app.services.background_task_processor import background_task_processor
 
 logger = logging.getLogger(__name__)
@@ -487,11 +486,8 @@ async def get_textbook_structure(book_id: str) -> Dict[str, Any]:
     Returns:
         Dict containing book structure
     """
-    try:  # Thử lấy từ file system trước (legacy data)
-        structure = await textbook_parser_service.get_book_structure(book_id)
-
-        if structure:
-            return {"success": True, "book_id": book_id, "structure": structure}
+    try:  # Lấy từ Qdrant (optimized approach - không dùng legacy file system)
+        logger.info(f"Getting book structure for book_id: {book_id}")
 
         # Nếu không tìm thấy trong file system, thử lấy từ Qdrant
         from app.services.qdrant_service import qdrant_service

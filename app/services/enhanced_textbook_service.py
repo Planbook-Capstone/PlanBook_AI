@@ -6,16 +6,14 @@ Trả về cấu trúc: Sách → Chương → Bài → Nội dung
 import logging
 import asyncio
 import json
-import base64
 import uuid
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 from concurrent.futures import ThreadPoolExecutor
 import fitz  # PyMuPDF
 from PIL import Image
 import io
 
 from app.services.simple_ocr_service import simple_ocr_service
-from app.services.llm_service import llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +51,8 @@ class EnhancedTextbookService:
             pages_data = await self._extract_pages_with_ocr(pdf_content)
             logger.info(f"✅ Extracted {len(pages_data)} pages")
 
-            # Step 2: Add LLM-generated image descriptions
-            logger.info("🖼️ Adding LLM-generated image descriptions...")
-            await self._add_image_descriptions(pages_data)
-            logger.info("✅ Image descriptions completed")
+            # Skip image analysis to improve speed
+            logger.info("⚡ Skipping image analysis for faster processing")
 
             # Step 3: Analyze book structure with LLM
             logger.info("🧠 Analyzing book structure...")
@@ -78,26 +74,31 @@ class EnhancedTextbookService:
 
             logger.info("✅ Textbook processing completed successfully")
 
-            # Extract images for separate storage
-            images_data = self.extract_images_for_storage(processed_book)
-            logger.info(f"🖼️ Extracted {len(images_data)} images for storage")
+            # Skip image extraction for faster processing
+            images_data = []
+            logger.info("⚡ Skipping image extraction for faster processing")
+
+            # Refine content with OpenRouter LLM before saving to Qdrant
+            logger.info("🤖 Refining content with OpenRouter LLM...")
+            refined_book_structure = await self.refine_content_with_llm(processed_book)
+            logger.info("✅ Content refinement completed")
 
             # Prepare clean structure for Qdrant
-            clean_book_structure = self.prepare_structure_for_qdrant(processed_book)
+            clean_book_structure = self.prepare_structure_for_qdrant(refined_book_structure)
+
+            # Tính toán thống kê đơn giản cho 1 bài học
+            total_lessons = sum(len(ch.get("lessons", [])) for ch in refined_book_structure.get("chapters", []))
 
             return {
                 "success": True,
-                "book": processed_book,  # Full structure with image data
+                "book": refined_book_structure,  # Full structure with refined content and image data
                 "clean_book_structure": clean_book_structure,  # Structure without image data for Qdrant
                 "images_data": images_data,  # Separate image data for external storage
                 "total_pages": len(pages_data),
-                "total_chapters": len(processed_book.get("chapters", [])),
-                "total_lessons": sum(
-                    len(ch.get("lessons", []))
-                    for ch in processed_book.get("chapters", [])
-                ),
+                "total_chapters": len(refined_book_structure.get("chapters", [])),
+                "total_lessons": total_lessons,
                 "total_images": len(images_data),
-                "message": "Textbook processed successfully with image extraction",
+                "message": f"Textbook processed successfully with LLM content refinement ({total_lessons} lesson{'s' if total_lessons != 1 else ''})",
             }
 
         except Exception as e:
@@ -121,33 +122,8 @@ class EnhancedTextbookService:
                 # Extract text normally first
                 text = page.get_text("text")  # type: ignore
 
-                # Extract images
+                # Skip image extraction for faster processing
                 images = []
-                image_list = page.get_images()
-
-                for img_index, img in enumerate(image_list):
-                    try:
-                        xref = img[0]
-                        pix = fitz.Pixmap(doc, xref)
-
-                        if pix.n - pix.alpha < 4:  # GRAY or RGB
-                            img_data = pix.tobytes("png")
-                            img_base64 = base64.b64encode(img_data).decode()
-
-                            images.append(
-                                {
-                                    "index": img_index,
-                                    "data": img_base64,
-                                    "format": "png",
-                                    "page": page_num + 1,
-                                }
-                            )
-
-                        pix = None
-                    except Exception as e:
-                        logger.warning(
-                            f"Error extracting image {img_index} from page {page_num}: {e}"
-                        )
 
                 pages_data.append(
                     {
@@ -249,536 +225,63 @@ class EnhancedTextbookService:
         pages_data: List[Dict[str, Any]],
         book_metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Phân tích cấu trúc sách với LLM cải tiến"""
+        """Tạo cấu trúc đơn giản: 1 PDF = 1 bài học"""
 
-        if not llm_service.is_available():
-            logger.warning("LLM not available, using pattern-based analysis")
-            return await self._pattern_based_structure_analysis(
-                pages_data, book_metadata
-            )
+        logger.info("📚 Creating simple structure: 1 PDF = 1 lesson")
 
-        # Tạo text sample từ các trang để phân tích
-        sample_text = ""
-        for i, page in enumerate(pages_data[:20]):  # Lấy 20 trang đầu để phân tích
-            if page["text"].strip():
-                sample_text += f"\n--- Trang {page['page_number']} ---\n{page['text'][:500]}"  # 500 chars per page
-
-        prompt = f"""
-Bạn là chuyên gia phân tích sách giáo khoa Việt Nam. Phân tích nội dung và trả về cấu trúc chính xác.
-
-THÔNG TIN SÁCH:
-- Tổng số trang: {len(pages_data)}
-- Metadata: {json.dumps(book_metadata or {}, ensure_ascii=False)}
-
-NỘI DUNG SAMPLE:
-{sample_text}
-
-YÊU CẦU:
-1. Xác định tiêu đề sách, môn học, lớp
-2. Tìm tất cả CHƯƠNG (Chapter) trong sách
-3. Tìm tất cả BÀI HỌC (Lesson) trong mỗi chương
-4. Xác định trang bắt đầu và kết thúc cho mỗi chương/bài
-5. Trả về JSON chuẩn
-
-JSON FORMAT:
-{{
-  "book_info": {{
-    "title": "Tên sách chính xác",
-    "subject": "Môn học (Toán/Lý/Hóa/...)",
-    "grade": "Lớp (10/11/12)",
-    "total_pages": {len(pages_data)}
-  }},
-  "chapters": [
-    {{
-      "chapter_id": "chapter_01",
-      "chapter_title": "Tên chương chính xác",
-      "start_page": 1,
-      "end_page": 20,
-      "lessons": [
-        {{
-          "lesson_id": "lesson_01_01",
-          "lesson_title": "Tên bài học chính xác",
-          "start_page": 1,
-          "end_page": 5
-        }}
-      ]
-    }}
-  ]
-}}
-
-Trả về JSON:"""
-
-        try:
-            if not llm_service.model:
-                raise Exception("LLM model not available")
-
-            response = llm_service.model.generate_content(prompt)
-            json_text = response.text.strip()
-
-            # Clean JSON - cải thiện việc xử lý
-            if json_text.startswith("```json"):
-                json_text = json_text[7:]
-            if json_text.startswith("```"):
-                json_text = json_text[3:]
-            if json_text.endswith("```"):
-                json_text = json_text[:-3]
-
-            # Tìm JSON hợp lệ trong response
-            json_text = json_text.strip()
-
-            # Tìm vị trí bắt đầu và kết thúc của JSON
-            start_idx = json_text.find("{")
-            if start_idx == -1:
-                raise ValueError("No JSON object found in response")
-
-            # Tìm vị trí kết thúc JSON bằng cách đếm dấu ngoặc
-            brace_count = 0
-            end_idx = start_idx
-            for i, char in enumerate(json_text[start_idx:], start_idx):
-                if char == "{":
-                    brace_count += 1
-                elif char == "}":
-                    brace_count -= 1
-                    if brace_count == 0:
-                        end_idx = i + 1
-                        break
-
-            # Extract JSON hợp lệ
-            clean_json = json_text[start_idx:end_idx]
-
-            structure = json.loads(clean_json)
-
-            # Validate structure
-            if "chapters" in structure and len(structure["chapters"]) > 0:
-                logger.info(f"LLM detected {len(structure['chapters'])} chapters")
-                return structure
-            else:
-                logger.warning("LLM returned invalid structure, using fallback")
-                return await self._pattern_based_structure_analysis(
-                    pages_data, book_metadata
-                )
-
-        except Exception as e:
-            logger.error(f"LLM structure analysis failed: {e}")
-            logger.debug(
-                f"Raw LLM response: {response.text[:500] if 'response' in locals() else 'No response'}"
-            )
-            return await self._pattern_based_structure_analysis(
-                pages_data, book_metadata
-            )
-
-    async def _pattern_based_structure_analysis(
-        self,
-        pages_data: List[Dict[str, Any]],
-        book_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Phân tích cấu trúc dựa trên pattern matching"""
-
+        # Tạo cấu trúc đơn giản cố định - không cần LLM phức tạp
         total_pages = len(pages_data)
 
-        # Extract book info from metadata or first pages
-        book_info = {
-            "title": book_metadata.get("title", "Sách giáo khoa")
-            if book_metadata
-            else "Sách giáo khoa",
-            "subject": book_metadata.get("subject", "Chưa xác định")
-            if book_metadata
-            else "Chưa xác định",
-            "grade": book_metadata.get("grade", "Chưa xác định")
-            if book_metadata
-            else "Chưa xác định",
-            "total_pages": total_pages,
-        }
+        # Lấy tiêu đề từ metadata hoặc trang đầu
+        title = "Bài học"
+        if book_metadata and book_metadata.get("title"):
+            title = book_metadata["title"]
+        else:
+            # Thử extract tiêu đề từ trang đầu
+            if pages_data and pages_data[0]["text"].strip():
+                first_lines = pages_data[0]["text"].strip().split('\n')[:5]
+                for line in first_lines:
+                    if len(line.strip()) > 5 and len(line.strip()) < 100:
+                        title = line.strip()
+                        break
 
-        # Find chapters and lessons using pattern matching
-        chapters = []
-        current_chapter = None
-        current_lesson = None
-
-        for page in pages_data:
-            lines = page["text"].split("\n")
-
-            # Look for chapter patterns
-            for line in lines:
-                line_clean = line.strip()
-                if len(line_clean) > 5 and len(line_clean) < 100:
-                    # Chapter detection
-                    if any(
-                        pattern in line_clean.lower()
-                        for pattern in ["chương", "chapter", "phần", "bài tập chương"]
-                    ):
-                        # Save previous chapter
-                        if current_chapter:
-                            chapters.append(current_chapter)
-
-                        # Start new chapter
-                        chapter_num = len(chapters) + 1
-                        current_chapter = {
-                            "chapter_id": f"chapter_{chapter_num:02d}",
-                            "chapter_title": line_clean,
-                            "start_page": page["page_number"],
-                            "end_page": page["page_number"],
-                            "lessons": [],
-                        }
-                        current_lesson = None
-
-                    # Lesson detection
-                    elif (
-                        any(
-                            pattern in line_clean.lower()
-                            for pattern in ["bài", "lesson", "tiết"]
-                        )
-                        and current_chapter
-                    ):
-                        # Save previous lesson
-                        if current_lesson:
-                            current_chapter["lessons"].append(current_lesson)
-
-                        # Start new lesson
-                        lesson_num = len(current_chapter["lessons"]) + 1
-                        current_lesson = {
-                            "lesson_id": f"lesson_{len(chapters)+1:02d}_{lesson_num:02d}",
-                            "lesson_title": line_clean,
-                            "start_page": page["page_number"],
-                            "end_page": page["page_number"],
-                        }
-
-            # Update end pages
-            if current_chapter:
-                current_chapter["end_page"] = page["page_number"]
-            if current_lesson:
-                current_lesson["end_page"] = page["page_number"]
-
-        # Add final chapter and lesson
-        if current_lesson and current_chapter:
-            current_chapter["lessons"].append(current_lesson)
-        if current_chapter:
-            chapters.append(current_chapter)
-
-        # If no chapters found, create default structure
-        if not chapters:
-            chapters = self._create_default_structure(total_pages)
-
-        return {"book_info": book_info, "chapters": chapters}
-
-    def _create_default_structure(self, total_pages: int) -> List[Dict[str, Any]]:
-        """Tạo cấu trúc mặc định khi không detect được"""
-
-        chapters = []
-        pages_per_chapter = max(total_pages // 3, 10)  # Ít nhất 3 chương
-
-        for chapter_num in range(1, 4):  # 3 chương
-            start_page = (chapter_num - 1) * pages_per_chapter + 1
-            end_page = min(chapter_num * pages_per_chapter, total_pages)
-
-            if start_page > total_pages:
-                break
-
-            # Tạo 2-3 bài trong mỗi chương
-            lessons = []
-            pages_per_lesson = max((end_page - start_page + 1) // 3, 3)
-
-            for lesson_num in range(1, 4):  # 3 bài mỗi chương
-                lesson_start = start_page + (lesson_num - 1) * pages_per_lesson
-                lesson_end = min(
-                    start_page + lesson_num * pages_per_lesson - 1, end_page
-                )
-
-                if lesson_start > end_page:
-                    break
-
-                lessons.append(
-                    {
-                        "lesson_id": f"lesson_{chapter_num:02d}_{lesson_num:02d}",
-                        "lesson_title": f"Bài {lesson_num}",
-                        "start_page": lesson_start,
-                        "end_page": lesson_end,
-                    }
-                )
-
-            chapters.append(
+        structure = {
+            "book_info": {
+                "title": title,
+                "subject": book_metadata.get("subject", "Chưa xác định") if book_metadata else "Chưa xác định",
+                "total_chapters": 1,
+                "total_lessons": 1
+            },
+            "chapters": [
                 {
-                    "chapter_id": f"chapter_{chapter_num:02d}",
-                    "chapter_title": f"Chương {chapter_num}",
-                    "start_page": start_page,
-                    "end_page": end_page,
-                    "lessons": lessons,
+                    "chapter_id": "chapter_01",
+                    "chapter_title": "Nội dung chính",
+                    "start_page": 1,
+                    "end_page": total_pages,
+                    "lessons": [
+                        {
+                            "lesson_id": "lesson_01",
+                            "lesson_title": title,
+                            "start_page": 1,
+                            "end_page": total_pages
+                        }
+                    ]
                 }
-            )
-
-        return chapters
-
-    async def _process_lessons_content(
-        self,
-        book_structure: Dict[str, Any],
-        pages_data: List[Dict[str, Any]],
-        external_lesson_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Xử lý nội dung chi tiết cho từng bài học"""
-
-        processed_book = {
-            "book_info": book_structure.get("book_info", {}),
-            "chapters": [],
-        }
-
-        for chapter in book_structure.get("chapters", []):
-            processed_chapter = {
-                "chapter_id": chapter["chapter_id"],
-                "chapter_title": chapter["chapter_title"],
-                "start_page": chapter["start_page"],
-                "end_page": chapter["end_page"],
-                "lessons": [],
-            }
-
-            for lesson in chapter.get("lessons", []):
-                logger.info(f"Processing lesson: {lesson['lesson_title']}")
-
-                # Extract content for this lesson
-                lesson_content = await self._extract_lesson_content(lesson, pages_data)
-
-                processed_lesson = {
-                    "lesson_id": lesson["lesson_id"],
-                    "lesson_title": lesson["lesson_title"],
-                    "start_page": lesson["start_page"],
-                    "end_page": lesson["end_page"],
-                    "content": lesson_content,
-                }
-
-                processed_chapter["lessons"].append(processed_lesson)
-
-            processed_book["chapters"].append(processed_chapter)
-
-        return processed_book
-
-    async def _extract_lesson_content(
-        self, lesson: Dict[str, Any], pages_data: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """Extract nội dung chi tiết của một bài học"""
-
-        start_page = lesson["start_page"]
-        end_page = lesson["end_page"]
-
-        # Collect all text and images for this lesson
-        lesson_text = ""
-        lesson_images = []
-        lesson_pages = []
-
-        for page_num in range(start_page, end_page + 1):
-            # Find page data (pages_data is 0-indexed but page_number is 1-indexed)
-            page_data = None
-            for page in pages_data:
-                if page["page_number"] == page_num:
-                    page_data = page
-                    break
-
-            if not page_data:
-                continue
-
-            lesson_pages.append(page_num)
-
-            # Add text content
-            if page_data["text"].strip():
-                # Clean text with LLM if available
-                cleaned_text = await self._clean_text_with_llm(page_data["text"])
-                lesson_text += f"\n--- Trang {page_num} ---\n{cleaned_text}\n"
-
-            # Add images with LLM descriptions only
-            for img in page_data.get("images", []):
-                # Describe image with LLM using base64 data
-                img_description = await self._describe_image_with_llm(img["data"])
-
-                lesson_images.append(
-                    {
-                        "page": page_num,
-                        "index": img["index"],
-                        "format": img["format"],
-                        "description": img_description,
-                        # Note: Removed base64 data to reduce response size
-                    }
-                )
-
-        return {
-            "text": lesson_text.strip(),
-            "images": lesson_images,
-            "pages": lesson_pages,
-            "total_pages": len(lesson_pages),
-            "has_images": len(lesson_images) > 0,
-        }
-
-    async def _clean_text_with_llm(self, raw_text: str) -> str:
-        """Clean và format text bằng LLM"""
-
-        if not llm_service.is_available() or not raw_text.strip():
-            return raw_text.strip()
-
-        try:
-            prompt = f"""
-Bạn là chuyên gia xử lý text từ sách giáo khoa. Hãy làm sạch và format text sau:
-
-YÊU CẦU:
-1. Sửa lỗi OCR (ký tự nhận dạng sai)
-2. Loại bỏ ký tự lạ, khoảng trắng thừa
-3. Sắp xếp đoạn văn cho dễ đọc
-4. Giữ nguyên ý nghĩa và cấu trúc
-5. Trả về text tiếng Việt chuẩn
-
-Text gốc:
-{raw_text[:1000]}  # Limit to 1000 chars
-
-Text đã làm sạch:"""
-
-            if not llm_service.model:
-                return raw_text.strip()
-
-            response = llm_service.model.generate_content(prompt)
-            cleaned_text = response.text.strip()
-
-            return cleaned_text if cleaned_text else raw_text.strip()
-
-        except Exception as e:
-            logger.error(f"Text cleaning failed: {e}")
-            return raw_text.strip()
-
-    async def _describe_image_with_llm(self, image_base64: str) -> str:
-        """Mô tả hình ảnh bằng LLM với Gemini Vision API"""
-
-        if not llm_service.is_available():
-            return "Hình ảnh minh họa trong sách giáo khoa"
-
-        try:
-            if not llm_service.model:
-                return "Hình ảnh minh họa trong sách giáo khoa"
-
-            # Sử dụng Gemini để mô tả hình ảnh
-            prompt = """
-Bạn là chuyên gia phân tích hình ảnh trong sách giáo khoa Việt Nam.
-Hãy mô tả hình ảnh này một cách chi tiết và hữu ích cho việc tạo giáo án.
-
-YÊU CẦU MÔ TẢ:
-1. Xác định loại hình ảnh: biểu đồ, công thức, sơ đồ, hình minh họa, bảng biểu, thí nghiệm
-2. Mô tả nội dung chính và các yếu tố quan trọng
-3. Giải thích mục đích giáo dục và cách sử dụng trong giảng dạy
-4. Đề xuất cách giải thích cho học sinh
-5. Mô tả ngắn gọn, rõ ràng bằng tiếng Việt (tối đa 200 từ)
-
-Ví dụ format mong muốn:
-"Biểu đồ chu trình nước trong tự nhiên, minh họa quá trình bay hơi, ngưng tụ và mưa.
-Hình ảnh này giúp học sinh hiểu rõ các giai đoạn của chu trình nước và vai trò của
-mặt trời trong quá trình này. Có thể sử dụng để giải thích hiện tượng thời tiết và
-tầm quan trọng của nước trong hệ sinh thái."
-
-Hãy mô tả hình ảnh:"""
-
-            # Tạo image part cho Gemini
-            import base64
-            from PIL import Image
-            import io
-
-            # Decode base64 để kiểm tra và resize nếu cần
-            img_data = base64.b64decode(image_base64)
-            image = Image.open(io.BytesIO(img_data))
-
-            # Resize nếu ảnh quá lớn để tiết kiệm API cost
-            max_size = (800, 800)
-            if image.size[0] > max_size[0] or image.size[1] > max_size[1]:
-                image.thumbnail(max_size, Image.Resampling.LANCZOS)
-
-                # Convert back to base64
-                buffer = io.BytesIO()
-                image.save(buffer, format="PNG")
-                img_data = buffer.getvalue()
-                image_base64 = base64.b64encode(img_data).decode()
-
-            # Tạo content với image để Gemini phân tích
-            image_part = {
-                "mime_type": "image/png",
-                "data": base64.b64decode(image_base64),
-            }
-
-            response = llm_service.model.generate_content([prompt, image_part])
-            description = response.text.strip()
-
-            # Validate và clean description
-            if description and len(description) > 10:
-                # Giới hạn độ dài mô tả
-                if len(description) > 500:
-                    description = description[:500] + "..."
-                return description
-            else:
-                return "Hình ảnh minh họa trong sách giáo khoa (không thể tạo mô tả chi tiết)"
-
-        except Exception as e:
-            logger.error(f"Image description with LLM failed: {e}")
-
-            # Kiểm tra loại lỗi để xử lý phù hợp
-            error_msg = str(e).lower()
-            if "not valid" in error_msg or "invalid" in error_msg:
-                logger.warning("Image format may be incompatible with Gemini Vision API")
-            elif "quota" in error_msg or "limit" in error_msg:
-                logger.warning("API quota exceeded or rate limit hit")
-            elif "api key" in error_msg or "authentication" in error_msg:
-                logger.warning("API key issue detected")
-
-            # Fallback descriptions based on context
-            fallback_descriptions = [
-                "Biểu đồ hoặc sơ đồ minh họa khái niệm trong bài học",
-                "Hình ảnh thí nghiệm hoặc thực hành trong phòng lab",
-                "Công thức toán học hoặc phương trình hóa học",
-                "Bảng biểu thống kê hoặc dữ liệu khoa học",
-                "Hình minh họa cấu trúc hoặc quy trình tự nhiên",
-                "Sơ đồ tư duy hoặc bản đồ khái niệm",
             ]
-            import random
+        }
 
-            return random.choice(fallback_descriptions)
+        logger.info(f"✅ Created simple structure: 1 chapter, 1 lesson, {total_pages} pages")
+        return structure
 
-    async def _add_image_descriptions(self, pages_data: List[Dict[str, Any]]) -> None:
-        """Add LLM-generated descriptions for all images in pages_data"""
 
-        if not llm_service.is_available():
-            logger.warning("LLM not available for image descriptions")
-            return
 
-        image_tasks = []
-        total_images = 0
 
-        for page in pages_data:
-            for img in page.get("images", []):
-                total_images += 1
-                if img.get("data"):
-                    image_tasks.append(self._describe_image_with_llm(img["data"]))
-                else:
-                    logger.debug(f"Image on page {page.get('page_number')} has no data")
 
-        logger.info(f"🖼️ Found {total_images} total images, {len(image_tasks)} with data")
 
-        if image_tasks:
-            logger.info(f"🖼️ Generating descriptions for {len(image_tasks)} images...")
-            descriptions = await asyncio.gather(*image_tasks, return_exceptions=True)
 
-            # Apply descriptions back to images
-            desc_index = 0
-            success_count = 0
-            fallback_count = 0
 
-            for page in pages_data:
-                for img in page.get("images", []):
-                    if img.get("data") and desc_index < len(descriptions):
-                        if not isinstance(descriptions[desc_index], Exception):
-                            img["description"] = descriptions[desc_index]
-                            img["description_method"] = "llm_generated"
-                            success_count += 1
-                            logger.debug(f"✅ Generated description: {descriptions[desc_index][:50]}...")
-                        else:
-                            img["description"] = (
-                                "Hình ảnh minh họa trong sách giáo khoa"
-                            )
-                            img["description_method"] = "fallback"
-                            fallback_count += 1
-                            logger.warning(f"❌ Failed to describe image: {descriptions[desc_index]}")
-                        desc_index += 1
 
-            logger.info(f"🎯 Image description results: {success_count} success, {fallback_count} fallback, {len(image_tasks)} total")
+
 
     async def _build_final_structure(
         self,
@@ -787,158 +290,161 @@ Hãy mô tả hình ảnh:"""
         book_metadata: Dict[str, Any],
         external_lesson_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Build final book structure from analysis result with lessonID and improved image handling"""
+        """Tạo cấu trúc đơn giản: 1 PDF = 1 bài học"""
 
+        logger.info("🏗️ Building simple structure: 1 PDF = 1 lesson")
+
+        # Tập hợp toàn bộ nội dung từ tất cả các trang
+        full_content = ""
+        all_page_numbers = []
+
+        for page in pages_data:
+            full_content += page.get("text", "") + "\n"
+            all_page_numbers.append(page.get("page_number", 0))
+
+        # Tạo lesson_id
+        if external_lesson_id:
+            lesson_id = external_lesson_id
+            logger.info(f"Using provided lesson_id: {lesson_id}")
+        else:
+            lesson_id = str(uuid.uuid4())
+            logger.info(f"Generated new lesson_id: {lesson_id}")
+
+        # Lấy tiêu đề từ analysis_result hoặc metadata
+        lesson_title = analysis_result.get("book_info", {}).get("title", book_metadata.get("title", "Bài học"))
+
+        # Tạo cấu trúc đơn giản
         book_structure = {
-            "title": analysis_result.get("book_info", {}).get(
-                "title", book_metadata["title"]
-            ),
-            "subject": analysis_result.get("book_info", {}).get(
-                "subject", book_metadata["subject"]
-            ),
-            "grade": analysis_result.get("book_info", {}).get(
-                "grade", book_metadata["grade"]
-            ),
-            "chapters": [],
-        }  # Process chapters and lessons
-        lesson_counter = 0  # Track total lesson count for lesson_id variants
-        for chapter_index, chapter in enumerate(analysis_result.get("chapters", [])):
-            chapter_obj = {
-                "chapter_id": f"chapter_{chapter_index:02d}",  # Add chapter_id
-                "title": chapter.get("chapter_title", "Chương không xác định"),
-                "lessons": [],
-            }
-
-            # Extract lessons
-            for lesson in chapter.get("lessons", []):
-                lesson_content = ""
-                lesson_images = []
-                start_page = lesson.get("start_page", 1)
-                end_page = lesson.get("end_page", start_page)
-
-                # Collect content and images from lesson pages
-                for page in pages_data:
-                    page_num = page.get("page_number", 0)
-                    if start_page <= page_num <= end_page:
-                        lesson_content += (
-                            page.get("text", "") + "\n"
-                        )  # Add images with enhanced metadata
-                        for img in page.get("images", []):
-                            image_info = {
-                                "page": page_num,
-                                "description": img.get(
-                                    "description", "Hình ảnh minh họa"
-                                ),
-                                "format": img.get("format", "png"),
-                                "description_method": img.get(
-                                    "description_method", "auto"
-                                ),
-                                "image_index": img.get(
-                                    "index", 0
-                                ),  # Original index in page
-                                "base64_data": img.get(
-                                    "data", ""
-                                ),  # Store base64 for embedding if needed
-                                "image_id": str(
-                                    uuid.uuid4()
-                                ),  # Unique ID for each image
-                                "has_data": bool(
-                                    img.get("data", "")
-                                ),  # Flag to check if image data exists
-                            }
-                            lesson_images.append(
-                                image_info
-                            )  # Generate lesson ID - use external_lesson_id if provided, otherwise create UUID
-                if external_lesson_id:
-                    if lesson_counter == 0:
-                        lesson_id = external_lesson_id
-                        logger.info(f"Using provided lesson_id: {lesson_id}")
-                    else:
-                        lesson_id = f"{external_lesson_id}_{lesson_counter}"
-                        logger.info(f"Using variant lesson_id: {lesson_id}")
-                else:
-                    lesson_id = str(uuid.uuid4())
-                    logger.debug(f"Generated new lesson_id: {lesson_id}")
-
-                lesson_counter += 1  # Increment for next lesson
-
-                lesson_obj = {
-                    "lesson_id": lesson_id,  # Add unique lesson ID
-                    "title": lesson.get("lesson_title", "Bài học không xác định"),
-                    "content": lesson_content.strip(),
-                    "page_numbers": list(range(start_page, end_page + 1)),
-                    "images": lesson_images,
-                    "image_count": len(
-                        lesson_images
-                    ),  # Add image count for easy reference
-                    "has_images": len(lesson_images) > 0,  # Boolean flag for filtering
+            "title": lesson_title,
+            "subject": analysis_result.get("book_info", {}).get("subject", book_metadata.get("subject", "Chưa xác định")),
+            "grade": analysis_result.get("book_info", {}).get("grade", book_metadata.get("grade", "Chưa xác định")),
+            "chapters": [
+                {
+                    "chapter_id": "chapter_01",
+                    "title": "Nội dung chính",
+                    "lessons": [
+                        {
+                            "lesson_id": lesson_id,
+                            "title": lesson_title,
+                            "content": full_content.strip(),
+                            "page_numbers": all_page_numbers,
+                        }
+                    ]
                 }
-                chapter_obj["lessons"].append(lesson_obj)
+            ]
+        }
 
-            book_structure["chapters"].append(chapter_obj)
-
+        logger.info(f"✅ Created simple structure with lesson_id: {lesson_id}")
         return book_structure
 
-    def extract_images_for_storage(
+
+
+    async def refine_content_with_llm(
         self, book_structure: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """Extract all images from book structure for separate storage
+    ) -> Dict[str, Any]:
+        """Gửi nội dung đến OpenRouter LLM để lọc và chỉnh sửa nội dung bài giảng
 
-        Since Qdrant cannot store image data directly, this method extracts
-        all images with their metadata for storage in a separate system.
-
-        Returns:
-            List of image objects with metadata and base64 data
+        Tối ưu cho việc xử lý 1 bài học duy nhất trong mỗi PDF
         """
-        images_data = []
+        try:
+            from app.services.openrouter_service import OpenRouterService
 
-        for chapter in book_structure.get("chapters", []):
-            for lesson in chapter.get("lessons", []):
-                lesson_id = lesson.get("lesson_id", "unknown")
+            openrouter_service = OpenRouterService()
+            if not openrouter_service.available:
+                logger.warning("OpenRouter service not available, skipping content refinement")
+                return book_structure
 
-                for image in lesson.get("images", []):
-                    if image.get("has_data", False):
-                        image_record = {
-                            "image_id": image.get("image_id"),
-                            "lesson_id": lesson_id,
-                            "lesson_title": lesson.get("title", ""),
-                            "chapter_title": chapter.get("title", ""),
-                            "page": image.get("page"),
-                            "description": image.get("description", ""),
-                            "description_method": image.get("description_method", ""),
-                            "format": image.get("format", "png"),
-                            "image_index": image.get("image_index", 0),
-                            "base64_data": image.get("base64_data", ""),
-                            "book_title": book_structure.get("title", ""),
-                            "subject": book_structure.get("subject", ""),
-                            "grade": book_structure.get("grade", ""),
-                        }
-                        images_data.append(image_record)
+            import copy
+            refined_structure = copy.deepcopy(book_structure)
 
-        return images_data
+            logger.info("🤖 Starting content refinement with OpenRouter LLM...")
+
+            # Tìm bài học đầu tiên để xử lý (vì chỉ có 1 bài/PDF)
+            first_lesson = None
+            for chapter in refined_structure.get("chapters", []):
+                for lesson in chapter.get("lessons", []):
+                    if lesson.get("content"):
+                        first_lesson = lesson
+                        break
+                if first_lesson:
+                    break
+
+            if not first_lesson:
+                logger.warning("No lesson content found to refine")
+                return book_structure
+
+            # Tập hợp tất cả text content từ lesson
+            all_text_content = []
+            for content_item in first_lesson.get("content", []):
+                if content_item.get("type") == "text" and content_item.get("text"):
+                    all_text_content.append(content_item.get("text", ""))
+
+            if not all_text_content:
+                logger.warning("No text content found in lesson")
+                return book_structure
+
+            # Ghép nội dung lại
+            combined_content = "\n\n".join(all_text_content)
+
+            # Tạo prompt để LLM lọc nội dung
+            prompt = f"""
+Bạn là chuyên gia giáo dục, hãy lọc và chỉnh sửa nội dung bài giảng sau để chỉ giữ lại những thông tin quan trọng và chi tiết của bài giảng.
+
+YÊU CẦU:
+1. Loại bỏ thông tin không liên quan đến nội dung bài học (header, footer, số trang, thông tin xuất bản, etc.)
+2. Giữ lại toàn bộ kiến thức chính, khái niệm, định nghĩa, công thức, ví dụ
+3. Giữ lại các bài tập, câu hỏi, hoạt động thực hành
+4. Sắp xếp nội dung theo logic rõ ràng, dễ hiểu
+5. Đảm bảo nội dung đầy đủ và chính xác, không bỏ sót thông tin quan trọng
+6. Trả về nội dung đã được chỉnh sửa bằng tiếng Việt
+
+TIÊU ĐỀ BÀI HỌC: {first_lesson.get("lesson_title", "Không có tiêu đề")}
+
+NỘI DUNG GỐC:
+{combined_content[:3000]}  # Giới hạn 3000 ký tự để tránh vượt quá token limit
+
+Hãy trả về nội dung đã được lọc và chỉnh sửa:
+"""
+
+            # Gọi OpenRouter API
+            result = await openrouter_service.generate_content(
+                prompt=prompt,
+                temperature=0.1,
+                max_tokens=2048
+            )
+
+            if result.get("success") and result.get("text"):
+                refined_content = result.get("text", "").strip()
+
+                # Cập nhật nội dung đã được chỉnh sửa
+                first_lesson["content"] = [
+                    {
+                        "type": "text",
+                        "text": refined_content,
+                        "page": first_lesson["content"][0].get("page", 1) if first_lesson["content"] else 1,
+                        "section": "refined_content",
+                        "refined_by_llm": True
+                    }
+                ]
+
+                logger.info(f"✅ Refined content for lesson: {first_lesson.get('lesson_title', 'Unknown')}")
+            else:
+                logger.warning(f"❌ Failed to refine content for lesson: {first_lesson.get('lesson_title', 'Unknown')}")
+
+            logger.info("🎯 Content refinement completed")
+            return refined_structure
+
+        except Exception as e:
+            logger.error(f"Error in content refinement: {e}")
+            # Trả về cấu trúc gốc nếu có lỗi
+            return book_structure
 
     def prepare_structure_for_qdrant(
         self, book_structure: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Prepare book structure for Qdrant storage by removing image data
-
-        This method creates a clean version of the book structure without
-        base64 image data, suitable for Qdrant embedding.
-
-        Returns:
-            Clean book structure without image data
-        """
-        import copy
-
-        clean_structure = copy.deepcopy(book_structure)
-
-        for chapter in clean_structure.get("chapters", []):
-            for lesson in chapter.get("lessons", []):
-                for image in lesson.get("images", []):
-                    # Remove base64 data to reduce size for Qdrant
-                    image.pop("base64_data", None)
-
-        return clean_structure
+        """Prepare book structure for Qdrant storage (no image processing needed)"""
+        # Since we skip image processing, just return the structure as-is
+        return book_structure
 
 
 # Global instance

@@ -142,7 +142,6 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
             # Import services here to avoid circular imports
             from app.services.enhanced_textbook_service import enhanced_textbook_service
             from app.services.qdrant_service import qdrant_service
-            import uuid  # Extract pages with OCR
 
             pages_data = await enhanced_textbook_service._extract_pages_with_ocr(
                 file_content
@@ -154,13 +153,9 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
 
             logger.info(f"OCR completed. Extracted {len(pages_data)} pages")
 
-            # Add image descriptions using LLM
+            # Skip image analysis for faster processing
             await mongodb_task_service.update_task_progress(
-                task_id, 35, "Analyzing images with AI..."
-            )
-
-            await enhanced_textbook_service._add_image_descriptions(
-                pages_data
+                task_id, 35, "Skipping image analysis for faster processing..."
             )  # Create metadata
             book_metadata = {
                 "id": str(uuid.uuid4())[:8],
@@ -173,7 +168,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
 
             # Process textbook with enhanced service
             await mongodb_task_service.update_task_progress(
-                task_id, 50, "Analyzing book structure with AI..."
+                task_id, 50, "Analyzing book structure and refining content with AI..."
             )
 
             logger.info("🧠 Using enhanced textbook processing...")
@@ -204,7 +199,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
                 f"Enhanced analysis completed: {len(book_structure.get('chapters', []))} chapters, {total_images} images"
             )  # Update progress: Structure completed
             await mongodb_task_service.update_task_progress(
-                task_id, 60, "Book structure analysis completed"
+                task_id, 60, "Book structure analysis and content refinement with OpenRouter LLM completed"
             )
 
             # Create embeddings if requested
