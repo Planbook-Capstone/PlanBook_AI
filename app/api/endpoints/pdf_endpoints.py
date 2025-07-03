@@ -214,7 +214,7 @@ async def quick_textbook_analysis(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.get("/getAllTextBook", response_model=Dict[str, Any])
+@router.get("/textbooks", response_model=Dict[str, Any])
 async def get_all_textbook() -> Dict[str, Any]:
     """
     Lấy danh sách tất cả sách giáo khoa với format đầy đủ như /process-textbook
