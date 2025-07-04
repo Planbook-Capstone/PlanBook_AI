@@ -10,6 +10,8 @@ import os
 from app.services.lesson_plan_framework_service import lesson_plan_framework_service
 from app.services.llm_service import LLMService
 from app.services.docx_export_service import docx_export_service
+from app.services.docx_upload_service import docx_upload_service
+from app.models.online_document_models import OnlineDocumentResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -364,6 +366,72 @@ async def upload_lesson_plan_framework(
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Lỗi khi upload khung giáo án: {str(e)}"
+        )
+
+
+@router.post("/upload-docx-to-online", response_model=Dict[str, Any])
+async def upload_docx_to_online_document(
+    file: UploadFile = File(..., description="File DOCX cần chuyển thành online document"),
+    convert_to_google_docs: bool = Form(True, description="Có convert thành Google Docs không (default: True)")
+):
+    """
+    Upload file DOCX offline và chuyển thành file DOCX online
+
+    Endpoint này nhận file DOCX từ client và:
+    1. Validate file type và size
+    2. Lưu file tạm thời
+    3. Upload lên Google Drive
+    4. Tạo các link truy cập online
+    5. Xóa file tạm và trả về thông tin online document
+
+    Args:
+        file: File DOCX được upload từ client
+        convert_to_google_docs: Có convert thành Google Docs để edit online không
+
+    Returns:
+        OnlineDocumentResponse: Thông tin online document với các link truy cập
+    """
+    try:
+        logger.info(f"Processing DOCX upload: {file.filename}")
+
+        # Xử lý upload file thông qua service
+        result = await docx_upload_service.process_docx_upload_to_online(
+            uploaded_file=file,
+            convert_to_google_docs=convert_to_google_docs
+        )
+
+        # Kiểm tra kết quả
+        if not result.get("success", False):
+            error_code = result.get("error_code", "UNKNOWN_ERROR")
+            error_message = result.get("error", "Lỗi không xác định")
+
+            # Map error codes to HTTP status codes
+            status_code_map = {
+                "INVALID_FILE_TYPE": 400,
+                "FILE_TOO_LARGE": 413,
+                "TEMP_FILE_ERROR": 500,
+                "UPLOAD_FAILED": 503,
+                "PROCESSING_ERROR": 500,
+                "RESPONSE_ERROR": 500
+            }
+
+            status_code = status_code_map.get(error_code, 500)
+
+            raise HTTPException(
+                status_code=status_code,
+                detail=f"[{error_code}] {error_message}"
+            )
+
+        logger.info(f"Successfully processed DOCX upload: {file.filename}")
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in upload_docx_to_online_document: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Lỗi không mong muốn: {str(e)}"
         )
 
 
