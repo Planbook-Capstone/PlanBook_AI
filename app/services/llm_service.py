@@ -265,6 +265,58 @@ Hãy trả về tài liệu đã được format đẹp:
             return self.openrouter_service is not None and self.openrouter_service.is_available()
         return self.model is not None
 
+    async def generate_content(self, prompt: str, temperature: float = 0.1, max_tokens: int = 4096) -> Dict[str, Any]:
+        """
+        Public method để gọi LLM với các tham số tùy chỉnh
+
+        Args:
+            prompt: Text prompt để gửi tới model
+            temperature: Temperature cho response (0.0 - 1.0)
+            max_tokens: Số token tối đa cho response
+
+        Returns:
+            Dict chứa response từ LLM
+        """
+        try:
+            if self.use_openrouter and self.openrouter_service:
+                # Sử dụng OpenRouter với tham số tùy chỉnh
+                result = await self.openrouter_service.generate_content(
+                    prompt=prompt,
+                    temperature=temperature,
+                    max_tokens=max_tokens
+                )
+                return result
+
+            elif self.model:
+                # Sử dụng Gemini - Gemini không hỗ trợ temperature và max_tokens như OpenRouter
+                response = self.model.generate_content(prompt)
+                if response and response.text:
+                    return {
+                        "success": True,
+                        "text": response.text,
+                        "error": None
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "text": "",
+                        "error": "No response from Gemini API"
+                    }
+            else:
+                return {
+                    "success": False,
+                    "text": "",
+                    "error": "No LLM service available"
+                }
+
+        except Exception as e:
+            logger.error(f"Error in generate_content: {e}")
+            return {
+                "success": False,
+                "text": "",
+                "error": str(e)
+            }
+
     async def _generate_content(self, prompt: str) -> Dict[str, Any]:
         """
         Helper method để gọi LLM (OpenRouter hoặc Gemini)

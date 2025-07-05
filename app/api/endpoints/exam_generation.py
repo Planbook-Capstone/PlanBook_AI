@@ -465,7 +465,7 @@ async def generate_exam_download(request: ExamMatrixRequest):
         logger.error(f"Error generating exam (download mode): {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-@router.get("/download-exam/{filename}")
+# @router.get("/download-exam/{filename}")
 async def download_exam_file(filename: str):
     """
     Download file DOCX đề thi đã tạo
