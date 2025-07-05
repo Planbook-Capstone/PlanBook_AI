@@ -11,6 +11,7 @@ from app.api.endpoints import (
     exam_generation,
     exam_import,
     kafka_endpoints,
+    llm_endpoints,
 )
 from app.services.lesson_plan_framework_service import lesson_plan_framework_service
 from app.services.kafka_service import kafka_service
@@ -55,6 +56,9 @@ api_router.include_router(
 )
 api_router.include_router(
     kafka_endpoints.router, prefix="/kafka", tags=["Kafka Integration"]
+)
+api_router.include_router(
+    llm_endpoints.router, prefix="/llm", tags=["LLM Services"]
 )
 # Add API router to app
 app.include_router(api_router, prefix=settings.API_PREFIX)
