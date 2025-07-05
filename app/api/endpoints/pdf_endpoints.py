@@ -4,10 +4,10 @@ PDF Endpoints - Endpoint đơn giản để xử lý PDF với OCR và LLM forma
 
 import logging
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Query
-from typing import Dict, Any, Optional, Optional
+from typing import Dict, Any, Optional
 
 from app.services.llm_service import llm_service
-from app.services.enhanced_textbook_service import enhanced_textbook_service
+from app.services.semantic_analysis_service import semantic_analysis_service
 from app.services.background_task_processor import background_task_processor
 
 logger = logging.getLogger(__name__)
@@ -15,140 +15,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-
-# @router.post("/process-textbook", response_model=Dict[str, Any])
-async def process_textbook(
-    file: UploadFile = File(...),
-    metadata: str = Form(...),
-    create_embeddings: bool = Form(True),  # Thêm tham số mới
-) -> Dict[str, Any]:
-    """
-    Xử lý sách giáo khoa thành cấu trúc dữ liệu cho giáo án
-
-    Args:
-        file: PDF file của sách giáo khoa
-        metadata: JSON string chứa metadata của sách
-        create_embeddings: Có tạo embeddings cho RAG không
-
-    Returns:
-        Dict containing processing results
-    """
-    try:
-        # Validate file type
-        if not file.filename or not file.filename.lower().endswith(".pdf"):
-            raise HTTPException(status_code=400, detail="Only PDF files are supported")
-
-        # Parse metadata
-        import json
-
-        try:
-            book_metadata = json.loads(metadata)
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="Invalid metadata JSON format")
-
-        # Validate required metadata fields
-        required_fields = ["id", "title"]
-        for field in required_fields:
-            if field not in book_metadata:
-                raise HTTPException(
-                    status_code=400, detail=f"Missing required metadata field: {field}"
-                )  # Read file content
-        file_content = await file.read()
-
-        if len(file_content) == 0:
-            raise HTTPException(status_code=400, detail="Empty file uploaded")
-
-        logger.info(f"Processing textbook: {file.filename} ({len(file_content)} bytes)")
-
-        # Process textbook with enhanced service
-        enhanced_result = await enhanced_textbook_service.process_textbook_to_structure(
-            pdf_content=file_content,
-            filename=file.filename,
-            book_metadata=book_metadata,
-        )
-
-        if not enhanced_result.get("success", False):
-            raise HTTPException(
-                status_code=500,
-                detail=f"Textbook processing failed: {enhanced_result.get('error', 'Unknown error')}",
-            )
-
-        # Return enhanced structure with OCR results
-        result = {
-            "success": True,
-            "book_id": book_metadata.get("id"),
-            "filename": file.filename,
-            "book_structure": enhanced_result["book"],
-            "statistics": {
-                "total_pages": enhanced_result.get("total_pages", 0),
-                "total_chapters": enhanced_result.get("total_chapters", 0),
-                "total_lessons": enhanced_result.get("total_lessons", 0),
-            },
-            "processing_info": {
-                "ocr_applied": True,
-                "llm_analysis": llm_service.is_available(),
-                "processing_method": "enhanced_ocr",
-            },
-            "message": "Textbook processed successfully with OCR structure analysis",
-        }
-
-        # Thêm phần tạo embeddings nếu được yêu cầu
-        if create_embeddings:
-            try:
-                from app.services.qdrant_service import qdrant_service
-
-                # SỬA LỖI: Sử dụng result["book_structure"] thay vì enhanced_result["book"]
-                book_structure_dict = result["book_structure"]
-
-                logger.info(
-                    f"Creating embeddings for book_id: {book_metadata.get('id')}"
-                )
-
-                # Đảm bảo book_structure_dict là dictionary
-                if isinstance(book_structure_dict, str):
-                    import json
-
-                    book_structure_dict = json.loads(book_structure_dict)
-
-                # Tạo embeddings và lưu vào Qdrant
-                logger.info("Calling qdrant_service.process_textbook...")
-                embedding_result = await qdrant_service.process_textbook(
-                    book_id=book_metadata.get("id"),
-                    book_structure=book_structure_dict,  # Gửi đi dictionary đã được parse
-                )
-
-                logger.info(f"Embedding result: {embedding_result}")
-
-                # Thêm thông tin về embeddings vào kết quả
-                result["embeddings_created"] = embedding_result.get("success", False)
-                result["embeddings_info"] = {
-                    "collection_name": embedding_result.get("collection_name"),
-                    "vector_count": embedding_result.get("total_chunks", 0),
-                    "vector_dimension": embedding_result.get("vector_dimension"),
-                }
-
-                if embedding_result.get("success", False):
-                    result["message"] += " with searchable embeddings in Qdrant"
-                else:
-                    result["message"] += (
-                        f" (embeddings failed: {embedding_result.get('error', 'unknown error')})"
-                    )
-
-            except Exception as e:
-                logger.error(f"Embeddings creation failed with exception: {e}")
-                import traceback
-
-                logger.error(f"Traceback: {traceback.format_exc()}")
-                result["embeddings_created"] = False
-                result["embeddings_error"] = str(e)
-
-        return result
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error processing textbook: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @router.post("/import", response_model=Dict[str, Any])
@@ -595,156 +461,6 @@ async def search_all_textbooks(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-# @router.get("/search-books", response_model=Dict[str, Any])
-async def search_books_metadata(
-    query: str = Query(..., description="Search query for books"),
-    limit: int = Query(10, ge=1, le=50, description="Maximum number of results"),
-) -> Dict[str, Any]:
-    """
-    Tìm kiếm sách và trả về metadata đơn giản
-
-    Endpoint này tìm kiếm trong tất cả textbooks và trả về thông tin metadata
-    cơ bản của sách thay vì nội dung chi tiết.
-
-    Args:
-        query: Từ khóa tìm kiếm (title, author, subject, etc.)
-        limit: Số lượng kết quả tối đa (1-50, mặc định 10)
-
-    Returns:
-        Dict chứa danh sách sách với metadata đơn giản
-
-    Example:
-        GET /api/v1/pdf/search-books?query=hóa học&limit=5
-    """
-    try:
-        from app.services.qdrant_service import qdrant_service
-        from qdrant_client import models as qdrant_models
-
-        logger.info(f"Searching books with query: '{query}' limit: {limit}")
-
-        if not qdrant_service.qdrant_client:
-            raise HTTPException(status_code=503, detail="Qdrant service not available")
-
-        # Lấy danh sách tất cả collections
-        collections = qdrant_service.qdrant_client.get_collections().collections
-        books_found = []
-
-        for collection in collections:
-            if collection.name.startswith("textbook_"):
-                book_id = collection.name.replace("textbook_", "")
-
-                try:
-                    # Tìm metadata point để lấy thông tin sách
-                    search_result = qdrant_service.qdrant_client.scroll(
-                        collection_name=collection.name,
-                        scroll_filter=qdrant_models.Filter(
-                            must=[
-                                qdrant_models.FieldCondition(
-                                    key="type",
-                                    match=qdrant_models.MatchValue(value="metadata"),
-                                )
-                            ]
-                        ),
-                        limit=1,
-                        with_payload=True,
-                    )
-
-                    if search_result[0]:  # Có metadata point
-                        metadata_point = search_result[0][0]
-                        payload = metadata_point.payload or {}
-
-                        # Lấy original_book_structure nếu có
-                        original_structure = payload.get("original_book_structure")
-                        book_info = {}
-
-                        if original_structure:
-                            book_info = original_structure.get("book_info", {})
-                        else:
-                            # Fallback từ payload
-                            book_info = {
-                                "title": payload.get("book_title", "Unknown"),
-                                "subject": payload.get("book_subject", "Unknown"),
-                                "grade": payload.get("book_grade", "Unknown"),
-                                "total_pages": payload.get("book_total_pages", 0),
-                            }
-
-                        # Tạo metadata theo format yêu cầu
-                        book_metadata = {
-                            "id": book_id,
-                            "title": book_info.get("title", "Unknown"),
-                            "author": book_info.get("author", "Bộ Giáo dục và Đào tạo"),
-                            "publisher": book_info.get(
-                                "publisher", "Nhà xuất bản Giáo dục Việt Nam"
-                            ),
-                            "published_year": book_info.get("published_year", 2024),
-                            "isbn": book_info.get(
-                                "isbn",
-                                f"978-604-{book_id[:3]}-{book_id[3:6]}-{book_id[6:]}",
-                            ),
-                            "language": book_info.get("language", "vi"),
-                            "categories": [
-                                book_info.get("subject", "Giáo dục"),
-                                f"Lớp {book_info.get('grade', 'Chưa xác định')}",
-                            ],
-                            "description": f"Sách giáo khoa {book_info.get('subject', 'Unknown')} - {book_info.get('title', 'Unknown')}",
-                            "pages": book_info.get("total_pages", 0),
-                            "format": "PDF",
-                        }
-
-                        # Kiểm tra xem sách có match với query không
-                        searchable_text = " ".join(
-                            [
-                                book_metadata["title"].lower(),
-                                book_metadata["author"].lower(),
-                                book_metadata["publisher"].lower(),
-                                " ".join(book_metadata["categories"]).lower(),
-                                book_metadata["description"].lower(),
-                            ]
-                        )
-
-                        if query.lower() in searchable_text:
-                            books_found.append(book_metadata)
-
-                except Exception as e:
-                    logger.warning(
-                        f"Error processing collection {collection.name}: {e}"
-                    )
-                    continue
-
-        # Sắp xếp theo relevance (title match trước)
-        def relevance_score(book):
-            score = 0
-            query_lower = query.lower()
-            if query_lower in book["title"].lower():
-                score += 10
-            if query_lower in book["description"].lower():
-                score += 5
-            if query_lower in " ".join(book["categories"]).lower():
-                score += 3
-            if query_lower in book["author"].lower():
-                score += 2
-            return score
-
-        books_found.sort(key=relevance_score, reverse=True)
-
-        # Áp dụng limit
-        books_found = books_found[:limit]
-
-        return {
-            "success": True,
-            "query": query,
-            "total_results": len(books_found),
-            "books": books_found,
-            "message": f"Found {len(books_found)} books matching '{query}'",
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in search-books: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
 
 
 @router.get("/health")
@@ -761,6 +477,18 @@ async def health_check():
         # Check LLM service availability
         llm_available = llm_service.is_available()
 
+        # Check Qdrant and embedding model
+        from app.services.qdrant_service import qdrant_service
+        embedding_available = qdrant_service.embedding_model is not None
+        qdrant_available = qdrant_service.qdrant_client is not None
+
+        embedding_model_name = "Unknown"
+        vector_dimension = "Unknown"
+        if embedding_available:
+            from app.core.config import settings
+            embedding_model_name = settings.EMBEDDING_MODEL
+            vector_dimension = qdrant_service.vector_size
+
         return {
             "status": "healthy",
             "services": {
@@ -768,41 +496,149 @@ async def health_check():
                 "llm_analysis": "available" if llm_available else "unavailable",
                 "textbook_processing": "available",
                 "async_processing": "available",
-                "vector_search": "available",
+                "vector_search": "available" if (embedding_available and qdrant_available) else "unavailable",
+                "semantic_analysis": "available" if llm_available else "fallback_mode",
             },
             "supported_languages": supported_langs,
-            "llm_status": "Gemini API configured"
-            if llm_available
-            else "Gemini API not configured",            "available_endpoints": [
-                "/process-textbook-async",
-                "/process-textbook",
-                "/quick-textbook-analysis",
-                "/getAllTextBook",  # Enhanced textbook list
-                "/textbook/{lesson_id}",  # NEW: Get textbook by lesson ID
-                "/textbook/{book_id}/structure",
-                "/lesson/{lesson_id}",  # Get lesson by ID only
-                "/textbook/{book_id}/lesson/{lesson_id}",  # DEPRECATED: Redirects to /lesson/{lesson_id}
-                "/textbook/{book_id}/search",
-                "/search",  # Content search
-                "/search-books",  # Book metadata search
-                "/search-textbooks-simple",  # Full textbook structure search (Simple)
+            "llm_status": "Gemini API configured" if llm_available else "Gemini API not configured",
+            "embedding_model": embedding_model_name,
+            "vector_dimension": vector_dimension,
+            "qdrant_status": "connected" if qdrant_available else "disconnected",
+            "available_endpoints": [
+                "/import",  # Quick textbook analysis
+                "/textbooks",  # Get all textbooks
+                "/textbook/{lesson_id}",  # Get textbook by lesson ID
+                "/search",  # Global content search
+                "/search-semantic",  # Semantic search with filters
+                "/rag-query",  # RAG endpoint with LLM
+                "/test-semantic-analysis",  # Test semantic analysis
                 "/textbook",  # DELETE: Flexible textbook deletion
                 "/health",
-            ],            "usage_flow": {
-                "1": "Upload PDF: POST /quick-textbook-analysis",
-                "2": "List textbooks: GET /getAllTextBook",
-                "3": "Get textbook by lesson: GET /textbook/{lesson_id}",  # NEW
-                "4": "Search textbooks: GET /search-textbooks-simple?query=your_query",  # RECOMMENDED: Full structure
-                "5": "Search books (metadata): GET /search-books?query=your_query",  # Metadata only
-                "6": "Get structure: GET /textbook/{book_id}/structure",
-                "7": "Get lesson: GET /lesson/{lesson_id}",  # No book_id needed
-                "8": "Search content: GET /search?query=your_query",
-                "9": "Delete textbook: DELETE /textbook?textbook_id=ID or DELETE /textbook?lesson_id=ID",  # NEW
+            ],
+            "usage_flow": {
+                "1": "Upload PDF: POST /import",
+                "2": "List textbooks: GET /textbooks",
+                "3": "Get textbook by lesson: GET /textbook/{lesson_id}",
+                "4": "Global search: GET /search?query=your_query",
+                "5": "Semantic search: GET /search-semantic?query=your_query&semantic_tags=definition,example",
+                "6": "RAG Query (Recommended): POST /rag-query?query=your_question&lesson_id=lesson123",  # Best for Q&A
+                "7": "Delete textbook: DELETE /textbook?textbook_id=your_id OR DELETE /textbook?lesson_id=your_lesson_id"
             },
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return {"status": "unhealthy", "error": str(e)}
+
+
+@router.post("/rag-query", response_model=Dict[str, Any])
+async def rag_query(
+    query: str = Query(..., description="Câu hỏi của người dùng"),
+    book_id: Optional[str] = Query(None, description="ID sách cụ thể (tùy chọn)"),
+    lesson_id: Optional[str] = Query(None, description="ID bài học cụ thể (tùy chọn)"),
+    limit: int = Query(5, description="Số lượng kết quả tìm kiếm tối đa"),
+    semantic_tags: Optional[str] = Query(None, description="Lọc theo semantic tags"),
+    temperature: float = Query(0.3, description="Temperature cho LLM response"),
+    max_tokens: int = Query(2000, description="Số token tối đa cho response")
+) -> Dict[str, Any]:
+    """
+    RAG endpoint kết hợp semantic search và LLM để trả lời câu hỏi người dùng
+
+    Workflow:
+    1. Nhận câu hỏi từ người dùng
+    2. Sử dụng semantic search để tìm nội dung liên quan (có thể filter theo book_id hoặc lesson_id)
+    3. Gửi context + câu hỏi cho LLM để tạo câu trả lời
+    4. Làm sạch text và trả về câu trả lời kèm sources
+
+    Examples:
+        POST /api/v1/pdf/rag-query?query=Nguyên tử là gì?
+        POST /api/v1/pdf/rag-query?query=Nguyên tử là gì?&lesson_id=lesson123
+        POST /api/v1/pdf/rag-query?query=Nguyên tử là gì?&book_id=book456&semantic_tags=definition
+    """
+    try:
+        # Sử dụng RAG service để xử lý toàn bộ workflow
+        from app.services.rag_service import rag_service
+
+        result = await rag_service.process_rag_query(
+            query=query,
+            book_id=book_id,
+            lesson_id=lesson_id,
+            limit=limit,
+            semantic_tags=semantic_tags,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("error"))
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"RAG query failed: {e}")
+        raise HTTPException(status_code=500, detail=f"RAG query failed: {str(e)}")
+
+
+@router.get("/search-semantic", response_model=Dict[str, Any])
+async def search_with_semantic_filters(
+    query: str = Query(..., description="Câu truy vấn tìm kiếm"),
+    book_id: Optional[str] = Query(None, description="ID sách (nếu không có sẽ tìm trong tất cả sách)"),
+    semantic_tags: Optional[str] = Query(None, description="Các semantic tags cần filter, phân cách bằng dấu phẩy (VD: definition,example)"),
+    difficulty: Optional[str] = Query(None, description="Mức độ khó: basic, intermediate, advanced"),
+    has_examples: Optional[bool] = Query(None, description="Lọc nội dung có ví dụ"),
+    has_formulas: Optional[bool] = Query(None, description="Lọc nội dung có công thức"),
+    min_confidence: Optional[float] = Query(0.0, ge=0.0, le=1.0, description="Confidence tối thiểu cho semantic tags"),
+    limit: int = Query(10, ge=1, le=50, description="Số lượng kết quả tối đa")
+) -> Dict[str, Any]:
+    """
+    Tìm kiếm với semantic filters nâng cao
+
+    Args:
+        query: Câu truy vấn tìm kiếm
+        book_id: ID sách cụ thể (optional)
+        semantic_tags: Danh sách semantic tags để filter
+        difficulty: Mức độ khó
+        has_examples: Có ví dụ hay không
+        has_formulas: Có công thức hay không
+        min_confidence: Confidence tối thiểu
+        limit: Số lượng kết quả
+
+    Returns:
+        Dict chứa kết quả tìm kiếm với semantic metadata
+
+    Examples:
+        - /api/v1/pdf/search-semantic?query=nguyên tử&semantic_tags=definition,theory&difficulty=basic
+        - /api/v1/pdf/search-semantic?query=bài tập&has_examples=true&min_confidence=0.7
+    """
+    try:
+        # Sử dụng RAG service để xử lý semantic search
+        from app.services.rag_service import rag_service
+
+        result = await rag_service.search_with_semantic_filters(
+            query=query,
+            book_id=book_id,
+            semantic_tags=semantic_tags,
+            difficulty=difficulty,
+            has_examples=has_examples,
+            has_formulas=has_formulas,
+            min_confidence=min_confidence,
+            limit=limit
+        )
+
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("error"))
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in semantic search: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Semantic search failed: {str(e)}"
+        )
 
 
 @router.get("/textbook/{lesson_id}", response_model=Dict[str, Any])
@@ -921,4 +757,3 @@ async def delete_textbook_flexible(
     except Exception as e:
         logger.error(f"Error in flexible textbook deletion: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
