@@ -402,125 +402,191 @@ class LessonPlanContentService:
         # Lấy context từ parent và siblings nếu có
         context_info = self._extract_context_info(node)
 
-        # Tạo prompt dựa trên type
-        if node_type == "PARAGRAPH":
-            prompt = f"""
+        # Tạo prompt sử dụng template cơ sở
+        base_prompt = self._build_prompt_from_template(
+            node_type=node_type,
+            node_id=node_id,
+            node_title=node_title,
+            context_info=context_info,
+            lesson_content=lesson_content
+        )
+
+        # Tùy chỉnh prompt dựa trên ngữ cảnh cụ thể
+        customized_prompt = self._customize_prompt_by_context(base_prompt, node)
+
+        return customized_prompt
+
+    def _build_prompt_from_template(
+        self,
+        node_type: str,
+        node_id: str,
+        node_title: str,
+        context_info: str,
+        lesson_content: str
+    ) -> str:
+        """
+        Xây dựng prompt từ template cơ sở để tránh trùng lặp
+
+        Args:
+            node_type: Loại node
+            node_id: ID của node
+            node_title: Tiêu đề node
+            context_info: Thông tin ngữ cảnh
+            lesson_content: Nội dung bài học tham khảo
+
+        Returns:
+            String prompt hoàn chỉnh
+        """
+        # Template cơ sở chung cho tất cả loại node
+        base_template = """
 Bạn là một giáo viên trung học phổ thông Việt Nam giàu kinh nghiệm, chuyên soạn giáo án chi tiết và thực tiễn.
-NHIỆM VỤ: Phát triển nội dung chi tiết cho đoạn văn trong giáo án.
+
+NHIỆM VỤ: {task_description}
 
 THÔNG TIN NODE:
 - ID: {node_id}
 - Tiêu đề: "{node_title}"
-- Loại: Đoạn văn mô tả (PARAGRAPH)
+- Loại: {node_type_description}
 
 NGỮ CẢNH GIÁO ÁN:
 {context_info}
 
 NỘI DUNG BÀI HỌC THAM KHẢO:
-{lesson_content[:4000] if lesson_content else "Không có nội dung tham khảo"}
+{lesson_content}
 
 YÊU CẦU:
-1. Viết nội dung chi tiết, cụ thể cho đoạn văn này
+1. Viết nội dung chi tiết, cụ thể cho {content_target}
 2. Nội dung phải phù hợp với tiêu đề và ngữ cảnh giáo án
 3. Sử dụng ngôn ngữ chuyên nghiệp, phù hợp với giáo viên
 4. Tập trung vào nội dung thực tiễn, có thể áp dụng được
 5. Các thuật ngữ trong sách giáo khoa không được thay đổi
+{specific_requirements}
 
 ĐỊNH DẠNG ĐẦU RA:
-Chỉ trả về nội dung đoạn văn, không có tiêu đề hay định dạng khác.
+{output_format}
 """
 
-        elif node_type == "LIST_ITEM":
-            prompt = f"""
-Bạn là một giáo viên Việt Nam giàu kinh nghiệm, chuyên soạn giáo án chi tiết và thực tiễn.
+        # Cấu hình cụ thể cho từng loại node
+        node_configs = {
+            "PARAGRAPH": {
+                "task_description": "Phát triển nội dung chi tiết cho đoạn văn trong giáo án.",
+                "node_type_description": "Đoạn văn mô tả (PARAGRAPH)",
+                "content_target": "đoạn văn này",
+                "specific_requirements": "",
+                "output_format": "Chỉ trả về nội dung đoạn văn, không có tiêu đề hay định dạng khác."
+            },
+            "LIST_ITEM": {
+                "task_description": "Phát triển nội dung chi tiết cho mục liệt kê trong giáo án.",
+                "node_type_description": "Mục liệt kê (LIST_ITEM)",
+                "content_target": "mục liệt kê này",
+                "specific_requirements": "",
+                "output_format": "Chỉ trả về nội dung mục liệt kê, không có tiêu đề hay định dạng khác.\nCó thể sử dụng dấu gạch đầu dòng (-) nếu có nhiều điểm con."
+            },
+            "SECTION": {
+                "task_description": "Phát triển nội dung tổng quan cho phần/mục trong giáo án.",
+                "node_type_description": "Phần/Mục (SECTION)",
+                "content_target": "phần/mục này",
+                "specific_requirements": "",
+                "output_format": "Chỉ trả về nội dung phần/mục, không có tiêu đề hay định dạng khác."
+            },
+            "SUBSECTION": {
+                "task_description": "Phát triển nội dung chi tiết cho phần con trong giáo án.",
+                "node_type_description": "Phần con (SUBSECTION)",
+                "content_target": "phần con này",
+                "specific_requirements": "",
+                "output_format": "Chỉ trả về nội dung phần con, không có tiêu đề hay định dạng khác."
+            }
+        }
 
-NHIỆM VỤ: Phát triển nội dung chi tiết cho mục liệt kê trong giáo án.
+        # Lấy cấu hình cho node type, fallback nếu không tìm thấy
+        config = node_configs.get(node_type, {
+            "task_description": "Phát triển nội dung chi tiết cho thành phần trong giáo án.",
+            "node_type_description": f"{node_type}",
+            "content_target": "thành phần này",
+            "specific_requirements": "",
+            "output_format": "Chỉ trả về nội dung, không có tiêu đề hay định dạng khác."
+        })
 
-THÔNG TIN NODE:
-- ID: {node_id}
-- Tiêu đề: "{node_title}"
-- Loại: Mục liệt kê (LIST_ITEM)
-
-NGỮ CẢNH GIÁO ÁN:
-{context_info}
-
-NỘI DUNG BÀI HỌC THAM KHẢO:
-{lesson_content[:4000] if lesson_content else "Không có nội dung tham khảo"}
-
-YÊU CẦU:
-1. Viết nội dung chi tiết, cụ thể cho đoạn văn này
-2. Nội dung phải phù hợp với tiêu đề và ngữ cảnh giáo án
-3. Sử dụng ngôn ngữ chuyên nghiệp, phù hợp với giáo viên
-4. Tập trung vào nội dung thực tiễn, có thể áp dụng được
-5. Các thuật ngữ trong sách giáo khoa không được thay đổi
-
-
-
-ĐỊNH DẠNG ĐẦU RA:
-Chỉ trả về nội dung mục liệt kê, không có tiêu đề hay định dạng khác.
-Có thể sử dụng dấu gạch đầu dòng (-) nếu có nhiều điểm con.
-"""
-
-        elif node_type == "SECTION":
-            prompt = f"""
-Bạn là một giáo viên Việt Nam giàu kinh nghiệm, chuyên soạn giáo án chi tiết và thực tiễn.
-
-NHIỆM VỤ: Phát triển nội dung tổng quan cho phần/mục trong giáo án.
-
-THÔNG TIN NODE:
-- ID: {node_id}
-- Tiêu đề: "{node_title}"
-- Loại: Phần/Mục (SECTION)
-
-NGỮ CẢNH GIÁO ÁN:
-{context_info}
-
-NỘI DUNG BÀI HỌC THAM KHẢO:
-{lesson_content[:4000] if lesson_content else "Không có nội dung tham khảo"}
-
-YÊU CẦU:
-1. Viết nội dung chi tiết, cụ thể cho đoạn văn này
-2. Nội dung phải phù hợp với tiêu đề và ngữ cảnh giáo án
-3. Sử dụng ngôn ngữ chuyên nghiệp, phù hợp với giáo viên
-4. Tập trung vào nội dung thực tiễn, có thể áp dụng được
-5. Các thuật ngữ trong sách giáo khoa không được thay đổi
-
-
-ĐỊNH DẠNG ĐẦU RA:
-Chỉ trả về nội dung phần/mục, không có tiêu đề hay định dạng khác.
-"""
-
-        else:
-            # Fallback cho các type khác
-            prompt = f"""
-Bạn là một giáo viên Việt Nam giàu kinh nghiệm, chuyên soạn giáo án chi tiết và thực tiễn.
-
-NHIỆM VỤ: Phát triển nội dung chi tiết cho thành phần trong giáo án.
-
-THÔNG TIN NODE:
-- ID: {node_id}
-- Tiêu đề: "{node_title}"
-- Loại: {node_type}
-
-NGỮ CẢNH GIÁO ÁN:
-{context_info}
-
-NỘI DUNG BÀI HỌC THAM KHẢO:
-{lesson_content[:4000] if lesson_content else "Không có nội dung tham khảo"}
-
-YÊU CẦU:
-1. Viết nội dung chi tiết, cụ thể cho đoạn văn này
-2. Nội dung phải phù hợp với tiêu đề và ngữ cảnh giáo án
-3. Sử dụng ngôn ngữ chuyên nghiệp, phù hợp với giáo viên
-4. Tập trung vào nội dung thực tiễn, có thể áp dụng được
-5. Các thuật ngữ trong sách giáo khoa không được thay đổi
-
-
-ĐỊNH DẠNG ĐẦU RA:
-Chỉ trả về nội dung, không có tiêu đề hay định dạng khác.
-"""
+        # Điền thông tin vào template
+        prompt = base_template.format(
+            task_description=config["task_description"],
+            node_id=node_id,
+            node_title=node_title,
+            node_type_description=config["node_type_description"],
+            context_info=context_info,
+            lesson_content=lesson_content[:4000] if lesson_content else "Không có nội dung tham khảo",
+            content_target=config["content_target"],
+            specific_requirements=config["specific_requirements"],
+            output_format=config["output_format"]
+        )
 
         return prompt.strip()
+
+    def _get_enhanced_requirements_for_node(self, node: Dict[str, Any]) -> str:
+        """
+        Lấy yêu cầu bổ sung dựa trên ngữ cảnh cụ thể của node
+
+        Args:
+            node: Node cần phân tích
+
+        Returns:
+            String chứa yêu cầu bổ sung
+        """
+        node_title = node.get("title", "").lower()
+        node_type = node.get("type", "")
+        enhanced_requirements = []
+
+        # Yêu cầu dựa trên tiêu đề node
+        if "mục tiêu" in node_title:
+            enhanced_requirements.append("6. Mục tiêu phải cụ thể, đo lường được, phù hợp với học sinh")
+            enhanced_requirements.append("7. Chia thành mục tiêu kiến thức, kỹ năng và thái độ")
+
+        elif "hoạt động" in node_title:
+            enhanced_requirements.append("6. Mô tả chi tiết các bước thực hiện hoạt động")
+            enhanced_requirements.append("7. Nêu rõ thời gian, phương pháp và đánh giá hoạt động")
+
+        elif "câu hỏi" in node_title or "đặt vấn đề" in node_title:
+            enhanced_requirements.append("6. Câu hỏi phải phù hợp với trình độ học sinh")
+            enhanced_requirements.append("7. Có câu hỏi gợi mở và câu hỏi kiểm tra hiểu biết")
+
+        elif "bài tập" in node_title or "luyện tập" in node_title:
+            enhanced_requirements.append("6. Nêu rõ số trang, bài tập cụ thể trong SGK/SBT")
+            enhanced_requirements.append("7. Ước tính thời gian làm bài và cách kiểm tra")
+
+        elif "đánh giá" in node_title or "kiểm tra" in node_title:
+            enhanced_requirements.append("6. Đưa ra tiêu chí đánh giá cụ thể và rõ ràng")
+            enhanced_requirements.append("7. Có phương pháp đánh giá phù hợp với nội dung")
+
+        # Yêu cầu dựa trên loại node
+        if node_type == "LIST_ITEM":
+            enhanced_requirements.append("8. Sử dụng format danh sách với dấu gạch đầu dòng nếu cần")
+
+        elif node_type == "PARAGRAPH":
+            enhanced_requirements.append("8. Viết thành đoạn văn liền mạch, logic")
+
+        return "\n".join(enhanced_requirements) if enhanced_requirements else ""
+
+    def _customize_prompt_by_context(self, base_prompt: str, node: Dict[str, Any]) -> str:
+        """
+        Tùy chỉnh prompt dựa trên ngữ cảnh cụ thể
+
+        Args:
+            base_prompt: Prompt cơ sở
+            node: Node cần xử lý
+
+        Returns:
+            Prompt đã được tùy chỉnh
+        """
+        enhanced_requirements = self._get_enhanced_requirements_for_node(node)
+
+        if enhanced_requirements:
+            # Thêm yêu cầu bổ sung vào prompt
+            base_prompt = base_prompt.replace(
+                "5. Các thuật ngữ trong sách giáo khoa không được thay đổi",
+                f"5. Các thuật ngữ trong sách giáo khoa không được thay đổi\n{enhanced_requirements}"
+            )
+
+        return base_prompt
 
     def _extract_context_info(self, node: Dict[str, Any]) -> str:
         """
