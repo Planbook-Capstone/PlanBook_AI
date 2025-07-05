@@ -27,7 +27,7 @@ class SpringBootMessageConsumer:
         try:
             self.consumer = AIOKafkaConsumer(
                 'planbook',
-                bootstrap_servers='localhost:9092',
+                bootstrap_servers='14.225.210.212:9092',
                 group_id='planbook-springboot-consumer',
                 auto_offset_reset='earliest',  # Đọc từ đầu để debug
                 value_deserializer=None,  # Không deserialize tự động, để xử lý thủ công

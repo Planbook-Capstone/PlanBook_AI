@@ -178,7 +178,7 @@ async def import_exam_from_docx(
         )
 
 
-@router.post("/import-docx-test")
+# @router.post("/import-docx-test")
 async def test_import_exam():
     """
     Test endpoint để kiểm tra chức năng import với dữ liệu mẫu

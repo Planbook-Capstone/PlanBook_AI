@@ -398,6 +398,10 @@ QUAN TRỌNG - ĐỊNH DẠNG BẮT BUỘC:
 - Đáp án trong trường "dung" phải khớp với nội dung giải thích
 - KHÔNG BAO GIỜ để trống trường "dung" - luôn phải chỉ rõ đáp án đúng
 - Trong phần "giai_thich", hãy bắt đầu bằng "Đáp án: [A/B/C/D]" để rõ ràng
+- KHÔNG BAO GIỜ thêm thông tin không liên quan vào "giai_thich"
+- KHÔNG BAO GIỜ thêm thông tin không liên quan vào "cau_hoi"
+- KHÔNG BAO GIỜ thêm thông tin không liên quan vào "dap_an"
+- KHÔNG BAO GIỜ tạo câu hỏi có nội dung trùng lặp
 
 Hãy tạo {muc_do.so_cau} câu hỏi chất lượng cao, phù hợp với mức độ {muc_do.loai}.
 """
