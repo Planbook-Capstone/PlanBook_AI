@@ -12,6 +12,7 @@ from app.services.llm_service import LLMService
 from app.services.docx_export_service import docx_export_service
 from app.services.docx_upload_service import docx_upload_service
 from app.models.online_document_models import OnlineDocumentResponse
+from app.services.lesson_plan_content_service import lesson_plan_content_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -655,3 +656,68 @@ async def export_lesson_plan_by_id_to_docx(lesson_plan_id: str):
     except Exception as e:
         logger.error(f"Error exporting lesson plan by ID: {e}")
         raise HTTPException(status_code=500, detail=f"Lỗi khi xuất file DOCX: {str(e)}")
+
+
+# Pydantic models for lesson plan content generation
+class LessonPlanContentRequest(BaseModel):
+    lesson_plan_json: Dict[str, Any]
+    lesson_id: Optional[str] = None
+
+
+class LessonPlanContentResponse(BaseModel):
+    success: bool
+    lesson_plan: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    statistics: Optional[Dict[str, Any]] = None
+
+
+@router.post("/generate-lesson-plan-content", response_model=LessonPlanContentResponse)
+async def generate_lesson_plan_content(request: LessonPlanContentRequest):
+    """
+    Sinh nội dung chi tiết cho giáo án từ cấu trúc JSON
+
+    Args:
+        request: Request chứa JSON giáo án và lesson_id (optional)
+
+    Returns:
+        LessonPlanContentResponse: Kết quả xử lý với JSON đã được sinh nội dung
+    """
+    try:
+        logger.info("Starting lesson plan content generation...")
+
+        # Validate đầu vào
+        if not request.lesson_plan_json:
+            raise HTTPException(
+                status_code=400,
+                detail="lesson_plan_json is required"
+            )
+
+        # Gọi service để sinh nội dung
+        result = await lesson_plan_content_service.generate_lesson_plan_content(
+            lesson_plan_json=request.lesson_plan_json,
+            lesson_id=request.lesson_id
+        )
+
+        if result["success"]:
+            logger.info("Lesson plan content generation completed successfully")
+            return LessonPlanContentResponse(
+                success=True,
+                lesson_plan=result["lesson_plan"],
+                statistics=result.get("statistics")
+            )
+        else:
+            logger.error(f"Lesson plan content generation failed: {result['error']}")
+            return LessonPlanContentResponse(
+                success=False,
+                error=result["error"],
+                lesson_plan=result.get("lesson_plan")
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in lesson plan content generation endpoint: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
+        )
