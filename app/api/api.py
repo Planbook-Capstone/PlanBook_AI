@@ -74,14 +74,12 @@ async def root():
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize services on startup"""
-    try:
-        await lesson_plan_framework_service.initialize()
-        print("[OK] Lesson Plan Framework Service initialized successfully")
-    except Exception as e:
-        print(f"[ERROR] Failed to initialize Lesson Plan Framework Service: {e}")
+    """Initialize only essential services on startup"""
+    # Note: Services now use lazy initialization - they will initialize when first used
+    # Only initialize services that absolutely need to be ready at startup
 
     try:
+        # Kafka service cần khởi tạo ngay để listen messages từ external services
         await kafka_service.initialize()
         print("[OK] Kafka Service initialized successfully")
 
@@ -93,6 +91,9 @@ async def startup_event():
     except Exception as e:
         print(f"[ERROR] Failed to initialize Kafka Service: {e}")
         print("[INFO] Kafka service will be available when Kafka server is running")
+
+    # Other services (LessonPlanFrameworkService, etc.) will initialize lazily when first used
+    print("[OK] Application startup completed - services will initialize when first used")
 
 
 async def start_kafka_consumer_background():

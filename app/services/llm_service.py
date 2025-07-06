@@ -2,34 +2,62 @@
 LLM Service để cấu trúc lại text bằng Gemini API hoặc OpenRouter API
 """
 import logging
+import threading
 from typing import Dict, Any, Optional
 import google.generativeai as genai
 from app.core.config import settings
-from app.services.openrouter_service import OpenRouterService
+from app.services.openrouter_service import get_openrouter_service
 
 logger = logging.getLogger(__name__)
 
 class LLMService:
     """
     Service sử dụng Gemini API hoặc OpenRouter API để cấu trúc lại text
+    Singleton pattern với Lazy Initialization
     """
 
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        """Singleton pattern implementation với thread-safe"""
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super(LLMService, cls).__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+
     def __init__(self):
+        """Lazy initialization - chỉ khởi tạo một lần"""
+        if self._initialized:
+            return
+
         self.model = None
         self.openrouter_service = None
         self.use_openrouter = False
-        self._init_llm_service()
-    
+        # Không khởi tạo ngay - sẽ khởi tạo khi lần đầu được sử dụng
+        self._service_initialized = False
+        self._initialized = True
+
+    def _ensure_service_initialized(self):
+        """Ensure LLM service is initialized"""
+        if not self._service_initialized:
+            logger.info("🔄 LLMService: First-time initialization triggered")
+            self._init_llm_service()
+            self._service_initialized = True
+            logger.info("✅ LLMService: Initialization completed")
+
     def _init_llm_service(self):
         """Initialize LLM service - prioritize OpenRouter, fallback to Gemini"""
         try:
             # Ưu tiên sử dụng OpenRouter nếu có API key
             if settings.OPENROUTER_API_KEY:
-                logger.info("Initializing OpenRouter service...")
-                self.openrouter_service = OpenRouterService()
+                logger.info("🔧 LLMService: Setting up OpenRouter integration...")
+                self.openrouter_service = get_openrouter_service()
                 if self.openrouter_service.is_available():
                     self.use_openrouter = True
-                    logger.info("OpenRouter service initialized successfully")
+                    logger.info("✅ LLMService: OpenRouter integration ready")
                     return
                 else:
                     logger.warning("OpenRouter service not available, falling back to Gemini")
@@ -61,13 +89,14 @@ class LLMService:
     async def format_cv_text(self, raw_text: str) -> Dict[str, Any]:
         """
         Cấu trúc lại text CV thành format đẹp
-        
+
         Args:
             raw_text: Text thô từ PDF
             
         Returns:
             Dict chứa text đã được cấu trúc lại
         """
+        self._ensure_service_initialized()
         try:
             if not self.is_available():
                 return {
@@ -160,6 +189,7 @@ Hãy trả về CV với LAYOUT ĐẸP, không dài 1 hàng, format chuyên nghi
         Returns:
             Dict chứa text đã được cấu trúc lại
         """
+        self._ensure_service_initialized()
         try:
             if not self.is_available():
                 return {
@@ -261,6 +291,7 @@ Hãy trả về tài liệu đã được format đẹp:
 
     def is_available(self) -> bool:
         """Check if LLM service is available"""
+        self._ensure_service_initialized()
         if self.use_openrouter:
             return self.openrouter_service is not None and self.openrouter_service.is_available()
         return self.model is not None
@@ -277,6 +308,7 @@ Hãy trả về tài liệu đã được format đẹp:
         Returns:
             Dict chứa response từ LLM
         """
+        self._ensure_service_initialized()
         try:
             if self.use_openrouter and self.openrouter_service:
                 # Sử dụng OpenRouter với tham số tùy chỉnh
@@ -384,6 +416,7 @@ Hãy trả về tài liệu đã được format đẹp:
         Returns:
             Dict chứa response từ LLM
         """
+        self._ensure_service_initialized()
         try:
             if not self.is_available():
                 return {
@@ -416,5 +449,35 @@ Hãy trả về tài liệu đã được format đẹp:
                 "formatted_text": ""
             }
 
-# Global instance
-llm_service = LLMService()
+# Hàm để lấy singleton instance
+def get_llm_service() -> LLMService:
+    """
+    Lấy singleton instance của LLMService
+    Thread-safe lazy initialization
+
+    Returns:
+        LLMService: Singleton instance
+    """
+    return LLMService()
+
+
+# Backward compatibility - deprecated, sử dụng get_llm_service() thay thế
+# Lazy loading để tránh khởi tạo ngay khi import
+_llm_service_instance = None
+
+def _get_llm_service_lazy():
+    """Lazy loading cho backward compatibility"""
+    global _llm_service_instance
+    if _llm_service_instance is None:
+        _llm_service_instance = get_llm_service()
+    return _llm_service_instance
+
+# Tạo proxy object để lazy loading
+class _LLMServiceProxy:
+    def __getattr__(self, name):
+        return getattr(_get_llm_service_lazy(), name)
+
+    def __call__(self, *args, **kwargs):
+        return _get_llm_service_lazy()(*args, **kwargs)
+
+llm_service = _LLMServiceProxy()

@@ -9,7 +9,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from app.models.smart_exam_models import SmartExamRequest, ExamStatistics
-from app.services.openrouter_service import OpenRouterService
+from app.services.openrouter_service import get_openrouter_service
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ class SmartExamGenerationService:
     """Service tạo đề thi thông minh theo chuẩn THPT 2025"""
 
     def __init__(self):
-        self.llm_service = OpenRouterService()
+        self.llm_service = get_openrouter_service()
 
     async def generate_smart_exam(
         self, exam_request: SmartExamRequest, lesson_content: Dict[str, Any]

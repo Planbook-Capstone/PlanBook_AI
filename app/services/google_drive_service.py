@@ -5,6 +5,7 @@ Service để upload file DOCX lên Google Drive và tạo link online
 import logging
 import os
 import tempfile
+import threading
 from typing import Dict, Any, Optional
 from pathlib import Path
 
@@ -19,12 +20,40 @@ logger = logging.getLogger(__name__)
 
 
 class GoogleDriveService:
-    """Service để quản lý upload file lên Google Drive"""
+    """
+    Service để quản lý upload file lên Google Drive
+    Singleton pattern với Lazy Initialization
+    """
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        """Singleton pattern implementation với thread-safe"""
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super(GoogleDriveService, cls).__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
 
     def __init__(self):
+        """Lazy initialization - chỉ khởi tạo một lần"""
+        if self._initialized:
+            return
+
         self.service = None
         self.credentials = None
-        self._initialize_service()
+        self._service_initialized = False
+        self._initialized = True
+
+    def _ensure_service_initialized(self):
+        """Ensure Google Drive service is initialized"""
+        if not self._service_initialized:
+            logger.info("🔄 GoogleDriveService: First-time initialization triggered")
+            self._initialize_service()
+            self._service_initialized = True
+            logger.info("✅ GoogleDriveService: Initialization completed")
 
     def _initialize_service(self):
         """Khởi tạo Google Drive service"""
@@ -51,6 +80,7 @@ class GoogleDriveService:
 
     def is_available(self) -> bool:
         """Kiểm tra service có sẵn sàng không"""
+        self._ensure_service_initialized()
         return self.service is not None
 
     async def upload_docx_file(
@@ -222,5 +252,35 @@ class GoogleDriveService:
             return 0
 
 
-# Singleton instance
-google_drive_service = GoogleDriveService()
+# Hàm để lấy singleton instance
+def get_google_drive_service() -> GoogleDriveService:
+    """
+    Lấy singleton instance của GoogleDriveService
+    Thread-safe lazy initialization
+
+    Returns:
+        GoogleDriveService: Singleton instance
+    """
+    return GoogleDriveService()
+
+
+# Backward compatibility - deprecated, sử dụng get_google_drive_service() thay thế
+# Lazy loading để tránh khởi tạo ngay khi import
+_google_drive_service_instance = None
+
+def _get_google_drive_service_lazy():
+    """Lazy loading cho backward compatibility"""
+    global _google_drive_service_instance
+    if _google_drive_service_instance is None:
+        _google_drive_service_instance = get_google_drive_service()
+    return _google_drive_service_instance
+
+# Tạo proxy object để lazy loading
+class _GoogleDriveServiceProxy:
+    def __getattr__(self, name):
+        return getattr(_get_google_drive_service_lazy(), name)
+
+    def __call__(self, *args, **kwargs):
+        return _get_google_drive_service_lazy()(*args, **kwargs)
+
+google_drive_service = _GoogleDriveServiceProxy()

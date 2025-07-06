@@ -16,8 +16,8 @@ from motor.motor_asyncio import (
 from fastapi import UploadFile
 
 from app.core.config import settings
-from app.services.simple_ocr_service import SimpleOCRService
-from app.services.llm_service import LLMService
+from app.services.simple_ocr_service import get_simple_ocr_service
+from app.services.llm_service import get_llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +29,8 @@ class LessonPlanFrameworkService:
         self.client: Optional[AsyncIOMotorClient] = None
         self.db: Optional[AsyncIOMotorDatabase] = None
         self.frameworks_collection: Optional[AsyncIOMotorCollection] = None
-        self.ocr_service = SimpleOCRService()
-        self.llm_service = LLMService()
+        self.ocr_service = None  # Lazy loading
+        self.llm_service = None  # Lazy loading
 
     async def initialize(self):
         """Initialize MongoDB connection"""
@@ -47,6 +47,18 @@ class LessonPlanFrameworkService:
         except Exception as e:
             logger.error(f"Failed to initialize LessonPlanFrameworkService: {e}")
             raise
+
+    def _get_ocr_service(self):
+        """Lazy loading cho OCR service"""
+        if self.ocr_service is None:
+            self.ocr_service = get_simple_ocr_service()
+        return self.ocr_service
+
+    def _get_llm_service(self):
+        """Lazy loading cho LLM service"""
+        if self.llm_service is None:
+            self.llm_service = get_llm_service()
+        return self.llm_service
 
     async def _ensure_initialized(self):
         """Ensure service is initialized"""
@@ -146,7 +158,7 @@ class LessonPlanFrameworkService:
         """Trích xuất text từ PDF sử dụng OCR"""
         try:
             # Use OCR service to extract text
-            text, metadata = await self.ocr_service.extract_text_from_pdf(
+            text, metadata = await self._get_ocr_service().extract_text_from_pdf(
                 file_content, "framework.pdf"
             )
 
@@ -231,7 +243,7 @@ Chỉ trả về JSON, không thêm text giải thích.
 """
 
             # Use LLM format_document_text method
-            response = await self.llm_service.format_document_text(
+            response = await self._get_llm_service().format_document_text(
                 prompt, "lesson_plan_framework"
             )
 
@@ -408,5 +420,34 @@ Chỉ trả về JSON, không thêm text giải thích.
             self.client.close()
 
 
-# Global instance
-lesson_plan_framework_service = LessonPlanFrameworkService()
+# Lazy loading global instance để tránh khởi tạo ngay khi import
+_lesson_plan_framework_service_instance = None
+
+def get_lesson_plan_framework_service() -> LessonPlanFrameworkService:
+    """
+    Lấy singleton instance của LessonPlanFrameworkService
+    Lazy initialization
+
+    Returns:
+        LessonPlanFrameworkService: Service instance
+    """
+    global _lesson_plan_framework_service_instance
+    if _lesson_plan_framework_service_instance is None:
+        _lesson_plan_framework_service_instance = LessonPlanFrameworkService()
+    return _lesson_plan_framework_service_instance
+
+# Backward compatibility - deprecated, sử dụng get_lesson_plan_framework_service() thay thế
+# Lazy loading để tránh khởi tạo ngay khi import
+def _get_lesson_plan_framework_service_lazy():
+    """Lazy loading cho backward compatibility"""
+    return get_lesson_plan_framework_service()
+
+# Tạo proxy object để lazy loading
+class _LessonPlanFrameworkServiceProxy:
+    def __getattr__(self, name):
+        return getattr(_get_lesson_plan_framework_service_lazy(), name)
+
+    def __call__(self, *args, **kwargs):
+        return _get_lesson_plan_framework_service_lazy()(*args, **kwargs)
+
+lesson_plan_framework_service = _LessonPlanFrameworkServiceProxy()

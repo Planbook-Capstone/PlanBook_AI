@@ -3,14 +3,13 @@ Qdrant Service - Quản lý vector embeddings với Qdrant
 """
 
 import logging
+import threading
 from typing import Dict, Any, List, Optional, Union, cast
 import uuid
 import datetime
 import re
 
-from sentence_transformers import SentenceTransformer
-from qdrant_client import QdrantClient
-from qdrant_client.http import models as qdrant_models
+# Heavy imports sẽ được lazy load trong __init__ method
 
 from app.core.config import settings
 from app.services.semantic_analysis_service import semantic_analysis_service
@@ -19,18 +18,49 @@ logger = logging.getLogger(__name__)
 
 
 class QdrantService:
-    """Service quản lý vector embeddings với Qdrant"""
+    """
+    Service quản lý vector embeddings với Qdrant
+    Singleton pattern với Lazy Initialization
+    """
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        """Singleton pattern implementation với thread-safe"""
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super(QdrantService, cls).__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
 
     def __init__(self):
+        """Lazy initialization - chỉ khởi tạo một lần"""
+        if self._initialized:
+            return
+
         self.embedding_model = None
         self.qdrant_client = None
         self.vector_size: Optional[int] = None
-        self._init_embedding_model()
-        self._init_qdrant_client()
+        self._service_initialized = False
+        self._initialized = True
+
+    def _ensure_service_initialized(self):
+        """Ensure Qdrant service is initialized"""
+        if not self._service_initialized:
+            logger.info("🔄 QdrantService: First-time initialization triggered")
+            self._init_embedding_model()
+            self._init_qdrant_client()
+            self._service_initialized = True
+            logger.info("✅ QdrantService: Initialization completed")
+
+
 
     def _init_embedding_model(self):
         """Khởi tạo mô hình embedding"""
         try:
+            from sentence_transformers import SentenceTransformer
             import torch
             import warnings
 
@@ -78,6 +108,7 @@ class QdrantService:
     def _init_qdrant_client(self):
         """Khởi tạo kết nối Qdrant"""
         try:
+            from qdrant_client import QdrantClient
             self.qdrant_client = QdrantClient(
                 url=settings.QDRANT_URL,
                 api_key=settings.QDRANT_API_KEY if settings.QDRANT_API_KEY else None,
@@ -89,6 +120,7 @@ class QdrantService:
 
     async def create_collection(self, collection_name: str) -> bool:
         """Tạo collection trong Qdrant"""
+        self._ensure_service_initialized()
         if not self.qdrant_client or not self.embedding_model or not self.vector_size:
             logger.error(
                 "Qdrant client, embedding model, or vector size not initialized"
@@ -96,6 +128,7 @@ class QdrantService:
             return False
 
         try:
+            from qdrant_client.http import models as qdrant_models
             # Kiểm tra xem collection đã tồn tại chưa
             collections = self.qdrant_client.get_collections().collections
             existing_names = [c.name for c in collections]
@@ -138,6 +171,7 @@ class QdrantService:
             book_title: Tiêu đề sách
             book_structure: Cấu trúc sách đầy đủ (cho full processing)
         """
+        self._ensure_service_initialized()
 
         if (
             not self.qdrant_client
@@ -177,6 +211,7 @@ class QdrantService:
         self, book_id: str, text_content: str, lesson_id: str, book_title: Optional[str], collection_name: str
     ) -> Dict[str, Any]:
         """Xử lý text content đơn giản"""
+        from qdrant_client.http import models as qdrant_models
 
         # Tạo chunks từ text content
         text_chunks = self._create_text_chunks_from_text(
@@ -267,6 +302,7 @@ class QdrantService:
         self, book_id: str, book_structure: Dict[str, Any], collection_name: str
     ) -> Dict[str, Any]:
         """Xử lý book structure đầy đủ"""
+        from qdrant_client.http import models as qdrant_models
 
         points = []
         total_chunks = 0
@@ -558,6 +594,8 @@ class QdrantService:
         self, book_id: str, query: str, limit: int = 5, semantic_filters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Tìm kiếm trong sách giáo khoa bằng vector similarity"""
+        from qdrant_client.http import models as qdrant_models
+        self._ensure_service_initialized()
 
         if not self.qdrant_client or not self.embedding_model:
             return {
@@ -702,6 +740,7 @@ class QdrantService:
         self, query: str, limit: int = 5, semantic_filters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Tìm kiếm toàn bộ trong tất cả collections"""
+        from qdrant_client.http import models as qdrant_models
 
         if not self.qdrant_client or not self.embedding_model:
             return {
@@ -912,7 +951,7 @@ class QdrantService:
     async def delete_textbook_by_lesson_id(self, lesson_id: str) -> Dict[str, Any]:
         """
         Xóa textbook bằng lesson_id (tìm collection chứa lesson_id rồi xóa)
-        
+
         Args:
             lesson_id: ID của lesson để tìm textbook cần xóa
             
@@ -920,6 +959,7 @@ class QdrantService:
             Dict chứa kết quả xóa
         """
         try:
+            from qdrant_client.http import models as qdrant_models
             if not self.qdrant_client:
                 return {
                     "success": False,
@@ -1081,5 +1121,35 @@ class QdrantService:
             return {"success": False, "error": str(e)}
 
 
-# Singleton instance
-qdrant_service = QdrantService()
+# Hàm để lấy singleton instance
+def get_qdrant_service() -> QdrantService:
+    """
+    Lấy singleton instance của QdrantService
+    Thread-safe lazy initialization
+
+    Returns:
+        QdrantService: Singleton instance
+    """
+    return QdrantService()
+
+
+# Backward compatibility - deprecated, sử dụng get_qdrant_service() thay thế
+# Lazy loading để tránh khởi tạo ngay khi import
+_qdrant_service_instance = None
+
+def _get_qdrant_service_lazy():
+    """Lazy loading cho backward compatibility"""
+    global _qdrant_service_instance
+    if _qdrant_service_instance is None:
+        _qdrant_service_instance = get_qdrant_service()
+    return _qdrant_service_instance
+
+# Tạo proxy object để lazy loading
+class _QdrantServiceProxy:
+    def __getattr__(self, name):
+        return getattr(_get_qdrant_service_lazy(), name)
+
+    def __call__(self, *args, **kwargs):
+        return _get_qdrant_service_lazy()(*args, **kwargs)
+
+qdrant_service = _QdrantServiceProxy()

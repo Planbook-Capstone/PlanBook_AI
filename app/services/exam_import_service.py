@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional
 from docx import Document
 import io
 
-from app.services.openrouter_service import openrouter_service
+from app.services.openrouter_service import get_openrouter_service
 from app.models.exam_import_models import (
     ExamImportRequest,
     ExamImportResponse,
@@ -236,6 +236,7 @@ class ExamImportService:
             prompt = self._create_analysis_prompt(exam_text, filename)
             
             # Gọi LLM
+            openrouter_service = get_openrouter_service()
             response = await openrouter_service.generate_content(
                 prompt=prompt,
                 temperature=0.1,

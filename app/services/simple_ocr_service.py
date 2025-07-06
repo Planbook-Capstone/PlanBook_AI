@@ -4,6 +4,7 @@ Sử dụng EasyOCR và Tesseract
 """
 import io
 import logging
+import threading
 from typing import Tuple, Dict, Any, List
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -20,36 +21,77 @@ except ImportError:
     PDF2IMAGE_AVAILABLE = False
     logging.warning("pdf2image not available. Install poppler-utils for OCR support")
 
-# EasyOCR import
-try:
-    import easyocr
-    EASYOCR_AVAILABLE = True
-except ImportError:
-    EASYOCR_AVAILABLE = False
-    logging.warning("EasyOCR not available. Install with: pip install easyocr")
+# EasyOCR lazy import - chỉ import khi cần thiết
+EASYOCR_AVAILABLE = None  # Will be determined when first needed
+_easyocr_module = None
+
+def _get_easyocr():
+    """Lazy import EasyOCR"""
+    global EASYOCR_AVAILABLE, _easyocr_module
+    if EASYOCR_AVAILABLE is None:
+        try:
+            import easyocr
+            _easyocr_module = easyocr
+            EASYOCR_AVAILABLE = True
+        except ImportError:
+            EASYOCR_AVAILABLE = False
+            logging.warning("EasyOCR not available. Install with: pip install easyocr")
+    return _easyocr_module if EASYOCR_AVAILABLE else None
 
 logger = logging.getLogger(__name__)
 
 class SimpleOCRService:
     """
     Service OCR đơn giản cho PDF
+    Singleton pattern với Lazy Initialization
     """
-    
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        """Singleton pattern implementation với thread-safe"""
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super(SimpleOCRService, cls).__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+
     def __init__(self):
+        """Lazy initialization - chỉ khởi tạo một lần"""
+        if self._initialized:
+            return
+
         self.executor = ThreadPoolExecutor(max_workers=2)
         self.easyocr_reader = None
         self.tesseract_config = '--oem 3 --psm 6 -l vie+eng'
         self.dpi = 200  # Moderate DPI for balance between quality and speed
-        
-        # Initialize EasyOCR if available
-        if EASYOCR_AVAILABLE:
-            self._init_easyocr()
+
+        # EasyOCR sẽ được khởi tạo lazy khi cần thiết
+        self._easyocr_initialized = False
+
+        self._initialized = True
+
+    def _ensure_easyocr_initialized(self):
+        """Ensure EasyOCR is initialized"""
+        if not self._easyocr_initialized:
+            # Check if EasyOCR is available (this will set EASYOCR_AVAILABLE)
+            easyocr_module = _get_easyocr()
+            if easyocr_module:
+                self._init_easyocr()
+                self._easyocr_initialized = True
     
     def _init_easyocr(self):
         """Initialize EasyOCR reader"""
         try:
-            self.easyocr_reader = easyocr.Reader(['vi', 'en'], gpu=False)
-            logger.info("EasyOCR initialized successfully")
+            logger.info("🔄 SimpleOCRService: First-time EasyOCR initialization triggered")
+            easyocr_module = _get_easyocr()
+            if easyocr_module:
+                self.easyocr_reader = easyocr_module.Reader(['vi', 'en'], gpu=False)
+                logger.info("✅ SimpleOCRService: EasyOCR initialization completed")
+            else:
+                self.easyocr_reader = None
         except Exception as e:
             logger.warning(f"Failed to initialize EasyOCR: {e}")
             self.easyocr_reader = None
@@ -196,6 +238,9 @@ class SimpleOCRService:
         """
         def process_image():
             try:
+                # Ensure EasyOCR is initialized if available
+                self._ensure_easyocr_initialized()
+
                 # Try EasyOCR first if available
                 if self.easyocr_reader:
                     try:
@@ -230,6 +275,9 @@ class SimpleOCRService:
         """
         def extract_and_ocr():
             try:
+                # Ensure EasyOCR is initialized if available
+                self._ensure_easyocr_initialized()
+
                 doc = fitz.open(stream=file_content, filetype="pdf")
                 full_text = ""
 
@@ -305,22 +353,63 @@ class SimpleOCRService:
     def get_supported_languages(self) -> List[str]:
         """Get list of supported OCR languages"""
         try:
-            langs = pytesseract.get_languages()
+            # Ensure EasyOCR is initialized if available
+            self._ensure_easyocr_initialized()
+
             supported = []
 
-            if 'vie' in langs:
-                supported.append('vietnamese')
-            if 'eng' in langs:
-                supported.append('english')
+            # Check EasyOCR first (preferred)
+            if self.easyocr_reader:
+                supported.extend(['vietnamese', 'english', 'vietnamese_easyocr'])
+                return supported
 
-            if EASYOCR_AVAILABLE and self.easyocr_reader:
-                supported.append('vietnamese_easyocr')
+            # Fallback to Tesseract
+            try:
+                langs = pytesseract.get_languages()
+                if 'vie' in langs:
+                    supported.append('vietnamese')
+                if 'eng' in langs:
+                    supported.append('english')
+            except Exception as tesseract_error:
+                logger.warning(f"Tesseract not available: {tesseract_error}")
+                # If both EasyOCR and Tesseract fail, return basic support
+                supported = ['english']
 
-            return supported
+            return supported if supported else ['english']
 
         except Exception as e:
             logger.error(f"Failed to get supported languages: {e}")
             return ['english']  # Fallback
 
-# Global instance
-simple_ocr_service = SimpleOCRService()
+# Hàm để lấy singleton instance
+def get_simple_ocr_service() -> SimpleOCRService:
+    """
+    Lấy singleton instance của SimpleOCRService
+    Thread-safe lazy initialization
+
+    Returns:
+        SimpleOCRService: Singleton instance
+    """
+    return SimpleOCRService()
+
+
+# Backward compatibility - deprecated, sử dụng get_simple_ocr_service() thay thế
+# Lazy loading để tránh khởi tạo ngay khi import
+_simple_ocr_service_instance = None
+
+def _get_simple_ocr_service_lazy():
+    """Lazy loading cho backward compatibility"""
+    global _simple_ocr_service_instance
+    if _simple_ocr_service_instance is None:
+        _simple_ocr_service_instance = get_simple_ocr_service()
+    return _simple_ocr_service_instance
+
+# Tạo proxy object để lazy loading
+class _SimpleOCRServiceProxy:
+    def __getattr__(self, name):
+        return getattr(_get_simple_ocr_service_lazy(), name)
+
+    def __call__(self, *args, **kwargs):
+        return _get_simple_ocr_service_lazy()(*args, **kwargs)
+
+simple_ocr_service = _SimpleOCRServiceProxy()

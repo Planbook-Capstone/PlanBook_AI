@@ -44,8 +44,8 @@ class RAGService:
             logger.info(f"Processing RAG query: {query[:100]}...")
             
             # Kiểm tra LLM service
-            from app.services.openrouter_service import OpenRouterService
-            llm_service = OpenRouterService()
+            from app.services.openrouter_service import get_openrouter_service
+            llm_service = get_openrouter_service()
             
             if not llm_service.available:
                 return {
