@@ -112,9 +112,96 @@ class LessonPlanContentService:
                     "lesson_content_used": len(lesson_content) > 0
                 }
             }
-            
+
         except Exception as e:
             logger.error(f"Error in lesson plan content generation: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "lesson_plan": lesson_plan_json
+            }
+
+    async def generate_lesson_plan_content_with_progress(
+        self,
+        lesson_plan_json: Dict[str, Any],
+        lesson_id: Optional[str] = None,
+        progress_callback: Optional[callable] = None,
+        total_nodes: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Sinh nội dung chi tiết cho giáo án từ cấu trúc JSON với progress tracking
+
+        Args:
+            lesson_plan_json: JSON cấu trúc giáo án
+            lesson_id: ID bài học để lấy nội dung tham khảo (optional)
+            progress_callback: Callback function để update progress
+            total_nodes: Tổng số nodes để tính progress
+
+        Returns:
+            Dict với kết quả xử lý
+        """
+        try:
+            logger.info("Starting lesson plan content generation with progress tracking...")
+
+            # Validate đầu vào
+            if not lesson_plan_json:
+                return {
+                    "success": False,
+                    "error": "lesson_plan_json cannot be empty"
+                }
+
+            # Lấy nội dung bài học để tham khảo (nếu có lesson_id)
+            lesson_content = ""
+            if lesson_id:
+                try:
+                    # TODO: Implement _get_lesson_content method to retrieve lesson content from database
+                    # For now, skip lesson content retrieval
+                    lesson_content = ""
+                    logger.info(f"Lesson content retrieval skipped for lesson_id: {lesson_id}")
+                except Exception as e:
+                    logger.warning(f"Could not retrieve lesson content for {lesson_id}: {e}")
+                    lesson_content = ""
+
+            # Tạo bản sao để xử lý
+            processed_json = deepcopy(lesson_plan_json)
+
+            # Xử lý đệ quy từ root với progress tracking
+            processed_nodes = [0]  # Use list to make it mutable in nested function
+
+            async def progress_wrapper():
+                processed_nodes[0] += 1
+                if progress_callback and total_nodes > 0:
+                    await progress_callback(
+                        processed_nodes[0],
+                        total_nodes,
+                        f"Processing node {processed_nodes[0]}/{total_nodes}..."
+                    )
+
+            processing_result = await self._process_lesson_plan_recursive_with_progress(
+                processed_json,
+                lesson_content,
+                progress_wrapper
+            )
+
+            if processing_result["success"]:
+                return {
+                    "success": True,
+                    "lesson_plan": processed_json,
+                    "statistics": {
+                        "total_nodes": self._count_nodes(processed_json),
+                        "content_nodes_processed": processing_result.get("nodes_processed", 0),
+                        "lesson_content_used": len(lesson_content) > 0
+                    }
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": processing_result["error"],
+                    "lesson_plan": processed_json
+                }
+
+        except Exception as e:
+            logger.error(f"Error in lesson plan content generation with progress: {e}")
             return {
                 "success": False,
                 "error": str(e),
@@ -219,6 +306,112 @@ class LessonPlanContentService:
             
         except Exception as e:
             logger.error(f"Error processing node at depth {depth}: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _process_lesson_plan_recursive_with_progress(
+        self,
+        node: Dict[str, Any],
+        lesson_content: str,
+        progress_callback: Optional[callable] = None,
+        depth: int = 0,
+        visited_ids: Optional[Set[int]] = None
+    ) -> Dict[str, Any]:
+        """
+        Xử lý đệ quy từng node trong cây JSON với progress tracking
+
+        Args:
+            node: Node hiện tại cần xử lý
+            lesson_content: Nội dung bài học tham khảo
+            progress_callback: Callback function để update progress
+            depth: Độ sâu hiện tại
+            visited_ids: Set các ID đã thăm để tránh vòng lặp
+
+        Returns:
+            Dict chứa kết quả xử lý
+        """
+        try:
+            # Khởi tạo visited_ids nếu chưa có
+            if visited_ids is None:
+                visited_ids = set()
+
+            # Kiểm tra độ sâu tối đa
+            if depth > self.MAX_DEPTH:
+                return {
+                    "success": False,
+                    "error": f"Maximum depth {self.MAX_DEPTH} exceeded"
+                }
+
+            # Kiểm tra node có hợp lệ không
+            if not isinstance(node, dict):
+                return {
+                    "success": False,
+                    "error": "Node is not a dictionary"
+                }
+
+            # Kiểm tra các trường bắt buộc
+            required_fields = ["id", "type", "status"]
+            for field in required_fields:
+                if field not in node:
+                    return {
+                        "success": False,
+                        "error": f"Missing required field: {field}"
+                    }
+
+            # Chỉ xử lý node có status ACTIVE
+            if node.get("status") != "ACTIVE":
+                return {"success": True, "nodes_processed": 0}
+
+            # Kiểm tra vòng lặp
+            node_id = node.get("id")
+            if node_id in visited_ids:
+                return {
+                    "success": False,
+                    "error": f"Cycle detected at node {node_id}"
+                }
+
+            # Thêm node_id vào visited_ids
+            visited_ids.add(node_id)
+
+            try:
+                # Update progress callback
+                if progress_callback:
+                    await progress_callback()
+
+                # Xử lý node hiện tại
+                single_node_result = await self._process_single_node(node, lesson_content)
+
+                if not single_node_result["success"]:
+                    return single_node_result
+
+                nodes_processed = 1 if single_node_result.get("content_generated", False) else 0
+
+                # Xử lý children nếu có
+                children = node.get("children", [])
+                for child in children:
+                    if child.get("status") == "ACTIVE":
+                        child_result = await self._process_lesson_plan_recursive_with_progress(
+                            child, lesson_content, progress_callback, depth + 1, visited_ids
+                        )
+
+                        if not child_result["success"]:
+                            return child_result
+
+                        nodes_processed += child_result.get("nodes_processed", 0)
+
+                return {
+                    "success": True,
+                    "nodes_processed": nodes_processed
+                }
+
+            finally:
+                # Loại bỏ node_id khỏi visited_ids khi hoàn thành
+                visited_ids.discard(node_id)
+
+        except Exception as e:
+            logger.error(f"Error processing node with progress at depth {depth}: {e}")
             return {
                 "success": False,
                 "error": str(e)

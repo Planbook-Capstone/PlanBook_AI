@@ -37,6 +37,7 @@ class TaskType(str, Enum):
     PROCESS_CV = "process_cv"
     CREATE_EMBEDDINGS = "create_embeddings"
     GENERATE_LESSON_PLAN = "generate_lesson_plan"
+    LESSON_PLAN_CONTENT_GENERATION = "lesson_plan_content_generation"
 
 
 class MongoDBTaskService:

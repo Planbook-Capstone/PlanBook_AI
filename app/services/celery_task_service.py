@@ -84,6 +84,7 @@ class CeleryTaskService:
             "process_cv": "app.tasks.cv_tasks.process_cv_task",
             "create_embeddings": "app.tasks.embeddings_tasks.create_embeddings_task",
             "update_embeddings": "app.tasks.embeddings_tasks.update_embeddings_task",
+            "lesson_plan_content_generation": "app.tasks.lesson_plan_tasks.process_lesson_plan_content_generation",
         }
 
         return task_mapping.get(task_type)
@@ -105,6 +106,7 @@ class CeleryTaskService:
             "process_cv": "cv_queue",
             "create_embeddings": "embeddings_queue",
             "update_embeddings": "embeddings_queue",
+            "lesson_plan_content_generation": "default",
         }
 
         return queue_mapping.get(task_type, "default")

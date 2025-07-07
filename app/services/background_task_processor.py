@@ -382,6 +382,27 @@ class BackgroundTaskProcessor:
 
         return task_id
 
+    async def create_lesson_plan_content_task(
+        self,
+        lesson_plan_json: Dict[str, Any],
+        lesson_id: Optional[str] = None,
+    ) -> str:
+        """Tạo task sinh nội dung giáo án - sử dụng Celery"""
+
+        task_data = {
+            "lesson_plan_json": lesson_plan_json,
+            "lesson_id": lesson_id,
+        }
+
+        # Sử dụng Celery thay vì asyncio.create_task
+        from app.services.celery_task_service import celery_task_service
+
+        task_id = await celery_task_service.create_and_dispatch_task(
+            task_type="lesson_plan_content_generation", task_data=task_data
+        )
+
+        return task_id
+
     # DEPRECATED: Phương thức này đã được thay thế bằng Celery task
     # Sử dụng create_quick_analysis_task() thay thế
     async def process_quick_analysis_task(self, task_id: str):
