@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional
 from docx import Document
 import io
 
-from app.services.openrouter_service import openrouter_service
+from app.services.openrouter_service import get_openrouter_service
 from app.models.exam_import_models import (
     ExamImportRequest,
     ExamImportResponse,
@@ -27,6 +27,7 @@ class ExamImportService:
 
     def __init__(self):
         self.model_name = "google/gemini-2.0-flash-001"
+        logger.info("🔄 ExamImportService: First-time initialization triggered")
 
     async def import_exam_from_docx_content(
         self, file_content: bytes, filename: str = "exam.docx"
@@ -236,6 +237,7 @@ class ExamImportService:
             prompt = self._create_analysis_prompt(exam_text, filename)
             
             # Gọi LLM
+            openrouter_service = get_openrouter_service()
             response = await openrouter_service.generate_content(
                 prompt=prompt,
                 temperature=0.1,
@@ -549,5 +551,34 @@ Hãy phân tích và trả về JSON:
             )
 
 
-# Tạo instance global
-exam_import_service = ExamImportService()
+# Lazy loading global instance để tránh khởi tạo ngay khi import
+_exam_import_service_instance = None
+
+def get_exam_import_service() -> ExamImportService:
+    """
+    Lấy singleton instance của ExamImportService
+    Lazy initialization
+
+    Returns:
+        ExamImportService: Service instance
+    """
+    global _exam_import_service_instance
+    if _exam_import_service_instance is None:
+        _exam_import_service_instance = ExamImportService()
+    return _exam_import_service_instance
+
+# Backward compatibility - deprecated, sử dụng get_exam_import_service() thay thế
+# Lazy loading để tránh khởi tạo ngay khi import
+def _get_exam_import_service_lazy():
+    """Lazy loading cho backward compatibility"""
+    return get_exam_import_service()
+
+# Tạo proxy object để lazy loading
+class _ExamImportServiceProxy:
+    def __getattr__(self, name):
+        return getattr(_get_exam_import_service_lazy(), name)
+
+    def __call__(self, *args, **kwargs):
+        return _get_exam_import_service_lazy()(*args, **kwargs)
+
+exam_import_service = _ExamImportServiceProxy()

@@ -225,5 +225,34 @@ Chỉ trả về JSON, không có text khác.
         }
 
 
-# Global instance
-semantic_analysis_service = SemanticAnalysisService()
+# Lazy loading global instance để tránh khởi tạo ngay khi import
+_semantic_analysis_service_instance = None
+
+def get_semantic_analysis_service() -> SemanticAnalysisService:
+    """
+    Lấy singleton instance của SemanticAnalysisService
+    Lazy initialization
+
+    Returns:
+        SemanticAnalysisService: Service instance
+    """
+    global _semantic_analysis_service_instance
+    if _semantic_analysis_service_instance is None:
+        _semantic_analysis_service_instance = SemanticAnalysisService()
+    return _semantic_analysis_service_instance
+
+# Backward compatibility - deprecated, sử dụng get_semantic_analysis_service() thay thế
+# Lazy loading để tránh khởi tạo ngay khi import
+def _get_semantic_analysis_service_lazy():
+    """Lazy loading cho backward compatibility"""
+    return get_semantic_analysis_service()
+
+# Tạo proxy object để lazy loading
+class _SemanticAnalysisServiceProxy:
+    def __getattr__(self, name):
+        return getattr(_get_semantic_analysis_service_lazy(), name)
+
+    def __call__(self, *args, **kwargs):
+        return _get_semantic_analysis_service_lazy()(*args, **kwargs)
+
+semantic_analysis_service = _SemanticAnalysisServiceProxy()

@@ -174,30 +174,12 @@ class EnhancedTextbookService:
                 self.executor, extract_single_page
             )
 
-            # Apply OCR using PIL and simple_ocr_service logic
+            # Apply OCR using SimpleOCRService
             image = Image.open(io.BytesIO(img_data))
 
-            # Use simple OCR service's OCR logic
-            if (
-                hasattr(simple_ocr_service, "easyocr_reader")
-                and simple_ocr_service.easyocr_reader
-            ):
-                import numpy as np
-
-                results = simple_ocr_service.easyocr_reader.readtext(np.array(image))
-                text_parts = []
-                for result in results:
-                    if isinstance(result, (list, tuple)) and len(result) >= 2:
-                        # EasyOCR returns [bbox, text, confidence]
-                        text_parts.append(str(result[1]))
-                return " ".join(text_parts)
-            else:
-                # Fallback to Tesseract
-                import pytesseract
-
-                return pytesseract.image_to_string(
-                    image, config=simple_ocr_service.tesseract_config
-                )
+            # Use SimpleOCRService's _ocr_image method which handles EasyOCR initialization
+            text = await simple_ocr_service._ocr_image(image, page_data['page_number'])
+            return text
 
         except Exception as e:
             logger.error(f"OCR failed for page {page_data['page_number']}: {e}")
@@ -273,9 +255,9 @@ class EnhancedTextbookService:
     async def refine_raw_content_with_llm(self, raw_text: str) -> str:
         """Gửi text thô trực tiếp đến OpenRouter LLM để lọc và chỉnh sửa nội dung"""
         try:
-            from app.services.openrouter_service import OpenRouterService
+            from app.services.openrouter_service import get_openrouter_service
 
-            openrouter_service = OpenRouterService()
+            openrouter_service = get_openrouter_service()
             if not openrouter_service.available:
                 logger.warning("OpenRouter service not available, returning original content")
                 return self.clean_text_content(raw_text)

@@ -8,7 +8,7 @@ import json
 import re
 from typing import Dict, List, Any, Optional, cast
 from datetime import datetime
-from app.services.llm_service import LLMService
+from app.services.llm_service import get_llm_service
 from app.core.logging_config import safe_log_text
 from app.models.exam_models import (
     ExamMatrixRequest,
@@ -24,7 +24,8 @@ class ExamGenerationService:
     """Service để tạo câu hỏi thi từ ma trận đề thi"""
 
     def __init__(self):
-        self.llm_service = LLMService()
+        self.llm_service = get_llm_service()
+        logger.info("🔄 ExamGenerationService: First-time initialization triggered")
 
     async def generate_questions_from_matrix(
         self, exam_request: ExamMatrixRequest, lesson_content: Dict[str, Any]
@@ -51,6 +52,9 @@ class ExamGenerationService:
             logger.info(f"Grade: {exam_request.lop}")
             logger.info(f"Total questions requested: {exam_request.tong_so_cau}")
             logger.info(f"Number of lessons: {len(exam_request.cau_hinh_de)}")
+
+            # Ensure LLM service is initialized
+            self.llm_service._ensure_service_initialized()
 
             if not self.llm_service.is_available():
                 logger.error(
@@ -982,5 +986,34 @@ HƯỚNG DẪN TẠO CÂU TỰ LUẬN:
             return []
 
 
-# Tạo instance global
-exam_generation_service = ExamGenerationService()
+# Lazy loading global instance để tránh khởi tạo ngay khi import
+_exam_generation_service_instance = None
+
+def get_exam_generation_service() -> ExamGenerationService:
+    """
+    Lấy singleton instance của ExamGenerationService
+    Lazy initialization
+
+    Returns:
+        ExamGenerationService: Service instance
+    """
+    global _exam_generation_service_instance
+    if _exam_generation_service_instance is None:
+        _exam_generation_service_instance = ExamGenerationService()
+    return _exam_generation_service_instance
+
+# Backward compatibility - deprecated, sử dụng get_exam_generation_service() thay thế
+# Lazy loading để tránh khởi tạo ngay khi import
+def _get_exam_generation_service_lazy():
+    """Lazy loading cho backward compatibility"""
+    return get_exam_generation_service()
+
+# Tạo proxy object để lazy loading
+class _ExamGenerationServiceProxy:
+    def __getattr__(self, name):
+        return getattr(_get_exam_generation_service_lazy(), name)
+
+    def __call__(self, *args, **kwargs):
+        return _get_exam_generation_service_lazy()(*args, **kwargs)
+
+exam_generation_service = _ExamGenerationServiceProxy()

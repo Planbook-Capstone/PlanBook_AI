@@ -4,6 +4,7 @@ OpenRouter Service để gọi LLM thông qua OpenRouter API
 import logging
 import json
 import requests
+import threading
 from typing import Dict, Any, Optional, List
 from app.core.config import settings
 
@@ -12,9 +13,46 @@ logger = logging.getLogger(__name__)
 class OpenRouterService:
     """
     Service sử dụng OpenRouter API để gọi các LLM models
+    Singleton pattern với Lazy Initialization
     """
-    
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        """Singleton pattern implementation với thread-safe"""
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super(OpenRouterService, cls).__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+
     def __init__(self):
+        """Lazy initialization - chỉ khởi tạo một lần"""
+        if self._initialized:
+            return
+
+        # Chỉ set flag, không khởi tạo service ngay
+        self.api_key = None
+        self.base_url = None
+        self.model = None
+        self.site_url = None
+        self.site_name = None
+        self.available = False
+        self._service_initialized = False
+        self._initialized = True
+
+    def _ensure_service_initialized(self):
+        """Ensure OpenRouter service is initialized"""
+        if not self._service_initialized:
+            logger.info("🔄 OpenRouterService: First-time initialization triggered")
+            self._init_service()
+            self._service_initialized = True
+            logger.info("✅ OpenRouterService: Initialization completed")
+
+    def _init_service(self):
+        """Initialize OpenRouter service"""
         self.api_key = settings.OPENROUTER_API_KEY
         self.base_url = settings.OPENROUTER_BASE_URL
         self.model = settings.OPENROUTER_MODEL
@@ -56,6 +94,7 @@ class OpenRouterService:
         Returns:
             Dict chứa response từ OpenRouter API
         """
+        self._ensure_service_initialized()
         try:
             if not self.available:
                 return {
@@ -140,6 +179,7 @@ class OpenRouterService:
     
     def is_available(self) -> bool:
         """Kiểm tra xem service có sẵn không"""
+        self._ensure_service_initialized()
         return self.available
     
     async def test_connection(self) -> Dict[str, Any]:
@@ -175,5 +215,35 @@ class OpenRouterService:
             }
 
 
-# Tạo instance global
-openrouter_service = OpenRouterService()
+# Hàm để lấy singleton instance
+def get_openrouter_service() -> OpenRouterService:
+    """
+    Lấy singleton instance của OpenRouterService
+    Thread-safe lazy initialization
+
+    Returns:
+        OpenRouterService: Singleton instance
+    """
+    return OpenRouterService()
+
+
+# Backward compatibility - deprecated, sử dụng get_openrouter_service() thay thế
+# Lazy loading để tránh khởi tạo ngay khi import
+_openrouter_service_instance = None
+
+def _get_openrouter_service_lazy():
+    """Lazy loading cho backward compatibility"""
+    global _openrouter_service_instance
+    if _openrouter_service_instance is None:
+        _openrouter_service_instance = get_openrouter_service()
+    return _openrouter_service_instance
+
+# Tạo proxy object để lazy loading
+class _OpenRouterServiceProxy:
+    def __getattr__(self, name):
+        return getattr(_get_openrouter_service_lazy(), name)
+
+    def __call__(self, *args, **kwargs):
+        return _get_openrouter_service_lazy()(*args, **kwargs)
+
+openrouter_service = _OpenRouterServiceProxy()

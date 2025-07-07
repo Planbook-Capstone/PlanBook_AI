@@ -8,7 +8,7 @@ import json
 from typing import Dict, Any, List, Optional, Set
 from copy import deepcopy
 
-from app.services.llm_service import LLMService
+from app.services.llm_service import get_llm_service
 from app.services.textbook_retrieval_service import TextbookRetrievalService
 from app.services.enhanced_textbook_service import EnhancedTextbookService
 
@@ -21,7 +21,7 @@ class LessonPlanContentService:
     """
     
     def __init__(self):
-        self.llm_service = LLMService()
+        self.llm_service = get_llm_service()
         self.textbook_service = TextbookRetrievalService()
         self.enhanced_textbook_service = EnhancedTextbookService()
         
@@ -344,6 +344,16 @@ class LessonPlanContentService:
             Dict chứa nội dung đã sinh
         """
         try:
+            # Ensure LLM service is initialized
+            self.llm_service._ensure_service_initialized()
+
+            # Kiểm tra LLM service availability
+            if not self.llm_service.is_available():
+                return {
+                    "success": False,
+                    "error": "No LLM service available"
+                }
+
             # Tạo prompt cho LLM
             prompt = self._create_content_generation_prompt(node, lesson_content)
 
@@ -927,5 +937,34 @@ YÊU CẦU:
             return content.strip()
 
 
-# Global instance
-lesson_plan_content_service = LessonPlanContentService()
+# Lazy loading global instance để tránh khởi tạo ngay khi import
+_lesson_plan_content_service_instance = None
+
+def get_lesson_plan_content_service() -> LessonPlanContentService:
+    """
+    Lấy singleton instance của LessonPlanContentService
+    Lazy initialization
+
+    Returns:
+        LessonPlanContentService: Service instance
+    """
+    global _lesson_plan_content_service_instance
+    if _lesson_plan_content_service_instance is None:
+        _lesson_plan_content_service_instance = LessonPlanContentService()
+    return _lesson_plan_content_service_instance
+
+# Backward compatibility - deprecated, sử dụng get_lesson_plan_content_service() thay thế
+# Lazy loading để tránh khởi tạo ngay khi import
+def _get_lesson_plan_content_service_lazy():
+    """Lazy loading cho backward compatibility"""
+    return get_lesson_plan_content_service()
+
+# Tạo proxy object để lazy loading
+class _LessonPlanContentServiceProxy:
+    def __getattr__(self, name):
+        return getattr(_get_lesson_plan_content_service_lazy(), name)
+
+    def __call__(self, *args, **kwargs):
+        return _get_lesson_plan_content_service_lazy()(*args, **kwargs)
+
+lesson_plan_content_service = _LessonPlanContentServiceProxy()
