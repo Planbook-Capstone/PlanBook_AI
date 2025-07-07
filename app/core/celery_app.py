@@ -67,6 +67,7 @@ celery_app.conf.update(
         "app.tasks.embeddings_tasks",
         "app.tasks.cv_tasks",
         "app.tasks.lesson_plan_tasks",
+        "app.tasks.smart_exam_tasks",
     ],
 )
 

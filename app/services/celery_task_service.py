@@ -85,6 +85,7 @@ class CeleryTaskService:
             "create_embeddings": "app.tasks.embeddings_tasks.create_embeddings_task",
             "update_embeddings": "app.tasks.embeddings_tasks.update_embeddings_task",
             "lesson_plan_content_generation": "app.tasks.lesson_plan_tasks.process_lesson_plan_content_generation",
+            "smart_exam_generation": "app.tasks.smart_exam_tasks.process_smart_exam_generation",
         }
 
         return task_mapping.get(task_type)
@@ -107,6 +108,7 @@ class CeleryTaskService:
             "create_embeddings": "embeddings_queue",
             "update_embeddings": "embeddings_queue",
             "lesson_plan_content_generation": "default",
+            "smart_exam_generation": "default",
         }
 
         return queue_mapping.get(task_type, "default")

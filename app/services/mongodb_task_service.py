@@ -38,6 +38,7 @@ class TaskType(str, Enum):
     CREATE_EMBEDDINGS = "create_embeddings"
     GENERATE_LESSON_PLAN = "generate_lesson_plan"
     LESSON_PLAN_CONTENT_GENERATION = "lesson_plan_content_generation"
+    SMART_EXAM_GENERATION = "smart_exam_generation"
 
 
 class MongoDBTaskService:
@@ -529,3 +530,8 @@ class MongoDBTaskService:
 
 # Singleton instance
 mongodb_task_service = MongoDBTaskService()
+
+
+def get_mongodb_task_service() -> MongoDBTaskService:
+    """Lấy singleton instance của MongoDBTaskService"""
+    return mongodb_task_service

@@ -403,6 +403,36 @@ class BackgroundTaskProcessor:
 
         return task_id
 
+    async def create_smart_exam_task(
+        self,
+        request_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Tạo task tạo đề thi thông minh - sử dụng Celery"""
+
+        try:
+            task_data = {
+                "request_data": request_data,
+            }
+
+            # Sử dụng Celery thay vì asyncio.create_task
+            from app.services.celery_task_service import celery_task_service
+
+            task_id = await celery_task_service.create_and_dispatch_task(
+                task_type="smart_exam_generation", task_data=task_data
+            )
+
+            return {
+                "success": True,
+                "task_id": task_id
+            }
+
+        except Exception as e:
+            logger.error(f"Lỗi tạo smart exam task: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
     # DEPRECATED: Phương thức này đã được thay thế bằng Celery task
     # Sử dụng create_quick_analysis_task() thay thế
     async def process_quick_analysis_task(self, task_id: str):
@@ -605,3 +635,8 @@ class BackgroundTaskProcessor:
 
 # Singleton instance
 background_task_processor = BackgroundTaskProcessor()
+
+
+def get_background_task_processor() -> BackgroundTaskProcessor:
+    """Lấy singleton instance của BackgroundTaskProcessor"""
+    return background_task_processor
