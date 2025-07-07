@@ -31,11 +31,11 @@ from app.models.smart_exam_models import (
     SmartExamResponse,
     SmartExamError
 )
-from app.services.exam_content_service import exam_content_service
-from app.services.exam_generation_service import exam_generation_service
+from app.services.exam_content_service import get_exam_content_service
+from app.services.exam_generation_service import get_exam_generation_service
 from app.services.exam_docx_service import exam_docx_service
-from app.services.google_drive_service import google_drive_service
-from app.services.smart_exam_generation_service import smart_exam_generation_service
+from app.services.google_drive_service import get_google_drive_service
+from app.services.smart_exam_generation_service import get_smart_exam_generation_service
 from app.services.smart_exam_docx_service import smart_exam_docx_service
 from app.core.config import settings
 
@@ -73,6 +73,7 @@ async def _create_online_document_response(
             detail="Google Drive service is disabled. Cannot create online document."
         )
 
+    google_drive_service = get_google_drive_service()
     if not google_drive_service.is_available():
         raise HTTPException(
             status_code=503,
@@ -225,6 +226,7 @@ async def generate_exam_from_matrix(request: ExamMatrixRequest):
 
         # 2. Tìm kiếm nội dung cho tất cả bài học
         logger.info("Searching for multiple lesson contents...")
+        exam_content_service = get_exam_content_service()
         lesson_content = await exam_content_service.get_multiple_lessons_content_for_exam(
             lesson_ids=lesson_ids
         )
@@ -263,6 +265,7 @@ async def generate_exam_from_matrix(request: ExamMatrixRequest):
 
         # 4. Tạo câu hỏi từ ma trận
         logger.info("Generating questions from matrix...")
+        exam_generation_service = get_exam_generation_service()
         exam_result = await exam_generation_service.generate_questions_from_matrix(
             exam_request=request, lesson_content=lesson_content
         )
@@ -367,6 +370,7 @@ async def generate_exam_download(request: ExamMatrixRequest):
 
         # 2. Tìm kiếm nội dung cho tất cả bài học
         logger.info("Searching for multiple lesson contents...")
+        exam_content_service = get_exam_content_service()
         lesson_content = await exam_content_service.get_multiple_lessons_content_for_exam(
             lesson_ids=lesson_ids
         )
@@ -404,6 +408,7 @@ async def generate_exam_download(request: ExamMatrixRequest):
 
         # 4. Tạo câu hỏi từ ma trận
         logger.info("Generating questions from matrix...")
+        exam_generation_service = get_exam_generation_service()
         exam_result = await exam_generation_service.generate_questions_from_matrix(
             exam_request=request, lesson_content=lesson_content
         )
@@ -511,6 +516,7 @@ async def get_lesson_content_for_exam(
         Dict chứa nội dung bài học và thông tin chất lượng
     """
     try:
+        exam_content_service = get_exam_content_service()
         lesson_content = await exam_content_service.get_lesson_content_for_exam(
             lesson_id=lesson_id, search_terms=search_terms
         )
@@ -561,6 +567,7 @@ async def search_lesson_content(request: SearchContentRequest) -> Dict[str, Any]
         Dict chứa kết quả tìm kiếm
     """
     try:
+        exam_content_service = get_exam_content_service()
         search_result = await exam_content_service.search_content_by_keywords(
             lesson_id=request.lesson_id,
             keywords=request.search_terms,
@@ -715,6 +722,7 @@ async def generate_smart_exam(request: SmartExamRequest):
 
         # 3. Tìm kiếm nội dung cho tất cả bài học
         logger.info("Searching for lesson contents...")
+        exam_content_service = get_exam_content_service()
         lesson_content = await exam_content_service.get_multiple_lessons_content_for_exam(
             lesson_ids=lesson_ids
         )
@@ -762,6 +770,7 @@ async def generate_smart_exam(request: SmartExamRequest):
                 logger.info(f"DEBUG: lesson {lesson_id} keys: {list(lesson_data.keys())}")
 
         logger.info(f"DEBUG ENDPOINT: About to call smart exam generation service")
+        smart_exam_generation_service = get_smart_exam_generation_service()
         exam_result = await smart_exam_generation_service.generate_smart_exam(
             exam_request=request, lesson_content=content_data
         )
@@ -806,6 +815,7 @@ async def generate_smart_exam(request: SmartExamRequest):
                 details={}
             )
 
+        google_drive_service = get_google_drive_service()
         upload_result = await google_drive_service.upload_docx_file(
             file_path=file_path,
             filename=filename or "smart_exam.docx",

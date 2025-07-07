@@ -47,6 +47,9 @@ class RAGService:
             from app.services.openrouter_service import get_openrouter_service
             llm_service = get_openrouter_service()
             
+            # Đảm bảo service được khởi tạo đầy đủ trước khi kiểm tra
+            llm_service._ensure_service_initialized()
+            
             if not llm_service.available:
                 return {
                     "success": False,
@@ -128,8 +131,11 @@ class RAGService:
         semantic_tags: Optional[str]
     ) -> Dict[str, Any]:
         """Thực hiện semantic search"""
-        from app.services.qdrant_service import qdrant_service
-        
+        from app.services.qdrant_service import get_qdrant_service
+        qdrant_service = get_qdrant_service()
+            
+        # Đảm bảo service được khởi tạo đầy đủ trước khi kiểm tra
+        qdrant_service._ensure_service_initialized()
         search_params = {
             "query": query,
             "limit": limit

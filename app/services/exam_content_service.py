@@ -3,7 +3,7 @@ Service để tìm kiếm và xử lý nội dung bài học cho việc tạo c�
 """
 import logging
 from typing import Dict, List, Any, Optional
-from app.services.qdrant_service import qdrant_service
+from app.services.qdrant_service import get_qdrant_service
 from app.models.exam_models import SearchContentRequest, LessonContentResponse
 from qdrant_client import models as qdrant_models
 
@@ -14,7 +14,7 @@ class ExamContentService:
     """Service để tìm kiếm và xử lý nội dung cho việc tạo đề thi"""
 
     def __init__(self):
-        self.qdrant_service = qdrant_service
+        self.qdrant_service = get_qdrant_service()
 
     async def get_multiple_lessons_content_for_exam(
         self, lesson_ids: List[str], search_terms: Optional[List[str]] = None
@@ -30,6 +30,9 @@ class ExamContentService:
             Dict chứa nội dung tất cả bài học đã được xử lý
         """
         try:
+            # Ensure Qdrant service is initialized
+            self.qdrant_service._ensure_service_initialized()
+
             if not self.qdrant_service.qdrant_client:
                 return {
                     "success": False,
@@ -99,6 +102,9 @@ class ExamContentService:
             Dict chứa nội dung bài học đã được xử lý
         """
         try:
+            # Ensure Qdrant service is initialized
+            self.qdrant_service._ensure_service_initialized()
+
             if not self.qdrant_service.qdrant_client:
                 return {
                     "success": False,
@@ -460,5 +466,34 @@ class ExamContentService:
             }
 
 
-# Tạo instance global
-exam_content_service = ExamContentService()
+# Lazy loading global instance để tránh khởi tạo ngay khi import
+_exam_content_service_instance = None
+
+def get_exam_content_service() -> ExamContentService:
+    """
+    Lấy singleton instance của ExamContentService
+    Lazy initialization
+
+    Returns:
+        ExamContentService: Service instance
+    """
+    global _exam_content_service_instance
+    if _exam_content_service_instance is None:
+        _exam_content_service_instance = ExamContentService()
+    return _exam_content_service_instance
+
+# Backward compatibility - deprecated, sử dụng get_exam_content_service() thay thế
+# Lazy loading để tránh khởi tạo ngay khi import
+def _get_exam_content_service_lazy():
+    """Lazy loading cho backward compatibility"""
+    return get_exam_content_service()
+
+# Tạo proxy object để lazy loading
+class _ExamContentServiceProxy:
+    def __getattr__(self, name):
+        return getattr(_get_exam_content_service_lazy(), name)
+
+    def __call__(self, *args, **kwargs):
+        return _get_exam_content_service_lazy()(*args, **kwargs)
+
+exam_content_service = _ExamContentServiceProxy()

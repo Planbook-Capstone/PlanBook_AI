@@ -37,7 +37,10 @@ class TextbookRetrievalService:
         """
         try:
             qdrant_service = self._get_qdrant_service()
-            
+
+            # Ensure Qdrant service is initialized
+            qdrant_service._ensure_service_initialized()
+
             if not qdrant_service.qdrant_client:
                 raise HTTPException(status_code=503, detail="Qdrant service not available")
             
@@ -144,5 +147,34 @@ class TextbookRetrievalService:
         return await self.get_lesson_content(lesson_id)
 
 
-# Singleton instance
-textbook_retrieval_service = TextbookRetrievalService()
+# Lazy loading global instance để tránh khởi tạo ngay khi import
+_textbook_retrieval_service_instance = None
+
+def get_textbook_retrieval_service() -> TextbookRetrievalService:
+    """
+    Lấy singleton instance của TextbookRetrievalService
+    Lazy initialization
+
+    Returns:
+        TextbookRetrievalService: Service instance
+    """
+    global _textbook_retrieval_service_instance
+    if _textbook_retrieval_service_instance is None:
+        _textbook_retrieval_service_instance = TextbookRetrievalService()
+    return _textbook_retrieval_service_instance
+
+# Backward compatibility - deprecated, sử dụng get_textbook_retrieval_service() thay thế
+# Lazy loading để tránh khởi tạo ngay khi import
+def _get_textbook_retrieval_service_lazy():
+    """Lazy loading cho backward compatibility"""
+    return get_textbook_retrieval_service()
+
+# Tạo proxy object để lazy loading
+class _TextbookRetrievalServiceProxy:
+    def __getattr__(self, name):
+        return getattr(_get_textbook_retrieval_service_lazy(), name)
+
+    def __call__(self, *args, **kwargs):
+        return _get_textbook_retrieval_service_lazy()(*args, **kwargs)
+
+textbook_retrieval_service = _TextbookRetrievalServiceProxy()

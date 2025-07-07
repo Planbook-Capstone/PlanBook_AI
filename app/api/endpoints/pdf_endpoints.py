@@ -6,8 +6,8 @@ import logging
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Query
 from typing import Dict, Any, Optional
 
-from app.services.llm_service import llm_service
-from app.services.semantic_analysis_service import semantic_analysis_service
+from app.services.llm_service import get_llm_service
+from app.services.semantic_analysis_service import get_semantic_analysis_service
 from app.services.background_task_processor import background_task_processor
 
 logger = logging.getLogger(__name__)
@@ -98,7 +98,9 @@ async def get_all_textbook() -> Dict[str, Any]:
         GET /api/v1/pdf/getAllTextBook
     """
     try:
-        from app.services.qdrant_service import qdrant_service
+        from app.services.qdrant_service import get_qdrant_service
+        qdrant_service = get_qdrant_service()
+        qdrant_service._ensure_service_initialized()
         from qdrant_client import models as qdrant_models
 
         # Lấy danh sách từ Qdrant collections
@@ -366,7 +368,9 @@ async def search_all_textbooks(
         - /api/v1/pdf/search?query=bài tập về liên kết hóa học
     """
     try:
-        from app.services.qdrant_service import qdrant_service
+        from app.services.qdrant_service import get_qdrant_service
+        qdrant_service = get_qdrant_service()
+        qdrant_service._ensure_service_initialized()
 
         logger.info(
             f"Global search query: '{query}' with limit: {limit}"
@@ -475,10 +479,12 @@ async def health_check():
         supported_langs = simple_ocr_service.get_supported_languages()
 
         # Check LLM service availability
+        llm_service = get_llm_service()
         llm_available = llm_service.is_available()
 
         # Check Qdrant and embedding model
-        from app.services.qdrant_service import qdrant_service
+        from app.services.qdrant_service import get_qdrant_service
+        qdrant_service = get_qdrant_service()
         embedding_available = qdrant_service.embedding_model is not None
         qdrant_available = qdrant_service.qdrant_client is not None
 
