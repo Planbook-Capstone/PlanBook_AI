@@ -115,7 +115,11 @@ class Settings(BaseSettings):
                 print("✅ Using Gemini API")
 
             if not self.SECRET_KEY or self.SECRET_KEY == "your_secret_key_here":
-                print("⚠️ Warning: SECRET_KEY not set or using default")
+                # Tự động tạo SECRET_KEY nếu không có
+                import secrets
+                self.SECRET_KEY = secrets.token_urlsafe(32)
+                print("⚠️ Warning: SECRET_KEY not set, generated temporary key for this session")
+                print("💡 Tip: Set SECRET_KEY environment variable for production")
 
 
 settings = Settings()
