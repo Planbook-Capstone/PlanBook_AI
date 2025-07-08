@@ -671,19 +671,19 @@ class LessonPlanContentResponse(BaseModel):
     statistics: Optional[Dict[str, Any]] = None
 
 
-@router.post("/generate-lesson-plan-content", response_model=LessonPlanContentResponse)
+@router.post("/generate-lesson-plan-content")
 async def generate_lesson_plan_content(request: LessonPlanContentRequest):
     """
-    Sinh nội dung chi tiết cho giáo án từ cấu trúc JSON
+    Sinh nội dung chi tiết cho giáo án từ cấu trúc JSON với Celery task
 
     Args:
         request: Request chứa JSON giáo án và lesson_id (optional)
 
     Returns:
-        LessonPlanContentResponse: Kết quả xử lý với JSON đã được sinh nội dung
+        Dict chứa task_id để theo dõi tiến độ
     """
     try:
-        logger.info("Starting lesson plan content generation...")
+        logger.info("Starting lesson plan content generation task...")
 
         # Validate đầu vào
         if not request.lesson_plan_json:
@@ -692,31 +692,30 @@ async def generate_lesson_plan_content(request: LessonPlanContentRequest):
                 detail="lesson_plan_json is required"
             )
 
-        # Gọi service để sinh nội dung
-        result = await lesson_plan_content_service.generate_lesson_plan_content(
+        # Import background_task_processor
+        from app.services.background_task_processor import background_task_processor
+
+        # Tạo task bất đồng bộ
+        task_id = await background_task_processor.create_lesson_plan_content_task(
             lesson_plan_json=request.lesson_plan_json,
             lesson_id=request.lesson_id
         )
 
-        if result["success"]:
-            logger.info("Lesson plan content generation completed successfully")
-            return LessonPlanContentResponse(
-                success=True,
-                lesson_plan=result["lesson_plan"],
-                statistics=result.get("statistics")
-            )
-        else:
-            logger.error(f"Lesson plan content generation failed: {result['error']}")
-            return LessonPlanContentResponse(
-                success=False,
-                error=result["error"],
-                lesson_plan=result.get("lesson_plan")
-            )
+        return {
+            "success": True,
+            "task_id": task_id,
+            "status": "processing",
+            "message": "Lesson plan content generation task created successfully. Use /api/v1/tasks/{task_id}/status to check progress.",
+            "endpoints": {
+                "check_status": f"/api/v1/tasks/{task_id}/status",
+                "get_result": f"/api/v1/tasks/{task_id}/result",
+            },
+        }
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in lesson plan content generation endpoint: {e}")
+        logger.error(f"Error creating lesson plan content generation task: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Internal server error: {str(e)}"

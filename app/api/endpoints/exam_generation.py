@@ -678,195 +678,79 @@ def _calculate_search_result_quality(results: List[Dict[str, Any]]) -> float:
     return round(avg_score, 2)
 
 
-@router.post("/generate-smart-exam", response_model=SmartExamResponse)
+@router.post("/generate-smart-exam")
 async def generate_smart_exam(request: SmartExamRequest):
     """
-    Tạo đề thi thông minh theo chuẩn THPT 2025
+    Tạo đề thi thông minh theo chuẩn THPT 2025 (Async với Celery)
 
-    Endpoint này nhận ma trận đề thi theo format mới và tạo đề thi với cấu trúc:
-    - Phần I: Câu trắc nghiệm nhiều phương án lựa chọn
-    - Phần II: Câu trắc nghiệm đúng sai
-    - Phần III: Câu trắc nghiệm trả lời ngắn
+    Endpoint này nhận ma trận đề thi và trả về task_id để theo dõi progress.
+    Sử dụng Celery để xử lý bất đồng bộ với progress tracking bằng tiếng Việt.
 
     Args:
         request: SmartExamRequest chứa thông tin trường, môn học, ma trận đề thi
 
     Returns:
-        SmartExamResponse: Kết quả tạo đề thi với link online document
+        Dict: {"task_id": "...", "message": "..."} để theo dõi qua /api/v1/tasks/{task_id}/status
 
     Example:
         POST /api/v1/exam/generate-smart-exam
         {
-"school": "Trường THPT Hong Thinh",
- "examCode": "1234",
- "grade": 12, "subject": "Hoa hoc", "examTitle": "Kiểm tra ne", "duration": 90, "outputFormat": "docx", "outputLink": "online", "matrix": [ { "lessonId": "234", "totalQuestions": 10, "parts": [ { "part": 1, "objectives": { "Biết": 3, "Hiểu": 1, "Vận_dụng": 0 } }, { "part": 2, "objectives": { "Biết": 1, "Hiểu": 3, "Vận_dụng": 0 } }, { "part": 3, "objectives": { "Biết": 0, "Hiểu": 1, "Vận_dụng": 1 } } ] }, { "lessonId": "test1", "totalQuestions": 8, "parts": [ { "part": 1, "objectives": { "Biết": 2, "Hiểu": 1, "Vận_dụng": 0 } }, { "part": 2, "objectives": { "Biết": 0, "Hiểu": 3, "Vận_dụng": 0 } }, { "part": 3, "objectives": { "Biết": 0, "Hiểu": 1, "Vận_dụng": 1 } } ] } ] }
+            "school": "Trường THPT Hong Thinh",
+            "examCode": "1234",
+            "grade": 12,
+            "subject": "Hoa hoc",
+            "examTitle": "Kiểm tra ne",
+            "duration": 90,
+            "outputFormat": "docx",
+            "outputLink": "online",
+            "matrix": [...]
+        }
+
+        Response:
+        {
+            "task_id": "abc-123-def",
+            "message": "Đã tạo task tạo đề thi thông minh. Sử dụng task_id để theo dõi tiến độ."
+        }
     """
     print("=== SMART EXAM ENDPOINT CALLED ===")
     try:
-        logger.info(f"=== SMART EXAM GENERATION START ===")
+        logger.info(f"=== SMART EXAM GENERATION START (ASYNC) ===")
         logger.info(f"Request: {request.school} - {request.subject} - Grade {request.grade}")
 
         # 1. Validate request
         if not request.matrix:
-            return SmartExamError(
-                success=False,
-                message="Validation failed",
-                error="Ma trận đề thi không được rỗng",
-                error_code="EMPTY_MATRIX",
-                details={}
+            raise HTTPException(
+                status_code=400,
+                detail="Ma trận đề thi không được rỗng"
             )
 
-        # 2. Lấy tất cả lesson_id từ ma trận
-        lesson_ids = [lesson.lessonId for lesson in request.matrix]
-        logger.info(f"Extracting lesson_ids: {lesson_ids}")
+        # 2. Tạo task bất đồng bộ với Celery
+        from app.services.background_task_processor import get_background_task_processor
 
-        # 3. Tìm kiếm nội dung cho tất cả bài học
-        logger.info("Searching for lesson contents...")
-        exam_content_service = get_exam_content_service()
-        lesson_content = await exam_content_service.get_multiple_lessons_content_for_exam(
-            lesson_ids=lesson_ids
+        background_processor = get_background_task_processor()
+        task_result = await background_processor.create_smart_exam_task(
+            request_data=request.model_dump()
         )
 
-        if not lesson_content.get("success", False):
-            return SmartExamError(
-                success=False,
-                message="Content retrieval failed",
-                error=f"Không thể lấy nội dung bài học: {lesson_content.get('error', 'Unknown error')}",
-                error_code="CONTENT_RETRIEVAL_FAILED",
-                details={"lesson_ids": lesson_ids}
+        if not task_result.get("success", False):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Không thể tạo task: {task_result.get('error', 'Lỗi không xác định')}"
             )
 
-        # 4. Kiểm tra nội dung bài học
-        content_data = lesson_content.get("content", {})
-        missing_lessons = []
-        available_lessons = []
+        task_id = task_result.get("task_id")
+        logger.info(f"Đã tạo smart exam task: {task_id}")
 
-        for lesson_id in lesson_ids:
-            if lesson_id in content_data and content_data[lesson_id]:
-                available_lessons.append(lesson_id)
-            else:
-                missing_lessons.append(lesson_id)
+        return {
+            "task_id": task_id,
+            "message": "Đã tạo task tạo đề thi thông minh. Sử dụng task_id để theo dõi tiến độ qua API /api/v1/tasks/{task_id}/status"
+        }
 
-        if missing_lessons:
-            logger.warning(f"Missing lessons: {missing_lessons}")
-            if len(missing_lessons) == len(lesson_ids):
-                return SmartExamError(
-                    success=False,
-                    message="No content found",
-                    error="Không tìm thấy nội dung cho bất kỳ bài học nào",
-                    error_code="NO_CONTENT_FOUND",
-                    details={
-                        "missing_lessons": missing_lessons,
-                        "available_lessons": available_lessons
-                    }
-                )
-
-        # 5. Tạo đề thi thông minh
-        logger.info("Generating smart exam...")
-        logger.info(f"DEBUG: content_data keys: {list(content_data.keys())}")
-        for lesson_id, lesson_data in content_data.items():
-            logger.info(f"DEBUG: lesson {lesson_id} data type: {type(lesson_data)}")
-            if isinstance(lesson_data, dict):
-                logger.info(f"DEBUG: lesson {lesson_id} keys: {list(lesson_data.keys())}")
-
-        logger.info(f"DEBUG ENDPOINT: About to call smart exam generation service")
-        smart_exam_generation_service = get_smart_exam_generation_service()
-        exam_result = await smart_exam_generation_service.generate_smart_exam(
-            exam_request=request, lesson_content=content_data
-        )
-        logger.info(f"DEBUG ENDPOINT: Smart exam generation completed")
-        logger.info(f"DEBUG ENDPOINT: exam_result keys: {list(exam_result.keys()) if isinstance(exam_result, dict) else 'Not a dict'}")
-    
-        if not exam_result.get("success", False):
-            return SmartExamError(
-                success=False,
-                message="Exam generation failed",
-                error=f"Không thể tạo đề thi: {exam_result.get('error', 'Unknown error')}",
-                error_code="EXAM_GENERATION_FAILED",
-                details={}
-            )
-
-        # 6. Tạo file DOCX
-        logger.info("Creating DOCX file...")
-        docx_result = await smart_exam_docx_service.create_smart_exam_docx(
-            exam_data=exam_result, exam_request=request.model_dump()
-        )
-
-        if not docx_result.get("success", False):
-            return SmartExamError(
-                success=False,
-                message="DOCX creation failed",
-                error=f"Không thể tạo file DOCX: {docx_result.get('error', 'Unknown error')}",
-                error_code="DOCX_CREATION_FAILED",
-                details={}
-            )
-
-        # 7. Upload lên Google Drive và tạo link online
-        logger.info("Uploading to Google Drive...")
-        file_path = docx_result.get("file_path")
-        filename = docx_result.get("filename")
-
-        if not file_path:
-            return SmartExamError(
-                success=False,
-                message="No file path",
-                error="Không có đường dẫn file để upload",
-                error_code="NO_FILE_PATH",
-                details={}
-            )
-
-        google_drive_service = get_google_drive_service()
-        upload_result = await google_drive_service.upload_docx_file(
-            file_path=file_path,
-            filename=filename or "smart_exam.docx",
-            convert_to_google_docs=True
-        )
-
-        if not upload_result.get("success", False):
-            return SmartExamError(
-                success=False,
-                message="Upload failed",
-                error=f"Không thể upload file: {upload_result.get('error', 'Unknown error')}",
-                error_code="UPLOAD_FAILED",
-                details={}
-            )
-
-        # 8. Xóa file tạm
-        try:
-            if file_path and os.path.exists(file_path):
-                os.remove(file_path)
-                logger.info(f"Deleted temporary file: {file_path}")
-        except Exception as e:
-            logger.warning(f"Could not delete temporary file: {e}")
-
-        # 9. Trả về kết quả
-        statistics = exam_result.get("statistics", {})
-        logger.info(f"DEBUG ENDPOINT: statistics type: {type(statistics)}")
-        logger.info(f"DEBUG ENDPOINT: statistics content: {statistics}")
-
-        # Convert statistics to dict if it's a Pydantic model
-        if hasattr(statistics, 'model_dump'):
-            statistics_dict = statistics.model_dump()
-            logger.info(f"DEBUG ENDPOINT: converted statistics: {statistics_dict}")
-        else:
-            statistics_dict = statistics
-            logger.info(f"DEBUG ENDPOINT: using statistics as-is: {statistics_dict}")
-
-        return SmartExamResponse(
-            success=True,
-            exam_id=exam_result.get("exam_id"),
-            message="Đề thi thông minh đã được tạo thành công theo chuẩn THPT 2025",
-            online_links=upload_result.get("links", {}),
-            statistics=statistics_dict,
-            error=""
-        )
-
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in smart exam generation: {e}")
-        return SmartExamError(
-            success=False,
-            message="System error",
-            error=f"Lỗi hệ thống: {str(e)}",
-            error_code="SYSTEM_ERROR",
-            details={}
+        raise HTTPException(
+            status_code=500,
+            detail=f"Lỗi hệ thống: {str(e)}"
         )

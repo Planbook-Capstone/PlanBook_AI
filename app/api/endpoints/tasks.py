@@ -214,64 +214,147 @@ async def get_task_status(task_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+@router.get("/result/{task_id}", response_model=Dict[str, Any])
 async def get_task_result(task_id: str) -> Dict[str, Any]:
     """
-    Lấy kết quả của task đã hoàn thành (chỉ trả về result, không trả về toàn bộ task info)
+    Lấy result của task theo task_id
+
+    Endpoint này chỉ trả về result của task, không bao gồm thông tin progress hay status khác.
+    Dùng để lấy kết quả cuối cùng của task đã hoàn thành.
+    Hỗ trợ tất cả loại task (textbook processing, smart exam, lesson plan, etc.)
 
     Args:
-        task_id: ID của task
+        task_id: ID của task cần lấy result
 
     Returns:
-        Dict chứa kết quả task với định dạng giống /process-textbook
+        Dict: Result của task hoặc error nếu task chưa hoàn thành/không tồn tại
 
     Example:
-        GET /api/v1/tasks/result/abc-123
+        GET /api/v1/tasks/result/abc-123-def
+
+        Response (Success - Smart Exam):
+        {
+            "success": true,
+            "task_id": "abc-123-def",
+            "task_type": "generate_smart_exam",
+            "result": {
+                "success": true,
+                "exam_id": "exam_123",
+                "message": "Đề thi thông minh đã được tạo thành công",
+                "statistics": {...},
+                "download_link": "https://drive.google.com/...",
+                "online_link": "https://docs.google.com/..."
+            },
+            "completed_at": "2025-07-07T18:30:00",
+            "message": "Result retrieved successfully"
+        }
+
+        Response (Success - Textbook Processing):
+        {
+            "success": true,
+            "task_id": "abc-123-def",
+            "task_type": "process_textbook",
+            "result": {
+                "success": true,
+                "book_id": "book_123",
+                "filename": "textbook.pdf",
+                "book_structure": {...},
+                "statistics": {...}
+            },
+            "completed_at": "2025-07-07T18:30:00",
+            "message": "Result retrieved successfully"
+        }
+
+        Response (Error):
+        {
+            "success": false,
+            "task_id": "abc-123-def",
+            "task_type": "generate_smart_exam",
+            "result": {
+                "success": false,
+                "error": "Lỗi hệ thống: ...",
+                "error_details": {...}
+            },
+            "completed_at": "2025-07-07T18:30:00",
+            "message": "Result retrieved successfully"
+        }
+
+        Response (Not Found/Not Completed):
+        {
+            "success": false,
+            "error": "Task not found or not completed yet",
+            "task_id": "abc-123-def",
+            "current_status": "in_progress",
+            "progress": 45
+        }
     """
     try:
+        logger.info(f"Getting result for task: {task_id}")
+
         task = await background_task_processor.get_task_status(task_id)
 
         if not task:
             raise HTTPException(
-                status_code=404, detail=f"Task with ID '{task_id}' not found"
+                status_code=404,
+                detail={
+                    "success": False,
+                    "error": "Task not found",
+                    "task_id": task_id
+                }
             )
 
-        if task["status"] != "completed":
+        # Kiểm tra task đã hoàn thành chưa
+        task_status = task.get("status")
+        if task_status != "completed":
             raise HTTPException(
                 status_code=400,
-                detail=f"Task '{task_id}' is not completed yet. Current status: {task['status']}",
+                detail={
+                    "success": False,
+                    "error": f"Task not completed yet. Current status: {task_status}",
+                    "task_id": task_id,
+                    "task_type": task.get("task_type"),
+                    "current_status": task_status,
+                    "progress": task.get("progress", 0),
+                    "message": task.get("message", "")
+                }
             )
 
-        if not task.get("result"):
+        # Lấy result
+        result = task.get("result")
+        if not result:
             raise HTTPException(
-                status_code=404, detail=f"No result found for task '{task_id}'"
+                status_code=404,
+                detail={
+                    "success": False,
+                    "error": "Task completed but no result found",
+                    "task_id": task_id,
+                    "task_type": task.get("task_type")
+                }
             )
 
-        # Trả về kết quả với định dạng giống /process-textbook
-        result = task["result"]
+        logger.info(f"Successfully retrieved result for task: {task_id}")
 
         return {
-            "success": result.get("success", False),
-            "book_id": result.get("book_id"),
-            "filename": result.get("filename"),
-            "book_structure": result.get("book_structure"),
-            "statistics": result.get("statistics", {}),
-            "processing_info": result.get("processing_info", {}),
-            "message": result.get("message", "Task completed successfully"),
-            "embeddings_created": result.get("embeddings_created", False),
-            "embeddings_info": result.get("embeddings_info", {}),
-            "task_info": {
-                "task_id": task_id,
-                "task_type": task["task_type"],
-                "completed_at": task["completed_at"],
-                "processing_time": task.get("processing_time"),
-            },
+            "success": True,
+            "task_id": task_id,
+            "task_type": task.get("task_type"),
+            "result": result,
+            "completed_at": task.get("completed_at"),
+            "message": "Result retrieved successfully"
         }
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting task result: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "success": False,
+                "error": f"Internal server error: {str(e)}",
+                "task_id": task_id
+            }
+        )
 
 
 @router.get("/", response_model=Dict[str, Any])
@@ -547,6 +630,7 @@ async def get_task_types() -> Dict[str, Any]:
             "process_cv",
             "create_embeddings",
             "generate_lesson_plan",
+            "generate_smart_exam",
         ],
         "task_statuses": ["pending", "processing", "completed", "failed"],
         "descriptions": {
@@ -556,6 +640,7 @@ async def get_task_types() -> Dict[str, Any]:
             "process_cv": "Xử lý CV/Resume với OCR",
             "create_embeddings": "Tạo embeddings cho RAG search",
             "generate_lesson_plan": "Tạo giáo án từ nội dung sách",
+            "generate_smart_exam": "Tạo đề thi thông minh theo chuẩn THPT 2025",
         },
     }
 
