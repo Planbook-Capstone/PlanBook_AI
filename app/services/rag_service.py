@@ -102,14 +102,15 @@ class RAGService:
                     "error": f"LLM generation failed: {llm_result.get('error')}"
                 }
             
-            # Step 5: Làm sạch answer text
+            # Step 5: Làm sạch answer text và format HTML
             raw_answer = llm_result.get("text", "")
             clean_answer = self.textbook_service.clean_text_content(raw_answer)
-            
+            html_answer = self._format_answer_to_html(clean_answer, sources)
+
             return {
                 "success": True,
                 "query": query,
-                "answer": clean_answer,
+                "answer": html_answer,  # Chỉ trả về HTML
                 "sources": sources,
                 "search_results_count": len(search_results),
                 "filters_applied": self._build_filters_info(semantic_tags, lesson_id, book_id)
@@ -341,6 +342,71 @@ TRẢ LỜI:"""
             "total_found": len(all_results),
             "collections_searched": len(textbook_collections)
         }
+
+    def _format_answer_to_html(self, answer: str, sources: List[Dict]) -> str:
+        """
+        Format câu trả lời thành HTML có cấu trúc rõ ràng cho FE
+
+        Args:
+            answer: Câu trả lời text thuần đã được clean
+            sources: Danh sách nguồn tham khảo
+
+        Returns:
+            HTML formatted string
+        """
+        try:
+            # Format đoạn văn với line breaks
+            formatted_answer = answer.replace('\n', '<br>')
+
+            # Tạo HTML structure đơn giản
+            html_content = f"""<div class="rag-response">
+    <div class="answer-content">
+        <h3 class="answer-title">Câu trả lời:</h3>
+        <div class="answer-text">
+            {formatted_answer}
+        </div>
+    </div>
+
+    <div class="sources-section">
+        <h4 class="sources-title">Nguồn tham khảo:</h4>
+        <div class="sources-list">"""
+
+            # Thêm sources với text đã clean
+            for source in sources:
+                source_text = self.textbook_service.clean_text_content(source.get('text', ''))
+                score = source.get('score', 0)
+                lesson_title = self.textbook_service.clean_text_content(source.get('lesson_title', ''))
+                book_id = source.get('book_id', '')
+
+                html_content += f"""
+            <div class="source-item">
+                <div class="source-header">
+                    <span class="source-id">Nguồn {source.get('source_id', '')}</span>
+                    <span class="source-score">Độ liên quan: {score:.2f}</span>
+                </div>
+                <div class="source-meta">
+                    <span class="lesson-title">{lesson_title}</span>
+                    <span class="book-id">({book_id})</span>
+                </div>
+                <div class="source-text">{source_text}</div>
+            </div>"""
+
+            html_content += """
+        </div>
+    </div>
+</div>"""
+
+            return html_content
+
+        except Exception as e:
+            logger.error(f"Error formatting HTML: {e}")
+            # Fallback to simple format
+            return f"""<div class="rag-response">
+    <div class="answer-content">
+        <h3>Câu trả lời:</h3>
+        <p>{answer}</p>
+    </div>
+</div>"""
 
 # Singleton instance
 rag_service = RAGService()
