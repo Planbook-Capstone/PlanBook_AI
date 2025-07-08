@@ -75,7 +75,7 @@ class RAGService:
             
             if not search_results:
                 # Trả về HTML format cho trường hợp không tìm thấy (clean format)
-                no_result_html = '<div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 8px; color: #856404; font-family: Arial, sans-serif; line-height: 1.6;"><h3 style="color: #856404; margin-bottom: 10px; font-size: 16px; margin-top: 0;">Không tìm thấy thông tin</h3><p style="margin: 0;">Xin lỗi, tôi không tìm thấy thông tin liên quan đến câu hỏi của bạn trong tài liệu.</p></div>'
+                no_result_html = '<div style="padding: 10px;font-weight: bold;line-height: 1.6;"><p style="margin: 0;">Xin lỗi, tôi không tìm thấy thông tin liên quan đến câu hỏi của bạn trong tài liệu.</p></div>'
                 return {
                     "success": True,
                     "query": query,
@@ -207,11 +207,11 @@ NGUYÊN TẮC:
 - Nếu thông tin không đủ để trả lời, hãy nói rõ
 
 FORMAT TRẢ LỜI (chỉ nội dung HTML thuần):
-<div style="padding: 15px; margin-bottom: 20px;line-height: 1.6; color: #333;">
+<div style="padding: 15px; margin-bottom: 2px;line-height: 1.6; color: #333;">
     [Nội dung trả lời ở đây với các thẻ HTML phù hợp như <p>, <strong>, <em>]
 </div>
 
-<h4 style="color: #2c5aa0; margin-bottom: 10px; font-size: 16px;">Nguồn tham khảo:</h4>
+<h4 style="color: #2c5aa0; margin-bottom: 2px; font-size: 16px;">Nguồn tham khảo:</h4>
 <ul style="list-style-type: none; padding: 0;">
     [Danh sách nguồn nếu cần trích dẫn với <li> có style]
 </ul>
