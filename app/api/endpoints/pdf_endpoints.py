@@ -536,7 +536,7 @@ async def health_check():
         return {"status": "unhealthy", "error": str(e)}
 
 
-@router.post("/rag-query", response_model=Dict[str, Any])
+@router.get("/rag-query", response_model=Dict[str, Any])
 async def rag_query(
     query: str = Query(..., description="Câu hỏi của người dùng"),
     book_id: Optional[str] = Query(None, description="ID sách cụ thể (tùy chọn)"),
