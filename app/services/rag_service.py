@@ -74,10 +74,12 @@ class RAGService:
             search_results = search_result.get("results", [])
             
             if not search_results:
+                # Trả về HTML format cho trường hợp không tìm thấy (clean format)
+                no_result_html = '<div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 8px; color: #856404; font-family: Arial, sans-serif; line-height: 1.6;"><h3 style="color: #856404; margin-bottom: 10px; font-size: 16px; margin-top: 0;">Không tìm thấy thông tin</h3><p style="margin: 0;">Xin lỗi, tôi không tìm thấy thông tin liên quan đến câu hỏi của bạn trong tài liệu.</p></div>'
                 return {
                     "success": True,
                     "query": query,
-                    "answer": "Xin lỗi, tôi không tìm thấy thông tin liên quan đến câu hỏi của bạn trong tài liệu.",
+                    "answer": no_result_html,
                     "sources": [],
                     "search_results_count": 0,
                     "filters_applied": self._build_filters_info(semantic_tags, lesson_id, book_id)
@@ -102,15 +104,26 @@ class RAGService:
                     "error": f"LLM generation failed: {llm_result.get('error')}"
                 }
             
-            # Step 5: Làm sạch answer text và format HTML
-            raw_answer = llm_result.get("text", "")
-            clean_answer = self.textbook_service.clean_text_content(raw_answer)
-            html_answer = self._format_answer_to_html(clean_answer, sources)
+            # Step 5: Lấy HTML response từ LLM và làm sạch
+            html_answer = llm_result.get("text", "")
+
+            # Làm sạch HTML hoàn toàn: xóa tất cả escape characters và ký tự đặc biệt
+            html_answer = (html_answer
+                          .replace('\\n', '')   # Xóa escaped newlines trước
+                          .replace('\\r', '')   # Xóa escaped carriage returns trước
+                          .replace('\\t', '')   # Xóa escaped tabs trước
+                          .replace('\\"', '"')  # Xóa escaped quotes thành quotes bình thường
+                          .replace('\\', '')    # Xóa tất cả backslashes còn lại
+                          .replace('\n', '')    # Xóa newlines thật
+                          .replace('\r', '')    # Xóa carriage returns thật
+                          .replace('\t', '')    # Xóa tabs thật
+                          .replace('  ', ' ')   # Xóa spaces thừa
+                          .strip())             # Xóa spaces đầu cuối
 
             return {
                 "success": True,
                 "query": query,
-                "answer": html_answer,  # Chỉ trả về HTML
+                "answer": html_answer,  # HTML với style inline từ LLM
                 "sources": sources,
                 "search_results_count": len(search_results),
                 "filters_applied": self._build_filters_info(semantic_tags, lesson_id, book_id)
@@ -181,14 +194,27 @@ class RAGService:
         return context, sources
     
     def _build_rag_prompt(self, context: str, query: str) -> str:
-        """Tạo prompt cho LLM"""
+        """Tạo prompt cho LLM để trả về nội dung HTML thuần túy"""
         return f"""Bạn là một trợ lý AI chuyên về giáo dục. Hãy trả lời câu hỏi dựa trên thông tin được cung cấp.
 
 NGUYÊN TẮC:
 - Chỉ sử dụng thông tin từ các nguồn được cung cấp
 - Trả lời bằng tiếng Việt, rõ ràng và dễ hiểu
+- Trả về nội dung HTML với style inline, KHÔNG cần thẻ div bao bọc bên ngoài
+- Sử dụng các thẻ HTML phù hợp: <h3>, <p>, <ul>, <li>, <strong>, <em>
+- Không sử dụng ký tự đặc biệt, chỉ HTML thuần
+- Chỉ hiện thị trên cùng 1 dòng và không có bất kì khoảng cách nào
 - Nếu thông tin không đủ để trả lời, hãy nói rõ
-- Trích dẫn nguồn khi cần thiết (ví dụ: "Theo nguồn 1...")
+
+FORMAT TRẢ LỜI (chỉ nội dung HTML thuần):
+<div style="padding: 15px; margin-bottom: 20px;line-height: 1.6; color: #333;">
+    [Nội dung trả lời ở đây với các thẻ HTML phù hợp như <p>, <strong>, <em>]
+</div>
+
+<h4 style="color: #2c5aa0; margin-bottom: 10px; font-size: 16px;">Nguồn tham khảo:</h4>
+<ul style="list-style-type: none; padding: 0;">
+    [Danh sách nguồn nếu cần trích dẫn với <li> có style]
+</ul>
 
 THÔNG TIN TỪ TÀI LIỆU:
 {context}
@@ -343,70 +369,7 @@ TRẢ LỜI:"""
             "collections_searched": len(textbook_collections)
         }
 
-    def _format_answer_to_html(self, answer: str, sources: List[Dict]) -> str:
-        """
-        Format câu trả lời thành HTML có cấu trúc rõ ràng cho FE
 
-        Args:
-            answer: Câu trả lời text thuần đã được clean
-            sources: Danh sách nguồn tham khảo
-
-        Returns:
-            HTML formatted string
-        """
-        try:
-            # Format đoạn văn với line breaks
-            formatted_answer = answer.replace('\n', '<br>')
-
-            # Tạo HTML structure đơn giản
-            html_content = f"""<div class="rag-response">
-    <div class="answer-content">
-        <h3 class="answer-title">Câu trả lời:</h3>
-        <div class="answer-text">
-            {formatted_answer}
-        </div>
-    </div>
-
-    <div class="sources-section">
-        <h4 class="sources-title">Nguồn tham khảo:</h4>
-        <div class="sources-list">"""
-
-            # Thêm sources với text đã clean
-            for source in sources:
-                source_text = self.textbook_service.clean_text_content(source.get('text', ''))
-                score = source.get('score', 0)
-                lesson_title = self.textbook_service.clean_text_content(source.get('lesson_title', ''))
-                book_id = source.get('book_id', '')
-
-                html_content += f"""
-            <div class="source-item">
-                <div class="source-header">
-                    <span class="source-id">Nguồn {source.get('source_id', '')}</span>
-                    <span class="source-score">Độ liên quan: {score:.2f}</span>
-                </div>
-                <div class="source-meta">
-                    <span class="lesson-title">{lesson_title}</span>
-                    <span class="book-id">({book_id})</span>
-                </div>
-                <div class="source-text">{source_text}</div>
-            </div>"""
-
-            html_content += """
-        </div>
-    </div>
-</div>"""
-
-            return html_content
-
-        except Exception as e:
-            logger.error(f"Error formatting HTML: {e}")
-            # Fallback to simple format
-            return f"""<div class="rag-response">
-    <div class="answer-content">
-        <h3>Câu trả lời:</h3>
-        <p>{answer}</p>
-    </div>
-</div>"""
 
 # Singleton instance
 rag_service = RAGService()
