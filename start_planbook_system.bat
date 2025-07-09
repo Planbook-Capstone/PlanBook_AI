@@ -51,7 +51,7 @@ echo.
 
 REM Start Celery Worker
 echo ⚡ Starting Celery Worker...
-start "PlanBook AI - Celery Worker" cmd /k "title PlanBook AI - Celery Worker && python -m celery -A app.core.celery_app worker --loglevel=info --pool=solo --concurrency=1 --include=app.tasks.pdf_tasks --queues=pdf_queue,default --hostname=planbook_worker@%%h"
+start "PlanBook AI - Celery Worker" cmd /k "title PlanBook AI - Celery Worker && python -m celery -A app.core.celery_app worker --loglevel=info --pool=threads --concurrency=4 --include=app.tasks.pdf_tasks --queues=pdf_queue,default --hostname=planbook_worker@%%h"
 
 REM Wait for worker to start
 timeout /t 3 /nobreak >nul
