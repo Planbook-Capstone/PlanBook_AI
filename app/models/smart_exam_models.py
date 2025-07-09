@@ -32,9 +32,8 @@ class PartModel(BaseModel):
 
     @validator('objectives')
     def validate_objectives_not_empty(cls, v):
-        total = v.Biết + v.Hiểu + v.Vận_dụng
-        if total == 0:
-            raise ValueError("Mỗi phần phải có ít nhất 1 câu hỏi")
+        # Cho phép phần có 0 câu hỏi (user có thể chỉ muốn tạo một số phần)
+        # Validation tổng thể sẽ được kiểm tra ở LessonMatrixModel
         return v
 
 
@@ -48,12 +47,21 @@ class LessonMatrixModel(BaseModel):
     def validate_parts(cls, v):
         if not v:
             raise ValueError("Phải có ít nhất một phần")
-        
-        # Kiểm tra có đủ 3 phần
+
+        # Kiểm tra không có phần trùng lặp
         part_numbers = [part.part for part in v]
         if len(set(part_numbers)) != len(part_numbers):
             raise ValueError("Không được có phần trùng lặp")
-        
+
+        # Kiểm tra ít nhất một phần phải có câu hỏi
+        total_questions = 0
+        for part in v:
+            part_total = part.objectives.Biết + part.objectives.Hiểu + part.objectives.Vận_dụng
+            total_questions += part_total
+
+        if total_questions == 0:
+            raise ValueError("Mỗi bài học phải có tối thiểu 1 câu hỏi")
+
         return v
 
     @validator('totalQuestions')
