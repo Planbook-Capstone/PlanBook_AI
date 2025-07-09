@@ -84,6 +84,9 @@ class ExamImportResponse(BaseModel):
     data: Optional[ImportedExamData] = None
     error: Optional[str] = None
     processing_time: Optional[float] = None
+    warnings: Optional[List[str]] = Field(default_factory=list, description="Cảnh báo về các phần thiếu")
+    missing_parts: Optional[List[str]] = Field(default_factory=list, description="Danh sách các phần thiếu")
+    statistics: Optional[Dict[str, Any]] = Field(None, description="Thống kê về đề thi")
     imported_at: str = Field(default_factory=lambda: datetime.now().isoformat())
 
 
