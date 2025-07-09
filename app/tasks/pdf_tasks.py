@@ -36,8 +36,9 @@ def run_async_task(coro):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             return loop.run_until_complete(coro)
-        finally:
-            loop.close()
+        except Exception as retry_error:
+            logger.error(f"Retry failed: {retry_error}")
+            raise e
 
 
 @celery_app.task(name="app.tasks.pdf_tasks.health_check")
