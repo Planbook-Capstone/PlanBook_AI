@@ -631,6 +631,7 @@ async def get_task_types() -> Dict[str, Any]:
             "create_embeddings",
             "generate_lesson_plan",
             "generate_smart_exam",
+            "guide_import",
         ],
         "task_statuses": ["pending", "processing", "completed", "failed"],
         "descriptions": {
@@ -641,6 +642,7 @@ async def get_task_types() -> Dict[str, Any]:
             "create_embeddings": "Tạo embeddings cho RAG search",
             "generate_lesson_plan": "Tạo giáo án từ nội dung sách",
             "generate_smart_exam": "Tạo đề thi thông minh theo chuẩn THPT 2025",
+            "guide_import": "Import hướng dẫn từ file DOCX và tạo embeddings cho RAG search",
         },
     }
 

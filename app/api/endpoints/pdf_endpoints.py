@@ -22,28 +22,45 @@ async def quick_textbook_analysis(
     file: UploadFile = File(...),
     create_embeddings: bool = Form(True),
     lesson_id: Optional[str] = Form(None),
+    isImportGuide: bool = Form(False),
 ) -> Dict[str, Any]:
     """
-    Phân tích nhanh cấu trúc sách giáo khoa với xử lý bất đồng bộ
+    Phân tích nhanh cấu trúc sách giáo khoa hoặc import hướng dẫn với xử lý bất đồng bộ
 
-    Upload PDF và nhận task_id ngay lập tức. Hệ thống sẽ:
+    Upload PDF/DOCX và nhận task_id ngay lập tức. Hệ thống sẽ:
+
+    Với PDF (sách giáo khoa):
     1. Phân tích cấu trúc sách (chapters, lessons)
     2. Tự động trích xuất metadata
     3. Tạo embeddings và lưu vào Qdrant (nếu được yêu cầu)
     4. Trả về kết quả với định dạng giống /process-textbook
 
+    Với DOCX (hướng dẫn):
+    1. Trích xuất nội dung text từ DOCX
+    2. Tạo embeddings cho nội dung hướng dẫn
+    3. Lưu vào Qdrant collection riêng cho guides
+    4. Hỗ trợ tìm kiếm và RAG cho hướng dẫn
+
     Args:
-        file: PDF file của sách giáo khoa
+        file: PDF file của sách giáo khoa hoặc DOCX file của hướng dẫn
         create_embeddings: Có tạo embeddings cho RAG search không
         lesson_id: ID bài học tùy chọn để liên kết với lesson cụ thể
+        isImportGuide: True nếu import file DOCX làm hướng dẫn, False cho PDF sách giáo khoa
 
     Returns:
         Dict chứa task_id để theo dõi tiến độ
     """
     try:
-        # Validate file type
-        if not file.filename or not file.filename.lower().endswith(".pdf"):
-            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+        # Validate file type based on import mode
+        if isImportGuide:
+            # Validate DOCX file for guide import
+            if not file.filename or not file.filename.lower().endswith(".docx"):
+                raise HTTPException(status_code=400, detail="Guide import only supports DOCX files")
+        else:
+            # Validate PDF file for textbook import (commented out for flexibility)
+            # if not file.filename or not file.filename.lower().endswith(".pdf"):
+            #     raise HTTPException(status_code=400, detail="Textbook import only supports PDF files")
+            pass
 
         # Read file content
         file_content = await file.read()
@@ -52,31 +69,55 @@ async def quick_textbook_analysis(
             raise HTTPException(status_code=400, detail="Empty file uploaded")
 
         logger.info(
-            f"Starting quick analysis task for: {file.filename} ({len(file_content)} bytes)"
-        )  # Tạo task bất đồng bộ
-        task_id = await background_task_processor.create_quick_analysis_task(
-            pdf_content=file_content,
-            filename=file.filename,
-            create_embeddings=create_embeddings,
-            lesson_id=lesson_id,
+            f"Starting {'guide import' if isImportGuide else 'textbook analysis'} task for: {file.filename} ({len(file_content)} bytes)"
         )
 
-        return {
-            "success": True,
-            "task_id": task_id,
-            "filename": file.filename,
-            "status": "processing",
-            "message": "Quick textbook analysis task created successfully. Use /api/v1/tasks/{task_id}/status to check progress.",
-            "endpoints": {
-                "check_status": f"/api/v1/tasks/{task_id}/status",
-                "get_result": f"/api/v1/tasks/{task_id}/result",
-            },
-        }
+        if isImportGuide:
+            # Create guide import task
+            task_id = await background_task_processor.create_guide_import_task(
+                docx_content=file_content,
+                filename=file.filename,
+                create_embeddings=create_embeddings,
+            )
+
+            return {
+                "success": True,
+                "task_id": task_id,
+                "filename": file.filename,
+                "status": "processing",
+                "import_type": "guide",
+                "message": "Guide import task created successfully. Use /api/v1/tasks/{task_id}/status to check progress.",
+                "endpoints": {
+                    "check_status": f"/api/v1/tasks/{task_id}/status",
+                    "get_result": f"/api/v1/tasks/{task_id}/result",
+                },
+            }
+        else:
+            # Create textbook analysis task
+            task_id = await background_task_processor.create_quick_analysis_task(
+                pdf_content=file_content,
+                filename=file.filename,
+                create_embeddings=create_embeddings,
+                lesson_id=lesson_id,
+            )
+
+            return {
+                "success": True,
+                "task_id": task_id,
+                "filename": file.filename,
+                "status": "processing",
+                "import_type": "textbook",
+                "message": "Quick textbook analysis task created successfully. Use /api/v1/tasks/{task_id}/status to check progress.",
+                "endpoints": {
+                    "check_status": f"/api/v1/tasks/{task_id}/status",
+                    "get_result": f"/api/v1/tasks/{task_id}/result",
+                },
+            }
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error creating quick analysis task: {e}")
+        logger.error(f"Error creating {'guide import' if isImportGuide else 'textbook analysis'} task: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
@@ -511,7 +552,7 @@ async def health_check():
             "vector_dimension": vector_dimension,
             "qdrant_status": "connected" if qdrant_available else "disconnected",
             "available_endpoints": [
-                "/import",  # Quick textbook analysis
+                "/import",  # Quick textbook analysis & Guide import
                 "/textbooks",  # Get all textbooks
                 "/textbook/{lesson_id}",  # Get textbook by lesson ID
                 "/search",  # Global content search
@@ -522,7 +563,8 @@ async def health_check():
                 "/health",
             ],
             "usage_flow": {
-                "1": "Upload PDF: POST /import",
+                "1a": "Upload PDF (Textbook): POST /import (with isImportGuide=false)",
+                "1b": "Upload DOCX (Guide): POST /import (with isImportGuide=true)",
                 "2": "List textbooks: GET /textbooks",
                 "3": "Get textbook by lesson: GET /textbook/{lesson_id}",
                 "4": "Global search: GET /search?query=your_query",

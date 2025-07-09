@@ -37,6 +37,7 @@ celery_app.conf.update(
         "app.tasks.pdf_tasks.*": {"queue": "pdf_queue"},
         "app.tasks.embeddings_tasks.*": {"queue": "embeddings_queue"},
         "app.tasks.cv_tasks.*": {"queue": "cv_queue"},
+        "app.tasks.guide_tasks.*": {"queue": "default"},
     },
     # Định nghĩa queues
     task_queues=(
@@ -68,6 +69,7 @@ celery_app.conf.update(
         "app.tasks.cv_tasks",
         "app.tasks.lesson_plan_tasks",
         "app.tasks.smart_exam_tasks",
+        "app.tasks.guide_tasks",
     ],
 )
 

@@ -39,6 +39,7 @@ class TaskType(str, Enum):
     GENERATE_LESSON_PLAN = "generate_lesson_plan"
     LESSON_PLAN_CONTENT_GENERATION = "lesson_plan_content_generation"
     SMART_EXAM_GENERATION = "smart_exam_generation"
+    GUIDE_IMPORT = "guide_import"
 
 
 class MongoDBTaskService:
