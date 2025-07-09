@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Union
 import logging
 import os
 import re
+import uuid
 from urllib.parse import quote
 from datetime import datetime
 import asyncio
@@ -66,58 +67,33 @@ async def _create_online_document_response(
     Raises:
         HTTPException: Nếu không thể tạo online document
     """
-    # Kiểm tra Google Drive có enabled và available không
-    if not settings.ENABLE_GOOGLE_DRIVE:
-        raise HTTPException(
-            status_code=503,
-            detail="Google Drive service is disabled. Cannot create online document."
-        )
-
-    google_drive_service = get_google_drive_service()
-    if not google_drive_service.is_available():
-        raise HTTPException(
-            status_code=503,
-            detail="Google Drive service is not available. Please check configuration."
-        )
-
     try:
-        # Upload lên Google Drive
-        logger.info(f"Uploading file to Google Drive: {filename}")
-        upload_result = await google_drive_service.upload_docx_file(
-            file_path=docx_file_path,
-            filename=filename,
-            convert_to_google_docs=True  # Convert thành Google Docs để edit online
+        # Tạo download link cho file DOCX local
+        logger.info(f"Creating local download link for file: {filename}")
+
+        # Tạo unique file ID
+        file_id = str(uuid.uuid4())
+
+        # Tạo download URL
+        download_url = f"/api/v1/exam/download/{file_id}"
+
+        # Tạo links object
+        links = OnlineDocumentLinks(
+            download=f"{request.url.scheme}://{request.url.netloc}{download_url}",
+            view=f"{request.url.scheme}://{request.url.netloc}{download_url}",
+            edit=None  # Không có edit link cho file local
         )
-
-        if not upload_result.get("success"):
-            error_msg = upload_result.get('error', 'Unknown upload error')
-            logger.error(f"Failed to upload to Google Drive: {error_msg}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to upload document to Google Drive: {error_msg}"
-            )
-
-        # Xóa file local sau khi upload thành công
-        try:
-            if os.path.exists(docx_file_path):
-                os.remove(docx_file_path)
-                logger.info(f"Deleted local file after upload: {docx_file_path}")
-        except Exception as e:
-            logger.warning(f"Failed to delete local file: {e}")
-
-        # Tạo response online với link thật
-        links = OnlineDocumentLinks(**upload_result["links"])
 
         return ExamOnlineResponse(
             success=True,
-            message="Đề thi đã được tạo và upload lên Google Drive thành công",
-            file_id=upload_result["file_id"],
-            filename=upload_result["filename"],
-            mime_type=upload_result["mime_type"],
+            message="Đề thi đã được tạo thành công",
+            file_id=file_id,
+            filename=filename,
+            mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             links=links,
-            primary_link=links.edit or links.view or "",
+            primary_link=links.download,
             created_at=datetime.now().isoformat(),
-            storage_provider="Google Drive",
+            storage_provider="Local Storage",
             exam_id=str(exam_result.get("exam_id", "unknown")),
             lesson_id=request.cau_hinh_de[0].lesson_id if request.cau_hinh_de else "unknown",
             mon_hoc=request.mon_hoc,
@@ -125,19 +101,16 @@ async def _create_online_document_response(
             total_questions=len(exam_result.get("questions", [])),
             search_quality=search_quality,
             additional_info={
-                "web_view_link": upload_result.get("web_view_link"),
-                "web_content_link": upload_result.get("web_content_link")
+                "local_file_path": docx_file_path,
+                "file_size": os.path.getsize(docx_file_path) if os.path.exists(docx_file_path) else 0
             }
         ).model_dump()
 
-    except HTTPException:
-        # Re-raise HTTP exceptions
-        raise
     except Exception as e:
-        logger.error(f"Unexpected error uploading to Google Drive: {e}")
+        logger.error(f"Unexpected error creating document response: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Internal error while creating online document: {str(e)}"
+            detail=f"Internal error while creating document: {str(e)}"
         )
 
 
