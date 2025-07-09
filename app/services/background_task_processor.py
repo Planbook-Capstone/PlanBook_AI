@@ -382,6 +382,29 @@ class BackgroundTaskProcessor:
 
         return task_id
 
+    async def create_guide_import_task(
+        self,
+        docx_content: bytes,
+        filename: str,
+        create_embeddings: bool = True,
+    ) -> str:
+        """Tạo task import hướng dẫn từ file DOCX - sử dụng Celery"""
+
+        task_data = {
+            "file_content": docx_content,
+            "filename": filename,
+            "create_embeddings": create_embeddings,
+        }
+
+        # Sử dụng Celery thay vì asyncio.create_task
+        from app.services.celery_task_service import celery_task_service
+
+        task_id = await celery_task_service.create_and_dispatch_task(
+            task_type="guide_import", task_data=task_data
+        )
+
+        return task_id
+
     async def create_lesson_plan_content_task(
         self,
         lesson_plan_json: Dict[str, Any],
@@ -563,6 +586,90 @@ class BackgroundTaskProcessor:
 
         except Exception as e:
             logger.error(f"Error processing auto PDF task {task_id}: {e}")
+            await self.mark_task_failed(task_id, str(e))
+
+    async def process_guide_import_task(self, task_id: str):
+        """Xử lý task import hướng dẫn từ file DOCX"""
+        task = await self.task_service.get_task_status(task_id)
+        if not task:
+            logger.error(f"Task {task_id} not found")
+            return
+
+        try:
+            await self.mark_task_processing(task_id)
+
+            # Lấy dữ liệu task
+            file_content = task["data"]["file_content"]
+            filename = task["data"]["filename"]
+            create_embeddings = task["data"].get("create_embeddings", True)
+
+            await self.update_task_progress(task_id, 10, "Starting DOCX guide import...")
+
+            # Import services
+            from app.services.exam_import_service import exam_import_service
+            from app.services.qdrant_service import qdrant_service
+
+            # Bước 1: Trích xuất text từ DOCX
+            await self.update_task_progress(task_id, 20, "Extracting text from DOCX...")
+
+            extracted_text = exam_import_service._extract_text_from_docx_bytes(file_content)
+
+            if not extracted_text or len(extracted_text.strip()) < 50:
+                raise Exception("Không thể trích xuất nội dung từ file DOCX hoặc nội dung quá ngắn")
+
+            await self.update_task_progress(task_id, 40, "Text extraction completed")
+
+            # Bước 2: Tạo guide ID và metadata
+            import uuid
+            guide_id = f"guide_{uuid.uuid4().hex[:8]}"
+
+            # Bước 3: Tạo embeddings nếu được yêu cầu
+            embeddings_result = None
+            if create_embeddings:
+                await self.update_task_progress(task_id, 60, "Creating embeddings for guide content...")
+
+                # Sử dụng process_textbook với text_content cho guide
+                embeddings_result = await qdrant_service.process_textbook(
+                    book_id=guide_id,
+                    text_content=extracted_text,
+                    lesson_id=f"guide_{filename}",
+                    book_title=f"Guide: {filename}"
+                )
+
+                if embeddings_result.get("success"):
+                    await self.update_task_progress(
+                        task_id, 80, "Embeddings created successfully"
+                    )
+                else:
+                    logger.warning(
+                        f"Embeddings creation failed: {embeddings_result.get('error')}"
+                    )
+
+            # Tạo kết quả cuối cùng
+            result = {
+                "success": True,
+                "guide_id": guide_id,
+                "filename": filename,
+                "content_length": len(extracted_text),
+                "content_preview": extracted_text[:500] + "..." if len(extracted_text) > 500 else extracted_text,
+                "processing_info": {
+                    "file_type": "docx",
+                    "processing_method": "guide_import",
+                    "text_extraction": True,
+                },
+                "embeddings_created": embeddings_result.get("success", False) if embeddings_result else False,
+                "embeddings_info": {
+                    "collection_name": embeddings_result.get("collection_name") if embeddings_result else None,
+                    "vector_count": embeddings_result.get("total_chunks", 0) if embeddings_result else 0,
+                    "vector_dimension": embeddings_result.get("vector_dimension") if embeddings_result else None,
+                },
+                "message": "Guide imported successfully and ready for RAG search"
+            }
+
+            await self.mark_task_completed(task_id, result)
+
+        except Exception as e:
+            logger.error(f"Error processing guide import task {task_id}: {e}")
             await self.mark_task_failed(task_id, str(e))
 
     async def get_task_with_polling(
