@@ -75,7 +75,11 @@ class ExamImportService:
                     }
                 ).model_dump()
 
-            logger.info("Exam format validation passed")
+            # Lưu thông tin warnings để trả về sau
+            format_warnings = format_validation.get("warnings", [])
+            missing_parts = format_validation.get("details", {}).get("missing_parts", [])
+
+            logger.info(f"Exam format validation passed with warnings: {format_warnings}")
 
             # 3. Gửi cho LLM để phân tích và chuyển đổi
             logger.info("Sending content to LLM for analysis...")
@@ -99,18 +103,49 @@ class ExamImportService:
                     details={"filename": filename}
                 ).model_dump()
 
+            # 4. Validate và clean dữ liệu từ LLM
+            logger.info("Validating and cleaning LLM data...")
+            validation_result = self._validate_and_clean_exam_data(exam_data)
+
+            if not validation_result["is_valid"]:
+                return ExamImportError(
+                    message="Invalid exam data from LLM",
+                    error=f"Dữ liệu từ LLM không hợp lệ: {validation_result['error']}",
+                    error_code="INVALID_LLM_DATA",
+                    details={
+                        "filename": filename,
+                        "validation_details": validation_result["details"]
+                    }
+                ).model_dump()
+
+            # Sử dụng dữ liệu đã được clean
+            exam_data = validation_result["cleaned_data"]
+
             # 4. Validate và tạo response
             processing_time = time.time() - start_time
-            
+
             # Tính toán statistics
             statistics = self._calculate_import_statistics(exam_data)
-            
-            return ExamImportResponse(
+
+            # Tạo message với thông tin về các phần thiếu
+            success_message = "Đề thi đã được import thành công"
+            if format_warnings:
+                success_message += f" (Lưu ý: {'; '.join(format_warnings)})"
+
+            # Tạo response với thông tin bổ sung
+            response_data = ExamImportResponse(
                 success=True,
-                message="Đề thi đã được import thành công",
+                message=success_message,
                 data=ImportedExamData(**exam_data),
                 processing_time=processing_time
             ).model_dump()
+
+            # Thêm thông tin về warnings và missing parts
+            response_data["warnings"] = format_warnings
+            response_data["missing_parts"] = missing_parts
+            response_data["statistics"] = statistics.model_dump()
+
+            return response_data
 
         except Exception as e:
             logger.error(f"Error importing exam from DOCX: {e}")
@@ -171,7 +206,7 @@ class ExamImportService:
 
     def _validate_exam_format(self, exam_text: str) -> Dict[str, Any]:
         """
-        Validate format đề thi cơ bản - chỉ kiểm tra cấu trúc 3 phần và đáp án
+        Validate format đề thi cơ bản - kiểm tra có ít nhất 1 phần và đáp án
 
         Args:
             exam_text: Nội dung đề thi đã extract
@@ -186,31 +221,40 @@ class ExamImportService:
             validation_result = {
                 "is_valid": True,
                 "error": "",
-                "details": {}
+                "details": {},
+                "warnings": []
             }
 
-            # 1. Kiểm tra cấu trúc 3 phần
-            required_parts = ["PHẦN I", "PHẦN II", "PHẦN III"]
+            # 1. Kiểm tra cấu trúc các phần
+            all_parts = ["PHẦN I", "PHẦN II", "PHẦN III"]
+            found_parts = []
             missing_parts = []
 
-            for part in required_parts:
-                if part not in normalized_text:
+            for part in all_parts:
+                if part in normalized_text:
+                    found_parts.append(part)
+                else:
                     missing_parts.append(part)
 
-            if missing_parts:
+            # Chỉ yêu cầu có ít nhất 1 phần
+            if not found_parts:
                 validation_result["is_valid"] = False
-                validation_result["error"] = f"Thiếu cấu trúc phần: {', '.join(missing_parts)}"
+                validation_result["error"] = "Không tìm thấy cấu trúc phần nào (PHẦN I, II, III)"
                 validation_result["details"]["missing_parts"] = missing_parts
                 return validation_result
 
-            # 2. Kiểm tra phần đáp án
-            if "ĐÁP ÁN" not in normalized_text:
-                validation_result["is_valid"] = False
-                validation_result["error"] = "Thiếu phần đáp án"
-                validation_result["details"]["missing_answer_section"] = True
-                return validation_result
+            # Ghi nhận các phần thiếu như warning
+            if missing_parts:
+                validation_result["warnings"].append(f"Thiếu các phần: {', '.join(missing_parts)}")
+                validation_result["details"]["missing_parts"] = missing_parts
+                validation_result["details"]["found_parts"] = found_parts
 
-            logger.info("Exam format validation passed successfully")
+            # 2. Kiểm tra phần đáp án (không bắt buộc)
+            if "ĐÁP ÁN" not in normalized_text:
+                validation_result["warnings"].append("Không tìm thấy phần đáp án")
+                validation_result["details"]["missing_answer_section"] = True
+
+            logger.info(f"Exam format validation passed - Found parts: {found_parts}, Missing: {missing_parts}")
             return validation_result
 
         except Exception as e:
@@ -218,7 +262,8 @@ class ExamImportService:
             return {
                 "is_valid": False,
                 "error": f"Lỗi trong quá trình validate format: {str(e)}",
-                "details": {"exception": str(e)}
+                "details": {"exception": str(e)},
+                "warnings": []
             }
 
     async def _analyze_exam_with_llm(self, exam_text: str, filename: str) -> Dict[str, Any]:
@@ -296,12 +341,13 @@ NỘI DUNG ĐỀ THI:
 YÊU CẦU:
 1. Phân tích và trích xuất thông tin đề thi thành JSON với cấu trúc chính xác như mẫu
 2. Xác định môn học, lớp, thời gian làm bài, tên trường
-3. Phân chia câu hỏi thành 3 phần:
-   - Phần I: Trắc nghiệm nhiều phương án lựa chọn (A, B, C, D)
-   - Phần II: Trắc nghiệm đúng/sai (a, b, c, d với true/false)
-   - Phần III: Trắc nghiệm trả lời ngắn (chỉ số)
-4. Trích xuất đáp án chính xác từ phần đáp án
-5. Nếu là môn Hóa học, trích xuất bảng nguyên tử khối
+3. Phân chia câu hỏi theo các phần có sẵn trong đề thi:
+   - Phần I: Trắc nghiệm nhiều phương án lựa chọn (A, B, C, D) - nếu có
+   - Phần II: Trắc nghiệm đúng/sai (a, b, c, d với true/false) - nếu có
+   - Phần III: Trắc nghiệm trả lời ngắn (chỉ số) - nếu có
+4. Chỉ xử lý các phần thực sự có trong đề thi, bỏ qua phần không có
+5. Trích xuất đáp án chính xác từ phần đáp án (nếu có)
+6. Nếu là môn Hóa học, trích xuất bảng nguyên tử khối (nếu có)
 
 ĐỊNH DẠNG JSON MONG MUỐN:
 {{
@@ -319,14 +365,14 @@ YÊU CẦU:
       "questions": [
         {{
           "id": 1,
-          "question": "Nội dung câu hỏi...",
+          "question": "Nguyên tử carbon có bao nhiêu electron?",
           "options": {{
-            "A": "Đáp án A",
-            "B": "Đáp án B", 
-            "C": "Đáp án C",
-            "D": "Đáp án D"
+            "A": "4",
+            "B": "6",
+            "C": "8",
+            "D": "12"
           }},
-          "answer": "C"
+          "answer": "B"
         }}
       ]
     }},
@@ -337,22 +383,22 @@ YÊU CẦU:
       "questions": [
         {{
           "id": 1,
-          "question": "Nội dung câu hỏi...",
+          "question": "Cho các phát biểu về nguyên tử carbon:",
           "statements": {{
             "a": {{
-              "text": "Phát biểu a",
+              "text": "Nguyên tử carbon có 6 proton",
               "answer": true
             }},
             "b": {{
-              "text": "Phát biểu b", 
+              "text": "Nguyên tử carbon có 8 neutron",
               "answer": false
             }},
             "c": {{
-              "text": "Phát biểu c",
+              "text": "Nguyên tử carbon có 6 electron",
               "answer": true
             }},
             "d": {{
-              "text": "Phát biểu d",
+              "text": "Nguyên tử carbon có khối lượng 14u",
               "answer": false
             }}
           }}
@@ -366,20 +412,52 @@ YÊU CẦU:
       "questions": [
         {{
           "id": 1,
-          "question": "Nội dung câu hỏi...",
-          "answer": "1"
+          "question": "Số electron trong nguyên tử carbon là bao nhiêu?",
+          "answer": "6"
         }}
       ]
     }}
   ]
 }}
 
-LưU Ý QUAN TRỌNG:
+LưU Ý QUAN TRỌNG VỀ CẤU TRÚC:
 - Chỉ trả về JSON hợp lệ, không thêm text giải thích
 - Đảm bảo tất cả câu hỏi và đáp án được trích xuất chính xác
-- Với câu đúng/sai, xác định chính xác true/false cho từng phát biểu
-- Với câu trả lời ngắn, chỉ lấy số, tối đa 4 ký tự
-- Nếu không tìm thấy thông tin nào, sử dụng giá trị mặc định hợp lý
+- QUAN TRỌNG: Mỗi loại câu hỏi có cấu trúc khác nhau:
+
+  * PHẦN I (Trắc nghiệm nhiều lựa chọn): PHẢI có "options" và "answer"
+    {{
+      "id": 1,
+      "question": "Câu hỏi cụ thể...",
+      "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
+      "answer": "A"
+    }}
+
+  * PHẦN II (Đúng/sai): PHẢI có "statements", KHÔNG có "answer" field
+    {{
+      "id": 1,
+      "question": "Câu hỏi cụ thể...",
+      "statements": {{
+        "a": {{"text": "...", "answer": true}},
+        "b": {{"text": "...", "answer": false}},
+        "c": {{"text": "...", "answer": true}},
+        "d": {{"text": "...", "answer": false}}
+      }}
+    }}
+
+  * PHẦN III (Trả lời ngắn): PHẢI có "answer" string, KHÔNG có "options" hay "statements"
+    {{
+      "id": 1,
+      "question": "Câu hỏi cụ thể...",
+      "answer": "6"
+    }}
+
+- QUAN TRỌNG: Chỉ tạo parts cho những phần có NỘI DUNG CÂU HỎI thực tế trong đề thi
+- Nếu phần đáp án có nhưng không có nội dung câu hỏi, KHÔNG tạo part cho phần đó
+- Mảng "parts" có thể chứa 1, 2 hoặc 3 phần tùy theo nội dung đề thi thực tế
+- Không tạo ra câu hỏi giả cho các phần không có nội dung
+- Đảm bảo field "question" luôn là string không rỗng, không được null
+- Ví dụ: Nếu đề thi chỉ có "PHẦN I" với nội dung câu hỏi, chỉ tạo 1 part cho Phần I, bỏ qua Phần II và III dù có trong đáp án
 
 Hãy phân tích và trả về JSON:
 """
@@ -448,7 +526,7 @@ Hãy phân tích và trả về JSON:
 
     def _validate_exam_json_structure(self, json_data: Dict[str, Any]) -> bool:
         """
-        Validate cấu trúc JSON của đề thi
+        Validate cấu trúc JSON của đề thi - linh hoạt với parts
 
         Args:
             json_data: JSON data cần validate
@@ -458,41 +536,318 @@ Hãy phân tích và trả về JSON:
         """
         try:
             required_fields = ["subject", "grade", "duration_minutes", "school", "parts"]
-            
+
             # Kiểm tra các field bắt buộc
             for field in required_fields:
                 if field not in json_data:
                     logger.error(f"Missing required field: {field}")
                     return False
-            
-            # Kiểm tra parts
+
+            # Kiểm tra parts - cho phép empty list
             parts = json_data.get("parts", [])
-            if not isinstance(parts, list) or len(parts) == 0:
-                logger.error("Parts must be a non-empty list")
+            if not isinstance(parts, list):
+                logger.error("Parts must be a list")
                 return False
-            
-            # Kiểm tra cấu trúc của từng part
-            for part in parts:
+
+            # Nếu có parts, kiểm tra cấu trúc của từng part
+            for i, part in enumerate(parts):
                 if not isinstance(part, dict):
+                    logger.error(f"Part {i} must be a dictionary")
                     return False
-                
+
                 part_required = ["part", "title", "description", "questions"]
                 for field in part_required:
                     if field not in part:
-                        logger.error(f"Missing required field in part: {field}")
+                        logger.error(f"Missing required field '{field}' in part {i}")
                         return False
-                
-                # Kiểm tra questions
+
+                # Kiểm tra questions - cho phép empty list
                 questions = part.get("questions", [])
                 if not isinstance(questions, list):
+                    logger.error(f"Questions in part {i} must be a list")
                     return False
-            
-            logger.info("JSON structure validation passed")
+
+            logger.info(f"JSON structure validation passed - {len(parts)} parts found")
             return True
 
         except Exception as e:
             logger.error(f"Error validating JSON structure: {e}")
             return False
+
+    def _validate_and_clean_exam_data(self, exam_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Validate và clean dữ liệu đề thi từ LLM
+
+        Args:
+            exam_data: Dữ liệu thô từ LLM
+
+        Returns:
+            Dict chứa kết quả validation và dữ liệu đã clean
+        """
+        try:
+            logger.info("Starting exam data validation and cleaning...")
+
+            result = {
+                "is_valid": True,
+                "error": "",
+                "details": {},
+                "cleaned_data": {}
+            }
+
+            # 1. Validate basic fields
+            required_fields = ["subject", "grade", "duration_minutes", "school", "parts"]
+            for field in required_fields:
+                if field not in exam_data:
+                    result["is_valid"] = False
+                    result["error"] = f"Missing required field: {field}"
+                    return result
+
+            # 2. Clean basic data
+            cleaned_data = {
+                "subject": str(exam_data.get("subject", "")).strip(),
+                "grade": int(exam_data.get("grade", 12)),
+                "duration_minutes": int(exam_data.get("duration_minutes", 90)),
+                "school": str(exam_data.get("school", "")).strip(),
+                "exam_code": str(exam_data.get("exam_code", "")).strip() if exam_data.get("exam_code") else None,
+                "atomic_masses": str(exam_data.get("atomic_masses", "")).strip() if exam_data.get("atomic_masses") else None,
+                "parts": []
+            }
+
+            # 3. Validate và clean parts
+            parts = exam_data.get("parts", [])
+            if not isinstance(parts, list):
+                result["is_valid"] = False
+                result["error"] = "Parts must be a list"
+                return result
+
+            cleaned_parts = []
+            skipped_parts = []
+
+            for i, part in enumerate(parts):
+                cleaned_part = self._clean_exam_part(part, i)
+                if cleaned_part["is_valid"]:
+                    cleaned_parts.append(cleaned_part["data"])
+                else:
+                    # Log warning và skip part này thay vì fail toàn bộ
+                    part_name = part.get("part", f"Part {i}")
+                    logger.warning(f"Skipping invalid part '{part_name}': {cleaned_part['error']}")
+                    skipped_parts.append({
+                        "part_name": part_name,
+                        "error": cleaned_part["error"]
+                    })
+
+            # Chỉ fail nếu không có part nào hợp lệ
+            if not cleaned_parts:
+                result["is_valid"] = False
+                result["error"] = "No valid parts found in exam data"
+                result["details"]["skipped_parts"] = skipped_parts
+                return result
+
+            cleaned_data["parts"] = cleaned_parts
+            result["cleaned_data"] = cleaned_data
+
+            # Thêm thông tin về parts bị skip
+            if skipped_parts:
+                result["details"]["skipped_parts"] = skipped_parts
+                logger.info(f"Exam data validation completed - {len(cleaned_parts)} valid parts, {len(skipped_parts)} skipped parts")
+            else:
+                logger.info(f"Exam data validation completed - {len(cleaned_parts)} parts validated")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error in exam data validation: {e}")
+            return {
+                "is_valid": False,
+                "error": f"Validation error: {str(e)}",
+                "details": {"exception": str(e)},
+                "cleaned_data": {}
+            }
+
+    def _clean_exam_part(self, part_data: Dict[str, Any], part_index: int) -> Dict[str, Any]:
+        """
+        Clean và validate một phần của đề thi
+
+        Args:
+            part_data: Dữ liệu phần thô từ LLM
+            part_index: Index của phần
+
+        Returns:
+            Dict chứa kết quả validation và dữ liệu đã clean
+        """
+        try:
+            result = {
+                "is_valid": True,
+                "error": "",
+                "data": {}
+            }
+
+            # Validate basic part fields
+            required_part_fields = ["part", "title", "description", "questions"]
+            for field in required_part_fields:
+                if field not in part_data:
+                    result["is_valid"] = False
+                    result["error"] = f"Missing field '{field}' in part"
+                    return result
+
+            # Clean part basic data
+            cleaned_part = {
+                "part": str(part_data.get("part", "")).strip(),
+                "title": str(part_data.get("title", "")).strip(),
+                "description": str(part_data.get("description", "")).strip(),
+                "questions": []
+            }
+
+            # Validate và clean questions
+            questions = part_data.get("questions", [])
+            if not isinstance(questions, list):
+                result["is_valid"] = False
+                result["error"] = "Questions must be a list"
+                return result
+
+            cleaned_questions = []
+            invalid_questions = []
+
+            for j, question in enumerate(questions):
+                cleaned_question = self._clean_question(question, cleaned_part["part"], j)
+                if cleaned_question["is_valid"]:
+                    cleaned_questions.append(cleaned_question["data"])
+                else:
+                    # Log invalid question nhưng không fail toàn bộ part
+                    logger.warning(f"Skipping invalid question {j} in {cleaned_part['part']}: {cleaned_question['error']}")
+                    invalid_questions.append({
+                        "question_index": j,
+                        "error": cleaned_question["error"]
+                    })
+
+            # Nếu không có câu hỏi hợp lệ nào, fail part này
+            if not cleaned_questions:
+                result["is_valid"] = False
+                result["error"] = f"No valid questions found in part. Invalid questions: {len(invalid_questions)}"
+                return result
+
+            cleaned_part["questions"] = cleaned_questions
+            result["data"] = cleaned_part
+
+            return result
+
+        except Exception as e:
+            return {
+                "is_valid": False,
+                "error": f"Error cleaning part: {str(e)}",
+                "data": {}
+            }
+
+    def _clean_question(self, question_data: Dict[str, Any], part_name: str, question_index: int) -> Dict[str, Any]:
+        """
+        Clean và validate một câu hỏi theo loại phần
+
+        Args:
+            question_data: Dữ liệu câu hỏi thô từ LLM
+            part_name: Tên phần (để xác định loại câu hỏi)
+            question_index: Index của câu hỏi
+
+        Returns:
+            Dict chứa kết quả validation và dữ liệu đã clean
+        """
+        try:
+            result = {
+                "is_valid": True,
+                "error": "",
+                "data": {}
+            }
+
+            # Validate basic question fields
+            if "id" not in question_data or "question" not in question_data:
+                result["is_valid"] = False
+                result["error"] = "Missing 'id' or 'question' field"
+                return result
+
+            # Clean basic question data
+            question_text = question_data.get("question")
+            if not question_text or question_text is None or str(question_text).strip() == "":
+                result["is_valid"] = False
+                result["error"] = f"Question text cannot be null or empty. Got: {question_text}"
+                return result
+
+            cleaned_question = {
+                "id": int(question_data.get("id", question_index + 1)),
+                "question": str(question_text).strip()
+            }
+
+            # Clean theo loại phần
+            if "Phần I" in part_name or "PHẦN I" in part_name:
+                # MultipleChoiceQuestion
+                if "options" not in question_data or "answer" not in question_data:
+                    result["is_valid"] = False
+                    result["error"] = "MultipleChoice question missing 'options' or 'answer'"
+                    return result
+
+                options = question_data.get("options", {})
+                if not isinstance(options, dict) or not all(k in options for k in ["A", "B", "C", "D"]):
+                    result["is_valid"] = False
+                    result["error"] = "Options must contain A, B, C, D"
+                    return result
+
+                cleaned_question["options"] = {
+                    "A": str(options.get("A", "")).strip(),
+                    "B": str(options.get("B", "")).strip(),
+                    "C": str(options.get("C", "")).strip(),
+                    "D": str(options.get("D", "")).strip()
+                }
+                cleaned_question["answer"] = str(question_data.get("answer", "")).strip()
+
+            elif "Phần II" in part_name or "PHẦN II" in part_name:
+                # TrueFalseQuestion
+                if "statements" not in question_data:
+                    result["is_valid"] = False
+                    result["error"] = "TrueFalse question missing 'statements'"
+                    return result
+
+                statements = question_data.get("statements", {})
+                if not isinstance(statements, dict) or not all(k in statements for k in ["a", "b", "c", "d"]):
+                    result["is_valid"] = False
+                    result["error"] = "Statements must contain a, b, c, d"
+                    return result
+
+                cleaned_statements = {}
+                for key in ["a", "b", "c", "d"]:
+                    stmt = statements.get(key, {})
+                    if not isinstance(stmt, dict) or "text" not in stmt or "answer" not in stmt:
+                        result["is_valid"] = False
+                        result["error"] = f"Statement {key} missing 'text' or 'answer'"
+                        return result
+
+                    cleaned_statements[key] = {
+                        "text": str(stmt.get("text", "")).strip(),
+                        "answer": bool(stmt.get("answer", False))
+                    }
+
+                cleaned_question["statements"] = cleaned_statements
+
+            elif "Phần III" in part_name or "PHẦN III" in part_name:
+                # ShortAnswerQuestion
+                if "answer" not in question_data:
+                    result["is_valid"] = False
+                    result["error"] = "ShortAnswer question missing 'answer'"
+                    return result
+
+                cleaned_question["answer"] = str(question_data.get("answer", "")).strip()
+
+            else:
+                result["is_valid"] = False
+                result["error"] = f"Unknown part type: {part_name}"
+                return result
+
+            result["data"] = cleaned_question
+            return result
+
+        except Exception as e:
+            return {
+                "is_valid": False,
+                "error": f"Error cleaning question: {str(e)}",
+                "data": {}
+            }
 
     def _calculate_import_statistics(self, exam_data: Dict[str, Any]) -> ExamImportStatistics:
         """
