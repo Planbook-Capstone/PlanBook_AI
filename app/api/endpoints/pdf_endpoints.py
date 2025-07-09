@@ -57,10 +57,9 @@ async def quick_textbook_analysis(
             if not file.filename or not file.filename.lower().endswith(".docx"):
                 raise HTTPException(status_code=400, detail="Guide import only supports DOCX files")
         else:
-            # Validate PDF file for textbook import (commented out for flexibility)
-            # if not file.filename or not file.filename.lower().endswith(".pdf"):
-            #     raise HTTPException(status_code=400, detail="Textbook import only supports PDF files")
-            pass
+            # Validate PDF file for textbook import
+            if not file.filename or not file.filename.lower().endswith(".pdf"):
+                raise HTTPException(status_code=400, detail="Textbook import only supports PDF files")
 
         # Read file content
         file_content = await file.read()
