@@ -23,12 +23,31 @@ logger = logging.getLogger(__name__)
 def run_async_task(coro):
     """Helper function để chạy async code trong Celery worker"""
     try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
+        # Always create a new event loop for each task to avoid "Event loop is closed" error
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-    
-    return loop.run_until_complete(coro)
+
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            # Always close the loop after use
+            try:
+                # Cancel all pending tasks
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+
+                # Wait for all tasks to be cancelled
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+                loop.close()
+            except Exception as cleanup_error:
+                logger.warning(f"Error during loop cleanup: {cleanup_error}")
+
+    except Exception as e:
+        logger.error(f"Error in run_async_task: {e}")
+        raise e
 
 
 @celery_app.task(name="app.tasks.smart_exam_tasks.process_smart_exam_generation", bind=True)

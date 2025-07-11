@@ -18,27 +18,31 @@ logger = logging.getLogger(__name__)
 def run_async_task(coro):
     """Helper để chạy async function trong Celery task"""
     try:
-        # Try to get existing event loop
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_closed():
-                raise RuntimeError("Event loop is closed")
-        except RuntimeError:
-            # Create new event loop if none exists or current is closed
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        # Always create a new event loop for each task to avoid "Event loop is closed" error
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
-        return loop.run_until_complete(coro)
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            # Always close the loop after use
+            try:
+                # Cancel all pending tasks
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+
+                # Wait for all tasks to be cancelled
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+                loop.close()
+            except Exception as cleanup_error:
+                logger.warning(f"Error during loop cleanup: {cleanup_error}")
+
     except Exception as e:
         logger.error(f"Error in run_async_task: {e}")
-        # Try with new loop one more time
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            return loop.run_until_complete(coro)
-        except Exception as retry_error:
-            logger.error(f"Retry failed: {retry_error}")
-            raise e
+        raise e
 
 
 @celery_app.task(name="app.tasks.pdf_tasks.health_check")
