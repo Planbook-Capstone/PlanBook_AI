@@ -66,6 +66,7 @@ class LessonPlanContentService:
             if lesson_id:
                 try:
                     content_result = await self.textbook_service.get_lesson_content(lesson_id)
+                    print(f"DEBUG: content_result: {content_result}")
                     lesson_content = content_result.get("lesson_content", "")
                     logger.info(f"Retrieved lesson content: {len(lesson_content)} characters")
                 except Exception as e:
