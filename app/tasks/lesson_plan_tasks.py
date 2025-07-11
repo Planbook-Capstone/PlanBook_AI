@@ -40,13 +40,13 @@ def run_async_task(coro):
 @celery_app.task(name="app.tasks.lesson_plan_tasks.process_lesson_plan_content_generation", bind=True)
 def process_lesson_plan_content_generation(self, task_id: str) -> Dict[str, Any]:
     """
-    Celery task xử lý sinh nội dung giáo án
-    
+    Celery task xử lý sinh nội dung giáo án với nội dung sách giáo khoa làm tài liệu tham khảo
+
     Args:
         task_id: ID của task trong MongoDB
-        
+
     Returns:
-        Dict kết quả xử lý
+        Dict kết quả xử lý với lesson_content_used trong statistics
     """
     logger.info(f"Starting lesson plan content generation task: {task_id}")
     
@@ -76,7 +76,10 @@ def process_lesson_plan_content_generation(self, task_id: str) -> Dict[str, Any]
 
 
 async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[str, Any]:
-    """Async implementation của lesson plan content generation"""
+    """
+    Async implementation của lesson plan content generation
+    Sử dụng generate_lesson_plan_content để có nội dung sách giáo khoa làm tài liệu tham khảo
+    """
     
     # Get task from MongoDB
     task = await mongodb_task_service.get_task_status(task_id)
@@ -86,7 +89,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
     task_data = task.get("data", {})
     lesson_plan_json = task_data.get("lesson_plan_json")
     lesson_id = task_data.get("lesson_id")
-    
+    print(f"DEBUG: lesson_plan_json: {lesson_id}")
     if not lesson_plan_json:
         raise Exception("lesson_plan_json is required in task data")
     
@@ -108,24 +111,20 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
             task_id, 20, f"Found {total_nodes} nodes to process. Starting content generation..."
         )
         
-        # Process lesson plan with progress tracking
-        processed_nodes = 0
-        
-        async def progress_callback(current_node: int, total: int, message: str = ""):
-            nonlocal processed_nodes
-            processed_nodes = current_node
-            # Progress from 20% to 90% based on processed nodes
-            progress = 20 + int((current_node / total) * 70)
-            await mongodb_task_service.update_task_progress(
-                task_id, progress, message or f"Processing node {current_node}/{total}..."
-            )
-        
-        # Generate lesson plan content with progress tracking
-        result = await lesson_plan_content_service.generate_lesson_plan_content_with_progress(
+        # Update progress: Starting content generation
+        await mongodb_task_service.update_task_progress(
+            task_id, 50, "Generating lesson plan content with textbook reference..."
+        )
+
+        # Generate lesson plan content (with lesson content from textbook)
+        result = await lesson_plan_content_service.generate_lesson_plan_content(
             lesson_plan_json=lesson_plan_json,
-            lesson_id=lesson_id,
-            progress_callback=progress_callback,
-            total_nodes=total_nodes
+            lesson_id=lesson_id
+        )
+
+        # Update progress: Content generation completed
+        await mongodb_task_service.update_task_progress(
+            task_id, 90, "Content generation completed. Processing results..."
         )
         
         # Update progress: Finalizing
@@ -140,9 +139,10 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
             "statistics": result.get("statistics", {}),
             "task_id": task_id,
             "processing_info": {
-                "total_nodes_processed": processed_nodes,
+                "total_nodes_processed": result.get("statistics", {}).get("content_nodes_processed", 0),
                 "total_nodes_found": total_nodes,
-                "processing_method": "celery_lesson_plan_content_generation"
+                "processing_method": "celery_lesson_plan_content_generation",
+                "lesson_content_used": result.get("statistics", {}).get("lesson_content_used", False)
             }
         }
         
