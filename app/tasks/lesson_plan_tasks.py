@@ -6,8 +6,8 @@ import logging
 from typing import Dict, Any
 
 from app.core.celery_app import celery_app
-from app.services.mongodb_task_service import mongodb_task_service
-from app.services.lesson_plan_content_service import lesson_plan_content_service
+from app.services.mongodb_task_service import MongoDBTaskService
+from app.services.lesson_plan_content_service import LessonPlanContentService
 
 logger = logging.getLogger(__name__)
 
@@ -15,26 +15,31 @@ logger = logging.getLogger(__name__)
 def run_async_task(coro):
     """Helper để chạy async function trong Celery task"""
     try:
-        # Try to get existing event loop
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_closed():
-                raise RuntimeError("Event loop is closed")
-        except RuntimeError:
-            # Create new event loop if none exists or current is closed
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        # Always create a new event loop for each task to avoid "Event loop is closed" error
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
-        return loop.run_until_complete(coro)
-    except Exception as e:
-        logger.error(f"Error in run_async_task: {e}")
-        # Try with new loop one more time
         try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
             return loop.run_until_complete(coro)
         finally:
-            loop.close()
+            # Always close the loop after use
+            try:
+                # Cancel all pending tasks
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+
+                # Wait for all tasks to be cancelled
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+                loop.close()
+            except Exception as cleanup_error:
+                logger.warning(f"Error during loop cleanup: {cleanup_error}")
+
+    except Exception as e:
+        logger.error(f"Error in run_async_task: {e}")
+        raise e
 
 
 @celery_app.task(name="app.tasks.lesson_plan_tasks.process_lesson_plan_content_generation", bind=True)
@@ -58,7 +63,10 @@ def process_lesson_plan_content_generation(self, task_id: str) -> Dict[str, Any]
         )
         
         # Run async implementation
-        result = run_async_task(_process_lesson_plan_content_generation_async(task_id))
+        logger.info(f"Creating coroutine for task {task_id}")
+        coro = _process_lesson_plan_content_generation_async(task_id)
+        logger.info(f"Coroutine created: {type(coro)} - {id(coro)}")
+        result = run_async_task(coro)
         logger.info(f"Lesson plan content generation task {task_id} completed successfully")
         return result
         
@@ -67,7 +75,11 @@ def process_lesson_plan_content_generation(self, task_id: str) -> Dict[str, Any]
         logger.error(f"Error in lesson plan content generation task {task_id}: {error_msg}")
         
         # Mark task as failed in MongoDB
-        run_async_task(mongodb_task_service.mark_task_failed(task_id, error_msg))
+        try:
+            mongodb_service = MongoDBTaskService()
+            run_async_task(mongodb_service.mark_task_failed(task_id, error_msg))
+        except Exception as mongo_error:
+            logger.error(f"Failed to mark task as failed in MongoDB: {mongo_error}")
         
         # Update Celery state
         self.update_state(state="FAILURE", meta={"error": error_msg})
@@ -80,7 +92,13 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
     Async implementation của lesson plan content generation
     Sử dụng generate_lesson_plan_content để có nội dung sách giáo khoa làm tài liệu tham khảo
     """
-    
+
+    logger.info(f"🚀 Starting async processing for task {task_id}")
+
+    # Create fresh MongoDB service instance for this task
+    mongodb_task_service = MongoDBTaskService()
+    await mongodb_task_service.initialize()
+
     # Get task from MongoDB
     task = await mongodb_task_service.get_task_status(task_id)
     if not task:
@@ -117,6 +135,8 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
         )
 
         # Generate lesson plan content (with lesson content from textbook)
+        # Create fresh service instance to avoid coroutine reuse issues
+        lesson_plan_content_service = LessonPlanContentService()
         result = await lesson_plan_content_service.generate_lesson_plan_content(
             lesson_plan_json=lesson_plan_json,
             lesson_id=lesson_id
