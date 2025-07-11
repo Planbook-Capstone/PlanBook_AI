@@ -643,7 +643,7 @@ class LessonPlanContentService:
         """
         # Template cơ sở chung cho tất cả loại node
         base_template = """
-Bạn là một giáo viên trung học phổ thông Việt Nam giàu kinh nghiệm, chuyên soạn giáo án chi tiết và thực tiễn.
+Bạn là một giáo viên trung học phổ thông Việt Nam giàu kinh nghiệm, chuyên soạn giáo án ngắn gọn và cụ thể.
 
 NHIỆM VỤ: {task_description}
 
@@ -658,12 +658,14 @@ NGỮ CẢNH GIÁO ÁN:
 NỘI DUNG BÀI HỌC THAM KHẢO:
 {lesson_content}
 
-YÊU CẦU:
-1. Viết nội dung chi tiết, cụ thể cho {content_target}
-2. Nội dung phải phù hợp với tiêu đề và ngữ cảnh giáo án
-3. Sử dụng ngôn ngữ chuyên nghiệp, phù hợp với giáo viên
-4. Tập trung vào nội dung thực tiễn, có thể áp dụng được
-5. Các thuật ngữ trong sách giáo khoa không được thay đổi
+YÊU CẦU QUAN TRỌNG:
+1. Nội dung PHẢI ngắn gọn, chỉ 2-3 câu (tối đa 100 từ)
+2. PHẢI dựa trên nội dung bài học tham khảo ở trên, không được tự sáng tác
+3. PHẢI cụ thể với bài học, không được nói chung chung
+4. Tránh hoàn toàn các cụm từ mở đầu như "Để bắt đầu", "Để giúp học sinh", "Chúng ta cần"
+5. Đi thẳng vào nội dung chính, không dẫn dắt dài dòng
+6. Sử dụng thuật ngữ chính xác từ sách giáo khoa
+7. Tập trung vào {content_target} cụ thể, không lan man
 {specific_requirements}
 
 ĐỊNH DẠNG ĐẦU RA:
@@ -673,32 +675,32 @@ YÊU CẦU:
         # Cấu hình cụ thể cho từng loại node
         node_configs = {
             "PARAGRAPH": {
-                "task_description": "Phát triển nội dung chi tiết cho đoạn văn trong giáo án.",
-                "node_type_description": "Đoạn văn mô tả (PARAGRAPH)",
-                "content_target": "đoạn văn này",
+                "task_description": "Viết nội dung ngắn gọn cho mục tiêu học tập này.",
+                "node_type_description": "Mục tiêu học tập (PARAGRAPH)",
+                "content_target": "mục tiêu này",
                 "specific_requirements": "",
-                "output_format": "Chỉ trả về nội dung đoạn văn, không có tiêu đề hay định dạng khác."
+                "output_format": "Trả về 2-3 câu ngắn gọn, cụ thể. Không có tiêu đề, không có cụm từ mở đầu dài."
             },
             "LIST_ITEM": {
-                "task_description": "Phát triển nội dung chi tiết cho mục liệt kê trong giáo án.",
+                "task_description": "Viết nội dung ngắn gọn cho mục liệt kê này.",
                 "node_type_description": "Mục liệt kê (LIST_ITEM)",
                 "content_target": "mục liệt kê này",
                 "specific_requirements": "",
-                "output_format": "Chỉ trả về nội dung mục liệt kê, không có tiêu đề hay định dạng khác.\nCó thể sử dụng dấu gạch đầu dòng (-) nếu có nhiều điểm con."
+                "output_format": "Trả về 1-2 câu ngắn gọn hoặc danh sách ngắn với dấu gạch đầu dòng (-). Không có tiêu đề."
             },
             "SECTION": {
-                "task_description": "Phát triển nội dung tổng quan cho phần/mục trong giáo án.",
+                "task_description": "Viết nội dung tổng quan ngắn gọn cho phần này.",
                 "node_type_description": "Phần/Mục (SECTION)",
-                "content_target": "phần/mục này",
+                "content_target": "phần này",
                 "specific_requirements": "",
-                "output_format": "Chỉ trả về nội dung phần/mục, không có tiêu đề hay định dạng khác."
+                "output_format": "Trả về 2-3 câu tổng quan ngắn gọn. Không có tiêu đề, không dẫn dắt dài."
             },
             "SUBSECTION": {
-                "task_description": "Phát triển nội dung chi tiết cho phần con trong giáo án.",
+                "task_description": "Viết nội dung ngắn gọn cho phần con này.",
                 "node_type_description": "Phần con (SUBSECTION)",
                 "content_target": "phần con này",
                 "specific_requirements": "",
-                "output_format": "Chỉ trả về nội dung phần con, không có tiêu đề hay định dạng khác."
+                "output_format": "Trả về 2-3 câu ngắn gọn, cụ thể. Không có tiêu đề, không có cụm từ mở đầu."
             }
         }
 
@@ -718,7 +720,7 @@ YÊU CẦU:
             node_title=node_title,
             node_type_description=config["node_type_description"],
             context_info=context_info,
-            lesson_content=lesson_content[:4000] if lesson_content else "Không có nội dung tham khảo",
+            lesson_content=lesson_content[:2000] if lesson_content else "Không có nội dung tham khảo",
             content_target=config["content_target"],
             specific_requirements=config["specific_requirements"],
             output_format=config["output_format"]
@@ -740,33 +742,53 @@ YÊU CẦU:
         node_type = node.get("type", "")
         enhanced_requirements = []
 
-        # Yêu cầu dựa trên tiêu đề node
-        if "mục tiêu" in node_title:
-            enhanced_requirements.append("6. Mục tiêu phải cụ thể, đo lường được, phù hợp với học sinh")
-            enhanced_requirements.append("7. Chia thành mục tiêu kiến thức, kỹ năng và thái độ")
+        # Yêu cầu dựa trên mức độ nhận thức (Bloom's Taxonomy)
+        if "nhận biết" in node_title or "trình bày được" in node_title:
+            enhanced_requirements.append("8. Liệt kê hoặc định nghĩa ngắn gọn các khái niệm chính từ bài học")
+            enhanced_requirements.append("9. Sử dụng chính xác thuật ngữ từ sách giáo khoa")
+
+        elif "hiểu được" in node_title or "giải thích" in node_title:
+            enhanced_requirements.append("8. Giải thích ngắn gọn bằng từ ngữ đơn giản, dễ hiểu")
+            enhanced_requirements.append("9. Nêu ví dụ cụ thể từ nội dung bài học")
+
+        elif "phân biệt" in node_title or "so sánh" in node_title:
+            enhanced_requirements.append("8. Chỉ ra 2-3 điểm khác nhau chính, không liệt kê quá nhiều")
+            enhanced_requirements.append("9. Dựa trên tiêu chí rõ ràng từ bài học")
+
+        elif "vận dụng" in node_title or "áp dụng" in node_title:
+            enhanced_requirements.append("8. Đưa ra ví dụ cụ thể từ bài học hoặc thực tế")
+            enhanced_requirements.append("9. Mô tả ngắn gọn cách thực hiện, không lý thuyết dài")
+
+        elif "phân tích" in node_title:
+            enhanced_requirements.append("8. Chia nhỏ thành 2-3 thành phần chính")
+            enhanced_requirements.append("9. Giải thích mối quan hệ giữa các thành phần")
+
+        elif "mục tiêu" in node_title:
+            enhanced_requirements.append("8. Mục tiêu phải cụ thể, đo lường được")
+            enhanced_requirements.append("9. Phù hợp với nội dung bài học cụ thể")
 
         elif "hoạt động" in node_title:
-            enhanced_requirements.append("6. Mô tả chi tiết các bước thực hiện hoạt động")
-            enhanced_requirements.append("7. Nêu rõ thời gian, phương pháp và đánh giá hoạt động")
+            enhanced_requirements.append("8. Mô tả ngắn gọn các bước chính")
+            enhanced_requirements.append("9. Nêu rõ thời gian và phương pháp")
 
         elif "câu hỏi" in node_title or "đặt vấn đề" in node_title:
-            enhanced_requirements.append("6. Câu hỏi phải phù hợp với trình độ học sinh")
-            enhanced_requirements.append("7. Có câu hỏi gợi mở và câu hỏi kiểm tra hiểu biết")
+            enhanced_requirements.append("8. Câu hỏi phải liên quan trực tiếp đến bài học")
+            enhanced_requirements.append("9. Phù hợp với trình độ học sinh")
 
         elif "bài tập" in node_title or "luyện tập" in node_title:
-            enhanced_requirements.append("6. Nêu rõ số trang, bài tập cụ thể trong SGK/SBT")
-            enhanced_requirements.append("7. Ước tính thời gian làm bài và cách kiểm tra")
+            enhanced_requirements.append("8. Nêu rõ số trang, bài tập cụ thể trong SGK/SBT")
+            enhanced_requirements.append("9. Ước tính thời gian làm bài")
 
         elif "đánh giá" in node_title or "kiểm tra" in node_title:
-            enhanced_requirements.append("6. Đưa ra tiêu chí đánh giá cụ thể và rõ ràng")
-            enhanced_requirements.append("7. Có phương pháp đánh giá phù hợp với nội dung")
+            enhanced_requirements.append("8. Đưa ra tiêu chí đánh giá cụ thể")
+            enhanced_requirements.append("9. Phương pháp đánh giá phù hợp")
 
         # Yêu cầu dựa trên loại node
         if node_type == "LIST_ITEM":
-            enhanced_requirements.append("8. Sử dụng format danh sách với dấu gạch đầu dòng nếu cần")
+            enhanced_requirements.append("10. Sử dụng format danh sách ngắn với dấu gạch đầu dòng (-)")
 
         elif node_type == "PARAGRAPH":
-            enhanced_requirements.append("8. Viết thành đoạn văn liền mạch, logic")
+            enhanced_requirements.append("10. Viết thành 2-3 câu ngắn, không dài dòng")
 
         return "\n".join(enhanced_requirements) if enhanced_requirements else ""
 
@@ -786,8 +808,8 @@ YÊU CẦU:
         if enhanced_requirements:
             # Thêm yêu cầu bổ sung vào prompt
             base_prompt = base_prompt.replace(
-                "5. Các thuật ngữ trong sách giáo khoa không được thay đổi",
-                f"5. Các thuật ngữ trong sách giáo khoa không được thay đổi\n{enhanced_requirements}"
+                "7. Không mở rộng ra các chủ đề không liên quan trực tiếp đến bài học",
+                f"7. Không mở rộng ra các chủ đề không liên quan trực tiếp đến bài học\n{enhanced_requirements}"
             )
 
         return base_prompt
@@ -901,12 +923,7 @@ YÊU CẦU:
 
             # Kiểm tra ID hợp lệ
             node_id = node.get("id")
-            if not isinstance(node_id, int):
-                return {
-                    "valid": False,
-                    "error": f"Node ID must be integer, got: {type(node_id)}"
-                }
-
+   
             # Kiểm tra vòng lặp
             if node_id in visited_ids:
                 return {
