@@ -29,7 +29,7 @@ class LessonPlanContentService:
         self.MAX_DEPTH = 10
         
         # Các type cần sinh nội dung chi tiết
-        self.CONTENT_TYPES = {"PARAGRAPH", "LIST_ITEM"}
+        self.CONTENT_TYPES = {"PARAGRAPH", "LIST_ITEM", "TABLE"}
 
         # Các type là section (container)
         self.SECTION_TYPES = {"SECTION", "SUBSECTION"}
@@ -454,8 +454,14 @@ class LessonPlanContentService:
                     "content_generated": False
                 }
 
-            # Không có children ACTIVE → xử lý theo type
-            if node_type in self.CONTENT_TYPES:
+            # Không có children ACTIVE → xử lý theo fieldType hoặc type
+            fieldType = node.get("fieldType")
+
+            if fieldType == "TABLE":
+                # TABLE: xử lý đặc biệt cho bảng dựa trên fieldType
+                return await self._process_table_node(node, lesson_content)
+
+            elif node_type in self.CONTENT_TYPES:
                 # PARAGRAPH hoặc LIST_ITEM: sinh nội dung chi tiết
                 if not current_content.strip():  # Chỉ sinh nếu content rỗng
                     logger.info(f"Node {node.get('id')} ({node_type}) has no children - generating content")
@@ -521,6 +527,226 @@ class LessonPlanContentService:
                 "success": False,
                 "error": str(e)
             }
+
+    async def _process_table_node(
+        self,
+        node: Dict[str, Any],
+        lesson_content: str
+    ) -> Dict[str, Any]:
+        """
+        Xử lý đặc biệt cho node TABLE - sinh nội dung cho các cell trong bảng
+
+        Args:
+            node: Node TABLE cần xử lý
+            lesson_content: Nội dung bài học tham khảo
+
+        Returns:
+            Dict chứa kết quả xử lý
+        """
+        try:
+            current_content = node.get("content", "")
+
+            # Xử lý content - có thể là dict hoặc string JSON
+            table_data = None
+            if isinstance(current_content, dict) and "rows" in current_content:
+                table_data = current_content
+            elif isinstance(current_content, str) and current_content.strip():
+                try:
+                    # Parse JSON string thành dict
+                    parsed_content = json.loads(current_content)
+                    if isinstance(parsed_content, dict) and "rows" in parsed_content:
+                        table_data = parsed_content
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse table content JSON for node {node.get('id')}: {e}")
+
+            if table_data:
+                content_generated = False
+
+                # Duyệt qua từng row
+                for row in table_data.get("rows", []):
+                    if not isinstance(row, dict) or "cells" not in row:
+                        continue
+
+                    # Duyệt qua từng cell trong row
+                    for cell in row.get("cells", []):
+                        if not isinstance(cell, dict):
+                            continue
+
+                        # Bỏ qua header cells
+                        if cell.get("isHeader", False):
+                            continue
+
+                        # Chỉ sinh nội dung cho cell có title nhưng content rỗng
+                        cell_title = cell.get("title", "").strip()
+                        cell_content = cell.get("content", "").strip()
+
+                        if cell_title and not cell_content:
+                            logger.info(f"Generating content for table cell: {cell.get('id')} with title: {cell_title}")
+
+                            # Tạo context cho cell
+                            cell_context = {
+                                "id": cell.get("id", ""),
+                                "title": cell_title,
+                                "type": "TABLE_CELL",
+                                "table_context": node.get("title", "")
+                            }
+
+                            # Sinh nội dung cho cell
+                            generated_content = await self._generate_content_for_table_cell(
+                                cell_context, lesson_content
+                            )
+
+                            if generated_content["success"]:
+                                cell["content"] = generated_content["content"]
+                                content_generated = True
+                                logger.info(f"Generated content for cell {cell.get('id')}")
+                            else:
+                                logger.warning(f"Failed to generate content for cell {cell.get('id')}: {generated_content['error']}")
+
+                # Cập nhật lại content của node - giữ nguyên format gốc
+                original_content = node.get("content", "")
+                if isinstance(original_content, str):
+                    # Nếu ban đầu là string, convert lại thành string JSON
+                    node["content"] = json.dumps(table_data, ensure_ascii=False)
+                else:
+                    # Nếu ban đầu là dict, giữ nguyên dict
+                    node["content"] = table_data
+
+                return {
+                    "success": True,
+                    "content_generated": content_generated
+                }
+
+            else:
+                # Content không phải là table structure, bỏ qua
+                logger.warning(f"TABLE fieldType node {node.get('id')} does not have valid table structure in content")
+                return {
+                    "success": True,
+                    "content_generated": False
+                }
+
+        except Exception as e:
+            logger.error(f"Error processing table node {node.get('id')}: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _generate_content_for_table_cell(
+        self,
+        cell_context: Dict[str, Any],
+        lesson_content: str
+    ) -> Dict[str, Any]:
+        """
+        Sinh nội dung cho một cell trong bảng
+
+        Args:
+            cell_context: Context của cell (id, title, type, table_context)
+            lesson_content: Nội dung bài học tham khảo
+
+        Returns:
+            Dict chứa nội dung đã sinh
+        """
+        try:
+            # Ensure LLM service is initialized
+            self.llm_service._ensure_service_initialized()
+
+            # Kiểm tra LLM service availability
+            if not self.llm_service.is_available():
+                return {
+                    "success": False,
+                    "error": "No LLM service available"
+                }
+
+            # Tạo prompt cho table cell
+            prompt = self._create_table_cell_prompt(cell_context, lesson_content)
+
+            # Gọi LLM để sinh nội dung
+            llm_result = await self.llm_service._generate_content(prompt)
+
+            if llm_result["success"]:
+                generated_content = llm_result["text"].strip()
+
+                # Làm sạch nội dung từ LLM
+                cleaned_content = self._clean_generated_content(generated_content, cell_context.get('id'))
+
+                # Validate nội dung đã làm sạch
+                if len(cleaned_content) < 5:
+                    return {
+                        "success": False,
+                        "error": "Generated content too short after cleaning"
+                    }
+
+                return {
+                    "success": True,
+                    "content": cleaned_content
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": llm_result["error"]
+                }
+
+        except Exception as e:
+            logger.error(f"Error generating content for table cell {cell_context.get('id')}: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def _create_table_cell_prompt(
+        self,
+        cell_context: Dict[str, Any],
+        lesson_content: str
+    ) -> str:
+        """
+        Tạo prompt đặc biệt cho việc sinh nội dung table cell
+
+        Args:
+            cell_context: Context của cell
+            lesson_content: Nội dung bài học tham khảo
+
+        Returns:
+            String prompt cho LLM
+        """
+        cell_title = cell_context.get("title", "")
+        cell_id = cell_context.get("id", "")
+        table_context = cell_context.get("table_context", "")
+
+        # Làm sạch HTML tags từ title để lấy text thuần
+        import re
+        clean_title = re.sub(r'<[^>]+>', '', cell_title).strip()
+
+        prompt = f"""
+Bạn là một giáo viên trung học phổ thông Việt Nam giàu kinh nghiệm, chuyên soạn giáo án chi tiết.
+
+NHIỆM VỤ: Viết nội dung ngắn gọn cho ô trong bảng giáo án.
+
+THÔNG TIN Ô BẢNG:
+- ID: {cell_id}
+- Tiêu đề ô: "{clean_title}"
+- Ngữ cảnh bảng: "{table_context}"
+
+NỘI DUNG BÀI HỌC THAM KHẢO:
+{lesson_content[:1500] if lesson_content else "Không có nội dung tham khảo"}
+
+YÊU CẦU QUAN TRỌNG:
+1. Nội dung PHẢI ngắn gọn, chỉ 1-2 câu (tối đa 80 từ)
+2. PHẢI dựa trên nội dung bài học tham khảo ở trên
+3. PHẢI cụ thể với tiêu đề ô "{clean_title}"
+4. Tránh hoàn toàn các cụm từ mở đầu như "Để bắt đầu", "Chúng ta cần"
+5. Đi thẳng vào nội dung chính, không dẫn dắt
+6. Sử dụng thuật ngữ chính xác từ sách giáo khoa
+7. Phù hợp với ngữ cảnh của bảng "{table_context}"
+8. Nếu là hoạt động giáo viên: mô tả hành động cụ thể của GV
+9. Nếu là hoạt động học sinh: mô tả hành động cụ thể của HS
+10. Nếu là bước thực hiện: nêu rõ các bước cụ thể
+
+ĐỊNH DẠNG ĐẦU RA:
+Trả về 1-2 câu ngắn gọn, cụ thể. Không có tiêu đề, không có cụm từ mở đầu dài.
+"""
+
+        return prompt.strip()
 
     async def _generate_content_for_node(
         self,
@@ -701,6 +927,13 @@ YÊU CẦU QUAN TRỌNG:
                 "content_target": "phần con này",
                 "specific_requirements": "",
                 "output_format": "Trả về 2-3 câu ngắn gọn, cụ thể. Không có tiêu đề, không có cụm từ mở đầu."
+            },
+            "TABLE": {
+                "task_description": "Xử lý nội dung bảng trong giáo án.",
+                "node_type_description": "Bảng (TABLE)",
+                "content_target": "bảng này",
+                "specific_requirements": "",
+                "output_format": "Xử lý từng ô trong bảng dựa trên tiêu đề ô."
             }
         }
 
