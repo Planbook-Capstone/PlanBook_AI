@@ -8,7 +8,7 @@ import time
 from typing import Dict, Any, Optional, List
 from celery.exceptions import WorkerLostError, Retry
 from app.core.celery_app import celery_app
-from app.services.mongodb_task_service import mongodb_task_service, TaskType
+from app.services.mongodb_task_service import get_mongodb_task_service, TaskType
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class CeleryTaskService:
         try:
             # Tạo task trong MongoDB
             if not task_id:
-                task_id = await mongodb_task_service.create_task(
+                task_id = await get_mongodb_task_service().create_task(
                     task_type=TaskType(task_type), task_data=task_data
                 )
 
@@ -64,7 +64,7 @@ class CeleryTaskService:
         except Exception as e:
             logger.error(f"Error creating and dispatching task: {e}")
             if task_id:
-                await mongodb_task_service.mark_task_failed(task_id, str(e))
+                await get_mongodb_task_service().mark_task_failed(task_id, str(e))
             raise
 
     def _get_celery_task_name(self, task_type: str) -> Optional[str]:
@@ -125,7 +125,7 @@ class CeleryTaskService:
         Returns:
             Dict: Thông tin task hoặc None nếu không tìm thấy
         """
-        return await mongodb_task_service.get_task_status(task_id)
+        return await get_mongodb_task_service().get_task_status(task_id)
 
     async def get_task_result(self, task_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -137,7 +137,7 @@ class CeleryTaskService:
         Returns:
             Dict: Kết quả task hoặc None nếu không tìm thấy
         """
-        task = await mongodb_task_service.get_task_status(task_id)
+        task = await get_mongodb_task_service().get_task_status(task_id)
         if task and task.get("status") == "completed":
             return task.get("result")
         return None
@@ -177,7 +177,7 @@ class CeleryTaskService:
         """
         try:
             # Cập nhật status trong MongoDB
-            await mongodb_task_service.mark_task_failed(
+            await get_mongodb_task_service().mark_task_failed(
                 task_id, "Task cancelled by user"
             )
 

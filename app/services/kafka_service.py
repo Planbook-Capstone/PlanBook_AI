@@ -5,6 +5,7 @@ Service để handle Kafka producer và consumer
 import json
 import asyncio
 import logging
+import time
 from typing import Dict, Any, Optional, Callable, List, Union, Awaitable
 from datetime import datetime
 
@@ -17,10 +18,16 @@ from app.core.kafka_config import (
     kafka_settings,
     get_kafka_servers,
     get_topic_name,
+    get_requests_topic,
+    get_responses_topic,
     get_producer_config,
     get_consumer_config,
     get_aiokafka_producer_config,
     get_aiokafka_consumer_config,
+    get_send_timeout,
+    is_kafka_enabled,
+    get_max_retries,
+    get_retry_backoff_ms
 )
 
 logger = logging.getLogger(__name__)
@@ -66,7 +73,7 @@ class KafkaService:
         try:
             config = get_aiokafka_consumer_config()
             self.async_consumer = AIOKafkaConsumer(
-                get_topic_name(),
+                get_requests_topic(),  # Listen on requests topic for messages from SpringBoot
                 **config
             )
             await self.async_consumer.start()
@@ -76,13 +83,39 @@ class KafkaService:
             raise
     
     def _initialize_sync_producer(self):
-        """Initialize synchronous Kafka producer"""
+        """Initialize synchronous Kafka producer with improved configuration"""
         try:
+            # Close existing producer if any
+            if self.producer:
+                try:
+                    self.producer.close(timeout=2)
+                except:
+                    pass
+                self.producer = None
+
             config = get_producer_config()
+            config['bootstrap_servers'] = get_kafka_servers()
+
+            # Add improved configuration for reliability
+            config.update({
+                'request_timeout_ms': get_send_timeout() * 1000,  # Convert to ms
+                'delivery_timeout_ms': (get_send_timeout() + 2) * 1000,  # Slightly longer
+                'connections_max_idle_ms': 30000,  # 30 seconds
+                'reconnect_backoff_ms': 100,
+                'reconnect_backoff_max_ms': 1000,
+                'max_in_flight_requests_per_connection': 1,  # Ensure ordering
+                'enable_idempotence': True,  # Prevent duplicates
+                'retries': get_max_retries(),
+                'retry_backoff_ms': get_retry_backoff_ms()
+            })
+
+            logger.info(f"🔄 Initializing Kafka producer with config: {config}")
             self.producer = KafkaProducer(**config)
-            logger.info("✅ Sync Kafka producer initialized")
+            logger.info("✅ Sync Kafka producer initialized successfully")
+
         except Exception as e:
             logger.error(f"❌ Failed to initialize sync producer: {e}")
+            self.producer = None
             raise
     
     def _initialize_sync_consumer(self):
@@ -141,43 +174,121 @@ class KafkaService:
         topic: Optional[str] = None,
         key: Optional[str] = None
     ) -> bool:
-        """Send message synchronously"""
-        try:
-            if not self.producer:
+        """Send message synchronously with improved error handling and timeout"""
+        # Check if Kafka is enabled
+        if not is_kafka_enabled():
+            logger.warning("⚠️ Kafka is disabled, skipping message send")
+            return True  # Return True to not block the process
+
+        max_retries = get_max_retries()
+        retry_backoff = get_retry_backoff_ms() / 1000.0  # Convert to seconds
+        send_timeout = get_send_timeout()
+
+        for attempt in range(max_retries + 1):
+            try:
+                # Always create a fresh producer for each attempt to avoid stale connections
+                logger.info(f"🔄 Creating fresh Kafka producer for attempt {attempt + 1}...")
                 self._initialize_sync_producer()
 
-            topic = topic or get_topic_name()
+                topic = topic or get_topic_name()
 
-            # Prepare message
-            message_data = {
-                "timestamp": datetime.now().isoformat(),
-                "source": "planbook-fastapi",
-                "data": message
-            }
+                # Prepare message
+                message_data = {
+                    "timestamp": datetime.now().isoformat(),
+                    "source": "planbook-fastapi",
+                    "data": message
+                }
 
-            # Convert to JSON string
-            message_json = json.dumps(message_data, ensure_ascii=False)
+                # Convert to JSON string
+                message_json = json.dumps(message_data, ensure_ascii=False)
 
-            # Send message
-            future = self.producer.send(
-                topic=topic,
-                value=message_json,
-                key=key
+                logger.info(f"📤 Sending message to topic '{topic}' (attempt {attempt + 1}/{max_retries + 1})")
+
+                # Send message with shorter timeout
+                future = self.producer.send(
+                    topic=topic,
+                    value=message_json,
+                    key=key
+                )
+
+                # Wait for result with configurable timeout
+                record_metadata = future.get(timeout=send_timeout)
+
+                logger.info(f"✅ Message sent to topic '{topic}' partition {record_metadata.partition}")
+
+                # Close producer after successful send to prevent stale connections
+                try:
+                    self.producer.close(timeout=1)
+                except:
+                    pass
+                self.producer = None
+
+                return True
+
+            except KafkaTimeoutError as e:
+                logger.warning(f"⏰ Kafka timeout on attempt {attempt + 1}: {e}")
+                # Always clean up producer on error
+                try:
+                    if self.producer:
+                        self.producer.close(timeout=1)
+                except:
+                    pass
+                self.producer = None
+
+                if attempt < max_retries:
+                    logger.info(f"🔄 Retrying in {retry_backoff} seconds...")
+                    time.sleep(retry_backoff)
+                else:
+                    logger.error("❌ All Kafka send attempts failed due to timeout")
+                    return False
+
+            except Exception as e:
+                logger.warning(f"⚠️ Kafka error on attempt {attempt + 1}: {e}")
+                # Always clean up producer on error
+                try:
+                    if self.producer:
+                        self.producer.close(timeout=1)
+                except:
+                    pass
+                self.producer = None
+
+                if attempt < max_retries:
+                    logger.info(f"🔄 Retrying in {retry_backoff} seconds...")
+                    time.sleep(retry_backoff)
+                else:
+                    logger.error(f"❌ All Kafka send attempts failed: {e}")
+                    return False
+
+        return False
+
+    def check_kafka_health(self) -> bool:
+        """Check if Kafka is healthy and accessible"""
+        try:
+            if not is_kafka_enabled():
+                logger.info("ℹ️ Kafka is disabled")
+                return False
+
+            # Try to create a simple producer to test connection
+            test_config = get_producer_config()
+            test_config['bootstrap_servers'] = get_kafka_servers()
+
+            test_producer = KafkaProducer(
+                **test_config,
+                request_timeout_ms=3000,  # Short timeout for health check
+                api_version_auto_timeout_ms=3000
             )
 
-            # Wait for result
-            record_metadata = future.get(timeout=10)
+            # Get cluster metadata to verify connection
+            metadata = test_producer.list_topics(timeout=3)
+            test_producer.close()
 
-            logger.info(f"✅ Message sent to topic '{topic}' partition {record_metadata.partition}")
+            logger.info("✅ Kafka health check passed")
             return True
 
-        except KafkaTimeoutError:
-            logger.error("❌ Kafka timeout while sending message")
-            return False
         except Exception as e:
-            logger.error(f"❌ Failed to send message: {e}")
+            logger.warning(f"⚠️ Kafka health check failed: {e}")
             return False
-    
+
     async def consume_messages_async(self, handler: Union[Callable[[Dict[str, Any]], None], Callable[[Dict[str, Any]], Awaitable[None]]]):
         """Consume messages asynchronously"""
         try:
