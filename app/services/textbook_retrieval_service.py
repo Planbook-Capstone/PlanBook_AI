@@ -18,8 +18,8 @@ class TextbookRetrievalService:
     def _get_qdrant_service(self):
         """Lazy loading của qdrant service"""
         if not self.qdrant_service:
-            from app.services.qdrant_service import qdrant_service
-            self.qdrant_service = qdrant_service
+            from app.services.qdrant_service import get_qdrant_service
+            self.qdrant_service = get_qdrant_service()
         return self.qdrant_service
     
     async def get_lesson_content(self, lesson_id: str) -> Dict[str, Any]:
@@ -147,34 +147,12 @@ class TextbookRetrievalService:
         return await self.get_lesson_content(lesson_id)
 
 
-# Lazy loading global instance để tránh khởi tạo ngay khi import
-_textbook_retrieval_service_instance = None
-
+# Factory function để tạo TextbookRetrievalService instance
 def get_textbook_retrieval_service() -> TextbookRetrievalService:
     """
-    Lấy singleton instance của TextbookRetrievalService
-    Lazy initialization
+    Tạo TextbookRetrievalService instance mới
 
     Returns:
-        TextbookRetrievalService: Service instance
+        TextbookRetrievalService: Fresh instance
     """
-    global _textbook_retrieval_service_instance
-    if _textbook_retrieval_service_instance is None:
-        _textbook_retrieval_service_instance = TextbookRetrievalService()
-    return _textbook_retrieval_service_instance
-
-# Backward compatibility - deprecated, sử dụng get_textbook_retrieval_service() thay thế
-# Lazy loading để tránh khởi tạo ngay khi import
-def _get_textbook_retrieval_service_lazy():
-    """Lazy loading cho backward compatibility"""
-    return get_textbook_retrieval_service()
-
-# Tạo proxy object để lazy loading
-class _TextbookRetrievalServiceProxy:
-    def __getattr__(self, name):
-        return getattr(_get_textbook_retrieval_service_lazy(), name)
-
-    def __call__(self, *args, **kwargs):
-        return _get_textbook_retrieval_service_lazy()(*args, **kwargs)
-
-textbook_retrieval_service = _TextbookRetrievalServiceProxy()
+    return TextbookRetrievalService()

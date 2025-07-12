@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
 
-from app.services.llm_service import llm_service
+from app.services.llm_service import get_llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,8 @@ async def generate_llm_response(request: LLMRequest):
         LLMResponse chứa kết quả từ LLM
     """
     try:
+        llm_service = get_llm_service()
+
         # Kiểm tra LLM service có sẵn không
         if not llm_service.is_available():
             raise HTTPException(
@@ -57,7 +59,7 @@ async def generate_llm_response(request: LLMRequest):
         
         # Gọi LLM service
         logger.info(f"Processing LLM request with {len(request.text)} characters")
-        result = await llm_service.generate_content(
+        result = await llm_service._generate_content(
             prompt=prompt,
             temperature=request.temperature,
             max_tokens=request.max_tokens

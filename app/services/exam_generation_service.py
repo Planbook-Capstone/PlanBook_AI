@@ -986,34 +986,12 @@ HƯỚNG DẪN TẠO CÂU TỰ LUẬN:
             return []
 
 
-# Lazy loading global instance để tránh khởi tạo ngay khi import
-_exam_generation_service_instance = None
-
+# Factory function để tạo ExamGenerationService instance
 def get_exam_generation_service() -> ExamGenerationService:
     """
-    Lấy singleton instance của ExamGenerationService
-    Lazy initialization
+    Tạo ExamGenerationService instance mới
 
     Returns:
-        ExamGenerationService: Service instance
+        ExamGenerationService: Fresh instance
     """
-    global _exam_generation_service_instance
-    if _exam_generation_service_instance is None:
-        _exam_generation_service_instance = ExamGenerationService()
-    return _exam_generation_service_instance
-
-# Backward compatibility - deprecated, sử dụng get_exam_generation_service() thay thế
-# Lazy loading để tránh khởi tạo ngay khi import
-def _get_exam_generation_service_lazy():
-    """Lazy loading cho backward compatibility"""
-    return get_exam_generation_service()
-
-# Tạo proxy object để lazy loading
-class _ExamGenerationServiceProxy:
-    def __getattr__(self, name):
-        return getattr(_get_exam_generation_service_lazy(), name)
-
-    def __call__(self, *args, **kwargs):
-        return _get_exam_generation_service_lazy()(*args, **kwargs)
-
-exam_generation_service = _ExamGenerationServiceProxy()
+    return ExamGenerationService()

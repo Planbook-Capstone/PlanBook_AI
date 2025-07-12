@@ -12,7 +12,7 @@ import re
 # Heavy imports sẽ được lazy load trong __init__ method
 
 from app.core.config import settings
-from app.services.semantic_analysis_service import semantic_analysis_service
+from app.services.semantic_analysis_service import get_semantic_analysis_service
 
 logger = logging.getLogger(__name__)
 
@@ -20,31 +20,15 @@ logger = logging.getLogger(__name__)
 class QdrantService:
     """
     Service quản lý vector embeddings với Qdrant
-    Singleton pattern với Lazy Initialization
     """
 
-    _instance = None
-    _lock = threading.Lock()
-
-    def __new__(cls):
-        """Singleton pattern implementation với thread-safe"""
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super(QdrantService, cls).__new__(cls)
-                    cls._instance._initialized = False
-        return cls._instance
-
     def __init__(self):
-        """Lazy initialization - chỉ khởi tạo một lần"""
-        if self._initialized:
-            return
-
+        """Initialize Qdrant service"""
         self.embedding_model = None
         self.qdrant_client = None
         self.vector_size: Optional[int] = None
         self._service_initialized = False
-        self._initialized = True
+        self.semantic_analysis_service = get_semantic_analysis_service()
 
     def _ensure_service_initialized(self):
         """Ensure Qdrant service is initialized"""
@@ -230,7 +214,7 @@ class QdrantService:
             chunk_vector = self.embedding_model.encode(chunk_text).tolist()
 
             # Phân loại semantic cho chunk sử dụng LLM
-            semantic_info = await semantic_analysis_service.analyze_content_semantic(chunk_text)
+            semantic_info = await self.semantic_analysis_service.analyze_content_semantic(chunk_text)
 
             points.append(
                 qdrant_models.PointStruct(
@@ -332,7 +316,7 @@ class QdrantService:
                     chunk_vector = self.embedding_model.encode(chunk_text).tolist()
 
                     # Phân loại semantic cho chunk sử dụng LLM
-                    semantic_info = await semantic_analysis_service.analyze_content_semantic(chunk_text)
+                    semantic_info = await self.semantic_analysis_service.analyze_content_semantic(chunk_text)
 
                     points.append(
                         qdrant_models.PointStruct(
@@ -1121,35 +1105,12 @@ class QdrantService:
             return {"success": False, "error": str(e)}
 
 
-# Hàm để lấy singleton instance
+# Factory function để tạo QdrantService instance
 def get_qdrant_service() -> QdrantService:
     """
-    Lấy singleton instance của QdrantService
-    Thread-safe lazy initialization
+    Tạo QdrantService instance mới
 
     Returns:
-        QdrantService: Singleton instance
+        QdrantService: Fresh instance
     """
     return QdrantService()
-
-
-# Backward compatibility - deprecated, sử dụng get_qdrant_service() thay thế
-# Lazy loading để tránh khởi tạo ngay khi import
-_qdrant_service_instance = None
-
-def _get_qdrant_service_lazy():
-    """Lazy loading cho backward compatibility"""
-    global _qdrant_service_instance
-    if _qdrant_service_instance is None:
-        _qdrant_service_instance = get_qdrant_service()
-    return _qdrant_service_instance
-
-# Tạo proxy object để lazy loading
-class _QdrantServiceProxy:
-    def __getattr__(self, name):
-        return getattr(_get_qdrant_service_lazy(), name)
-
-    def __call__(self, *args, **kwargs):
-        return _get_qdrant_service_lazy()(*args, **kwargs)
-
-qdrant_service = _QdrantServiceProxy()

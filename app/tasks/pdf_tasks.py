@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional
 import time
 
 from app.core.celery_app import celery_app
-from app.services.mongodb_task_service import mongodb_task_service
+from app.services.mongodb_task_service import get_mongodb_task_service
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ def process_pdf_quick_analysis(self, task_id: str) -> Dict[str, Any]:
         logger.error(f"Error in PDF quick analysis task {task_id}: {error_msg}")
 
         # Mark task as failed in MongoDB
-        run_async_task(mongodb_task_service.mark_task_failed(task_id, error_msg))
+        run_async_task(get_mongodb_task_service().mark_task_failed(task_id, error_msg))
 
         # Update Celery state
         self.update_state(state="FAILURE", meta={"error": error_msg})
@@ -106,13 +106,13 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
     """Async implementation của PDF quick analysis"""
 
     # Get task from MongoDB
-    task = await mongodb_task_service.get_task_status(task_id)
+    task = await get_mongodb_task_service().get_task_status(task_id)
     if not task:
         raise Exception(f"Task {task_id} not found in MongoDB")
 
     try:
         # Mark task as processing
-        await mongodb_task_service.mark_task_processing(task_id)
+        await get_mongodb_task_service().mark_task_processing(task_id)
 
         # Debug: Log task structure
         logger.info(f"Task structure: {json.dumps(task, indent=2, default=str)}")
@@ -139,17 +139,20 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
             logger.info("📍 No lesson_id provided")
 
         # Update progress: Start OCR
-        await mongodb_task_service.update_task_progress(
+        await get_mongodb_task_service().update_task_progress(
             task_id, 10, "Extracting pages with OCR..."
         )
 
         try:
             # Import services here to avoid circular imports
-            from app.services.enhanced_textbook_service import enhanced_textbook_service
-            from app.services.qdrant_service import qdrant_service
+            from app.services.enhanced_textbook_service import get_enhanced_textbook_service
+            from app.services.qdrant_service import get_qdrant_service
+
+            enhanced_textbook_service = get_enhanced_textbook_service()
+            qdrant_service = get_qdrant_service()
 
             # Skip separate OCR step - it's handled inside process_textbook_to_structure
-            await mongodb_task_service.update_task_progress(
+            await get_mongodb_task_service().update_task_progress(
                 task_id, 35, "Skipping image analysis for faster processing..."
             )  # Create metadata
             book_metadata = {
@@ -162,7 +165,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
             }
 
             # Process textbook with enhanced service
-            await mongodb_task_service.update_task_progress(
+            await get_mongodb_task_service().update_task_progress(
                 task_id, 50, "Analyzing book structure and refining content with AI..."
             )
 
@@ -185,7 +188,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
             # Extract the clean text content directly
             clean_book_structure = processing_result.get("clean_book_structure", "")
            
-            await mongodb_task_service.update_task_progress(
+            await get_mongodb_task_service().update_task_progress(
                 task_id, 60, "Book structure analysis and content refinement with OpenRouter LLM completed"
             )
 
@@ -194,7 +197,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
             embeddings_created = False
 
             if create_embeddings:
-                await mongodb_task_service.update_task_progress(
+                await get_mongodb_task_service().update_task_progress(
                     task_id, 70, "Creating embeddings..."
                 )
 
@@ -209,7 +212,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
 
                     if embeddings_result and embeddings_result.get("success"):
                         embeddings_created = True
-                        await mongodb_task_service.update_task_progress(
+                        await get_mongodb_task_service().update_task_progress(
                             task_id, 90, "Embeddings created successfully"
                         )
                         logger.info(f"Embeddings created successfully")
@@ -317,7 +320,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
             }
 
         # Mark task as completed
-        await mongodb_task_service.mark_task_completed(task_id, result)
+        await get_mongodb_task_service().mark_task_completed(task_id, result)
 
         logger.info(f"PDF quick analysis task {task_id} completed successfully")
         return result
@@ -327,7 +330,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
         logger.error(f"Error processing PDF quick analysis task {task_id}: {error_msg}")
 
         # Mark task as failed
-        await mongodb_task_service.mark_task_failed(task_id, error_msg)
+        await get_mongodb_task_service().mark_task_failed(task_id, error_msg)
         raise
 
 

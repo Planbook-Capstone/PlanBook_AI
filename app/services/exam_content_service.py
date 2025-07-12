@@ -466,34 +466,14 @@ class ExamContentService:
             }
 
 
-# Lazy loading global instance để tránh khởi tạo ngay khi import
-_exam_content_service_instance = None
-
+# Factory function để tạo ExamContentService instance
 def get_exam_content_service() -> ExamContentService:
     """
-    Lấy singleton instance của ExamContentService
-    Lazy initialization
+    Tạo ExamContentService instance mới
 
     Returns:
-        ExamContentService: Service instance
+        ExamContentService: Fresh instance
     """
-    global _exam_content_service_instance
-    if _exam_content_service_instance is None:
-        _exam_content_service_instance = ExamContentService()
-    return _exam_content_service_instance
+    return ExamContentService()
 
-# Backward compatibility - deprecated, sử dụng get_exam_content_service() thay thế
-# Lazy loading để tránh khởi tạo ngay khi import
-def _get_exam_content_service_lazy():
-    """Lazy loading cho backward compatibility"""
-    return get_exam_content_service()
 
-# Tạo proxy object để lazy loading
-class _ExamContentServiceProxy:
-    def __getattr__(self, name):
-        return getattr(_get_exam_content_service_lazy(), name)
-
-    def __call__(self, *args, **kwargs):
-        return _get_exam_content_service_lazy()(*args, **kwargs)
-
-exam_content_service = _ExamContentServiceProxy()

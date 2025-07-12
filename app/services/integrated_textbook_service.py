@@ -8,8 +8,8 @@ import uuid
 from typing import Dict, Any
 from datetime import datetime
 
-from app.services.simple_ocr_service import simple_ocr_service
-from app.services.llm_service import llm_service
+from app.services.simple_ocr_service import get_simple_ocr_service
+from app.services.llm_service import get_llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,8 @@ class IntegratedTextbookService:
     """Service xử lý PDF một lần: OCR + LLM Format + Metadata"""
 
     def __init__(self):
-        self.llm_service = llm_service
+        self.llm_service = get_llm_service()
+        self.ocr_service = get_simple_ocr_service()
 
     async def process_pdf_complete(
         self, pdf_content: bytes, filename: str
@@ -39,7 +40,7 @@ class IntegratedTextbookService:
             logger.info(f"Starting integrated processing for: {filename}")
 
             # Step 1: OCR extraction
-            raw_text, ocr_metadata = await simple_ocr_service.extract_text_from_pdf(
+            raw_text, ocr_metadata = await self.ocr_service.extract_text_from_pdf(
                 pdf_content, filename
             )
 

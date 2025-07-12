@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional
 
 from app.services.llm_service import get_llm_service
 from app.services.semantic_analysis_service import get_semantic_analysis_service
-from app.services.background_task_processor import background_task_processor
+from app.services.background_task_processor import get_background_task_processor
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ async def quick_textbook_analysis(
 
         if isImportGuide:
             # Create guide import task
-            task_id = await background_task_processor.create_guide_import_task(
+            task_id = await get_background_task_processor().create_guide_import_task(
                 docx_content=file_content,
                 filename=file.filename,
                 create_embeddings=create_embeddings,
@@ -93,7 +93,7 @@ async def quick_textbook_analysis(
             }
         else:
             # Create textbook analysis task
-            task_id = await background_task_processor.create_quick_analysis_task(
+            task_id = await get_background_task_processor().create_quick_analysis_task(
                 pdf_content=file_content,
                 filename=file.filename,
                 create_embeddings=create_embeddings,

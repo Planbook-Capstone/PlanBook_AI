@@ -13,32 +13,15 @@ logger = logging.getLogger(__name__)
 class LLMService:
     """
     Service sử dụng Gemini API hoặc OpenRouter API để cấu trúc lại text
-    Singleton pattern với Lazy Initialization
     """
 
-    _instance = None
-    _lock = threading.Lock()
-
-    def __new__(cls):
-        """Singleton pattern implementation với thread-safe"""
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super(LLMService, cls).__new__(cls)
-                    cls._instance._initialized = False
-        return cls._instance
-
     def __init__(self):
-        """Lazy initialization - chỉ khởi tạo một lần"""
-        if self._initialized:
-            return
-
+        """Initialize LLM service"""
         self.model = None
         self.openrouter_service = None
         self.use_openrouter = False
         # Không khởi tạo ngay - sẽ khởi tạo khi lần đầu được sử dụng
         self._service_initialized = False
-        self._initialized = True
 
     def _ensure_service_initialized(self):
         """Ensure LLM service is initialized"""
@@ -449,35 +432,12 @@ Hãy trả về tài liệu đã được format đẹp:
                 "formatted_text": ""
             }
 
-# Hàm để lấy singleton instance
+# Factory function để tạo LLMService instance
 def get_llm_service() -> LLMService:
     """
-    Lấy singleton instance của LLMService
-    Thread-safe lazy initialization
+    Tạo LLMService instance mới
 
     Returns:
-        LLMService: Singleton instance
+        LLMService: Fresh instance
     """
     return LLMService()
-
-
-# Backward compatibility - deprecated, sử dụng get_llm_service() thay thế
-# Lazy loading để tránh khởi tạo ngay khi import
-_llm_service_instance = None
-
-def _get_llm_service_lazy():
-    """Lazy loading cho backward compatibility"""
-    global _llm_service_instance
-    if _llm_service_instance is None:
-        _llm_service_instance = get_llm_service()
-    return _llm_service_instance
-
-# Tạo proxy object để lazy loading
-class _LLMServiceProxy:
-    def __getattr__(self, name):
-        return getattr(_get_llm_service_lazy(), name)
-
-    def __call__(self, *args, **kwargs):
-        return _get_llm_service_lazy()(*args, **kwargs)
-
-llm_service = _LLMServiceProxy()

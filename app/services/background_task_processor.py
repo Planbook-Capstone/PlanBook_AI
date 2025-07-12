@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 import concurrent.futures
 
-from app.services.mongodb_task_service import mongodb_task_service, TaskType
+from app.services.mongodb_task_service import get_mongodb_task_service, TaskType
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ class BackgroundTaskProcessor:
     """Service xử lý background tasks sử dụng TaskService"""
 
     def __init__(self):
-        self.task_service = mongodb_task_service
+        self.task_service = get_mongodb_task_service()
         # ThreadPoolExecutor để chạy OCR operations không block event loop
         self.thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
@@ -168,8 +168,11 @@ class BackgroundTaskProcessor:
             await self.update_task_progress(task_id, 10, "Starting PDF processing...")
 
             # Import services
-            from app.services.enhanced_textbook_service import enhanced_textbook_service
-            from app.services.qdrant_service import qdrant_service
+            from app.services.enhanced_textbook_service import get_enhanced_textbook_service
+            from app.services.qdrant_service import get_qdrant_service
+
+            enhanced_textbook_service = get_enhanced_textbook_service()
+            qdrant_service = get_qdrant_service()
 
             # Bước 1: OCR và phân tích cấu trúc
             await self.update_task_progress(task_id, 20, "Extracting text with OCR...")
@@ -324,7 +327,8 @@ class BackgroundTaskProcessor:
             await self.update_task_progress(task_id, 20, "Creating embeddings...")
 
             # Import Qdrant service
-            from app.services.qdrant_service import qdrant_service
+            from app.services.qdrant_service import get_qdrant_service
+            qdrant_service = get_qdrant_service()
 
             # Tạo embeddings
             embeddings_result = await qdrant_service.process_textbook(
@@ -409,12 +413,14 @@ class BackgroundTaskProcessor:
         self,
         lesson_plan_json: Dict[str, Any],
         lesson_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> str:
         """Tạo task sinh nội dung giáo án - sử dụng Celery"""
 
         task_data = {
             "lesson_plan_json": lesson_plan_json,
             "lesson_id": lesson_id,
+            "user_id": user_id,
         }
 
         # Sử dụng Celery thay vì asyncio.create_task
@@ -495,10 +501,11 @@ class BackgroundTaskProcessor:
             )
 
             # Import services
-            from app.services.integrated_textbook_service import (
-                integrated_textbook_service,
-            )
-            from app.services.qdrant_service import qdrant_service
+            from app.services.integrated_textbook_service import IntegratedTextbookService
+            from app.services.qdrant_service import get_qdrant_service
+
+            integrated_textbook_service = IntegratedTextbookService()
+            qdrant_service = get_qdrant_service()
 
             # Bước 1: Tự động phân tích metadata và cấu trúc
             await self.update_task_progress(
@@ -606,8 +613,11 @@ class BackgroundTaskProcessor:
             await self.update_task_progress(task_id, 10, "Starting DOCX guide import...")
 
             # Import services
-            from app.services.exam_import_service import exam_import_service
-            from app.services.qdrant_service import qdrant_service
+            from app.services.exam_import_service import get_exam_import_service
+            from app.services.qdrant_service import get_qdrant_service
+
+            exam_import_service = get_exam_import_service()
+            qdrant_service = get_qdrant_service()
 
             # Bước 1: Trích xuất text từ DOCX
             await self.update_task_progress(task_id, 20, "Extracting text from DOCX...")
@@ -740,10 +750,12 @@ class BackgroundTaskProcessor:
         return "Đang tính toán..."
 
 
-# Singleton instance
-background_task_processor = BackgroundTaskProcessor()
-
-
+# Factory function để tạo BackgroundTaskProcessor instance
 def get_background_task_processor() -> BackgroundTaskProcessor:
-    """Lấy singleton instance của BackgroundTaskProcessor"""
-    return background_task_processor
+    """
+    Tạo BackgroundTaskProcessor instance mới
+
+    Returns:
+        BackgroundTaskProcessor: Fresh instance
+    """
+    return BackgroundTaskProcessor()

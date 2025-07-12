@@ -6,7 +6,7 @@ import asyncio
 import logging
 from celery import Celery
 from app.core.celery_app import celery_app
-from app.services.mongodb_task_service import mongodb_task_service
+from app.services.mongodb_task_service import get_mongodb_task_service
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +53,11 @@ def process_guide_import(self, task_id: str):
 
     try:
         # Import background processor
-        from app.services.background_task_processor import background_task_processor
+        from app.services.background_task_processor import get_background_task_processor
 
         # Chạy task processing với helper function
         run_async_task(
-            background_task_processor.process_guide_import_task(task_id)
+            get_background_task_processor().process_guide_import_task(task_id)
         )
 
         logger.info(f"Completed Celery task for guide import: {task_id}")
@@ -69,7 +69,7 @@ def process_guide_import(self, task_id: str):
         # Mark task as failed in MongoDB
         try:
             run_async_task(
-                mongodb_task_service.mark_task_failed(task_id, str(e))
+                get_mongodb_task_service().mark_task_failed(task_id, str(e))
             )
         except Exception as mark_error:
             logger.error(f"Failed to mark task as failed: {mark_error}")

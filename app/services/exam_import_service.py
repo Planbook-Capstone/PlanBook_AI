@@ -906,34 +906,14 @@ Hãy phân tích và trả về JSON:
             )
 
 
-# Lazy loading global instance để tránh khởi tạo ngay khi import
-_exam_import_service_instance = None
-
+# Factory function để tạo ExamImportService instance
 def get_exam_import_service() -> ExamImportService:
     """
-    Lấy singleton instance của ExamImportService
-    Lazy initialization
+    Tạo ExamImportService instance mới
 
     Returns:
-        ExamImportService: Service instance
+        ExamImportService: Fresh instance
     """
-    global _exam_import_service_instance
-    if _exam_import_service_instance is None:
-        _exam_import_service_instance = ExamImportService()
-    return _exam_import_service_instance
+    return ExamImportService()
 
-# Backward compatibility - deprecated, sử dụng get_exam_import_service() thay thế
-# Lazy loading để tránh khởi tạo ngay khi import
-def _get_exam_import_service_lazy():
-    """Lazy loading cho backward compatibility"""
-    return get_exam_import_service()
 
-# Tạo proxy object để lazy loading
-class _ExamImportServiceProxy:
-    def __getattr__(self, name):
-        return getattr(_get_exam_import_service_lazy(), name)
-
-    def __call__(self, *args, **kwargs):
-        return _get_exam_import_service_lazy()(*args, **kwargs)
-
-exam_import_service = _ExamImportServiceProxy()

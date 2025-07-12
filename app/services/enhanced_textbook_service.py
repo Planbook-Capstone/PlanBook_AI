@@ -12,7 +12,7 @@ import fitz  # PyMuPDF
 from PIL import Image
 import io
 
-from app.services.simple_ocr_service import simple_ocr_service
+from app.services.simple_ocr_service import get_simple_ocr_service
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,7 @@ class EnhancedTextbookService:
 
     def __init__(self):
         self.executor = ThreadPoolExecutor(max_workers=4)
+        self.ocr_service = get_simple_ocr_service()
 
     async def process_textbook_to_structure(
         self,
@@ -178,7 +179,7 @@ class EnhancedTextbookService:
             image = Image.open(io.BytesIO(img_data))
 
             # Use SimpleOCRService's _ocr_image method which handles EasyOCR initialization
-            text = await simple_ocr_service._ocr_image(image, page_data['page_number'])
+            text = await self.ocr_service._ocr_image(image, page_data['page_number'])
             return text
 
         except Exception as e:
@@ -305,5 +306,12 @@ Trả về nội dung đã được lọc và chỉnh sửa (chỉ text thuần 
 
 
 
-# Global instance
-enhanced_textbook_service = EnhancedTextbookService()
+# Factory function để tạo EnhancedTextbookService instance
+def get_enhanced_textbook_service() -> EnhancedTextbookService:
+    """
+    Tạo EnhancedTextbookService instance mới
+
+    Returns:
+        EnhancedTextbookService: Fresh instance
+    """
+    return EnhancedTextbookService()

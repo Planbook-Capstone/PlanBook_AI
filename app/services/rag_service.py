@@ -5,7 +5,7 @@ Xử lý logic RAG: semantic search + LLM generation
 
 import logging
 from typing import Dict, Any, Optional, List
-from app.services.enhanced_textbook_service import EnhancedTextbookService
+from app.services.enhanced_textbook_service import get_enhanced_textbook_service
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +13,7 @@ class RAGService:
     """Service xử lý RAG workflow"""
     
     def __init__(self):
-        self.textbook_service = EnhancedTextbookService()
+        self.textbook_service = get_enhanced_textbook_service()
     
     async def process_rag_query(
         self,
