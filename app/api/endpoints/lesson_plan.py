@@ -699,9 +699,10 @@ async def generate_lesson_plan_content(request: LessonPlanContentRequest):
             )
 
         # Import background_task_processor
-        from app.services.background_task_processor import background_task_processor
+        from app.services.background_task_processor import get_background_task_processor
 
         # Tạo task bất đồng bộ
+        background_task_processor = get_background_task_processor()
         task_id = await background_task_processor.create_lesson_plan_content_task(
             lesson_plan_json=request.lesson_plan_json,
             lesson_id=request.lesson_id,
