@@ -12,6 +12,7 @@ from app.api.endpoints import (
     exam_import,
     kafka_endpoints,
     llm_endpoints,
+    slide_generation,
 )
 from app.services.lesson_plan_framework_service import lesson_plan_framework_service
 from app.services.kafka_service import kafka_service
@@ -59,6 +60,9 @@ api_router.include_router(
 )
 api_router.include_router(
     llm_endpoints.router, prefix="/llm", tags=["LLM Services"]
+)
+api_router.include_router(
+    slide_generation.router, prefix="/slides", tags=["Slide Generation"]
 )
 # Add API router to app
 app.include_router(api_router, prefix=settings.API_PREFIX)
