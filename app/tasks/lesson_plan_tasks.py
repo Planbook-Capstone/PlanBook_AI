@@ -178,9 +178,12 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
             raise Exception(f"Task {task_id} not found in MongoDB")
 
         task_data = task.get("data", {})
+        logger.info(f"data : {task_data}")
         lesson_plan_json = task_data.get("lesson_plan_json")
         lesson_id = task_data.get("lesson_id")
         user_id = task_data.get("user_id")
+        tool_log_id = lesson_plan_json.get("tool_log_id")
+        logger.info(f"tool_log_id : {tool_log_id}")
         print(f"DEBUG: lesson_plan_json type: {type(lesson_plan_json)}, lesson_id: {lesson_id}")
         if not lesson_plan_json:
             raise Exception("lesson_plan_json is required in task data")
@@ -200,7 +203,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
             logger.info(f"📤 Attempting to send Kafka progress update for task {task_id}")
             safe_kafka_call(
                 sync_kafka_progress_service.send_progress_update_sync,
-                task_id=task_id, user_id=user_id, progress=10,
+                tool_log_id=lesson_plan_json.get("tool_log_id"),task_id=task_id, user_id=user_id, progress=10,
                 message="Analyzing lesson plan structure...", status="processing",
                 additional_data={"lesson_id": lesson_id} if lesson_id else None
             )
@@ -217,7 +220,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
         if user_id:
             safe_kafka_call(
                 sync_kafka_progress_service.send_progress_update_sync,
-                task_id=task_id, user_id=user_id, progress=20,
+                tool_log_id=tool_log_id,task_id=task_id, user_id=user_id, progress=20,
                 message=f"Found {total_nodes} nodes to process. Starting content generation...",
                 status="processing"
             )
@@ -230,7 +233,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
         if user_id:
             safe_kafka_call(
                 sync_kafka_progress_service.send_progress_update_sync,
-                task_id=task_id, user_id=user_id, progress=50,
+                tool_log_id=tool_log_id,task_id=task_id, user_id=user_id, progress=50,
                 message="Generating lesson plan content with textbook reference...",
                 status="processing"
             )
@@ -253,7 +256,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
         if user_id:
             safe_kafka_call(
                 sync_kafka_progress_service.send_progress_update_sync,
-                task_id=task_id, user_id=user_id, progress=90,
+                tool_log_id=tool_log_id,task_id=task_id, user_id=user_id, progress=90,
                 message="Content generation completed. Processing results...",
                 status="processing"
             )
@@ -266,7 +269,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
         if user_id:
             safe_kafka_call(
                 sync_kafka_progress_service.send_progress_update_sync,
-                task_id=task_id, user_id=user_id, progress=95,
+                tool_log_id=tool_log_id,task_id=task_id, user_id=user_id, progress=95,
                 message="Finalizing lesson plan content...", status="processing"
             )
         

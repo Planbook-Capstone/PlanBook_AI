@@ -325,11 +325,11 @@ class LessonPlanRequest(BaseModel):
 class LessonPlanGenerateRequest(BaseModel):
     framework_id: str  # ID của khung giáo án mẫu
     user_config: List[Dict[str, Any]]  # JSON cấu hình từ người dùng
-    lesson_id: str  # ID của bài học để lấy thông tin
+    lesson_id: Any # ID của bài học để lấy thông tin
 
 
 class LessonPlanResponse(BaseModel):
-    lesson_plan_id: str
+    lesson_plan_id: Any
     content: dict
     framework_used: str
     created_at: str
@@ -666,7 +666,7 @@ async def export_lesson_plan_by_id_to_docx(lesson_plan_id: str):
 # Pydantic models for lesson plan content generation
 class LessonPlanContentRequest(BaseModel):
     lesson_plan_json: Dict[str, Any]
-    lesson_id: Optional[str] = None
+    lesson_id: Optional[Any] = None
     user_id: Optional[str] = None
 
 
