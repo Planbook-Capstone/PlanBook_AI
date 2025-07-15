@@ -99,10 +99,17 @@ class IntegratedTextbookService:
             text_sample += "\n...[text truncated]"
 
         prompt = f"""
-Bạn là chuyên gia phân tích sách giáo khoa. Hãy phân tích văn bản sau và trả về JSON với 2 phần:
+Bạn là chuyên gia phân tích sách giáo khoa. Hãy phân tích và cấu trúc lại văn bản để tối ưu cho hệ thống chunking thông minh.
 
-1. METADATA: Thông tin về sách
-2. STRUCTURE: Cấu trúc nội dung đã format
+NHIỆM VỤ:
+1. METADATA: Trích xuất thông tin về sách
+2. STRUCTURE: Cấu trúc nội dung theo chuẩn chunking thông minh
+
+YÊU CẦU CẤU TRÚC NỘI DUNG:
+- ĐỊNH NGHĨA: Bắt đầu rõ ràng "Định nghĩa:" hoặc "X là..."
+- BÀI TẬP: Đánh số "Bài 1.", "Ví dụ 1:", "Hãy cho biết..."
+- BẢNG: Bắt đầu "Bảng X:" và giữ nguyên cấu trúc hoàn chỉnh
+- TIỂU MỤC: Sử dụng "I.", "II.", "1.", "2." cho phân cấp
 
 Văn bản từ file "{filename}":
 {text_sample}

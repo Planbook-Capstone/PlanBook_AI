@@ -1134,8 +1134,15 @@ THÔNG TIN NODE:
 NGỮ CẢNH GIÁO ÁN:
 {context_info}
 
-NỘI DUNG BÀI HỌC THAM KHẢO:
+NỘI DUNG BÀI HỌC THAM KHẢO (đã được chunking thông minh):
 {lesson_content}
+
+HƯỚNG DẪN SỬ DỤNG NỘI DUNG THAM KHẢO:
+- Nội dung trên đã được chia thành các chunks có ngữ nghĩa hoàn chỉnh
+- Mỗi chunk chứa: định nghĩa hoàn chỉnh, bài tập từ đầu đến cuối, hoặc bảng không bị cắt
+- Ưu tiên sử dụng chunks có chunk_type="definition" cho khái niệm
+- Sử dụng chunks có chunk_type="example" cho ví dụ minh họa
+- Tham khảo chunks có chunk_type="table" cho dữ liệu cụ thể
 
 YÊU CẦU QUAN TRỌNG:
 1. Nội dung PHẢI ngắn gọn, chỉ 2-3 câu (tối đa 100 từ)
@@ -1143,8 +1150,9 @@ YÊU CẦU QUAN TRỌNG:
 3. PHẢI cụ thể với bài học, không được nói chung chung
 4. Tránh hoàn toàn các cụm từ mở đầu như "Để bắt đầu", "Để giúp học sinh", "Chúng ta cần"
 5. Đi thẳng vào nội dung chính, không dẫn dắt dài dòng
-6. Sử dụng thuật ngữ chính xác từ sách giáo khoa
+6. Sử dụng thuật ngữ chính xác từ sách giáo khoa (giữ nguyên công thức, ký hiệu khoa học)
 7. Tập trung vào {content_target} cụ thể, không lan man
+8. Khi trích dẫn định nghĩa, bài tập, bảng - đảm bảo trích dẫn đầy đủ ngữ nghĩa
 {specific_requirements}
 
 ĐỊNH DẠNG ĐẦU RA:

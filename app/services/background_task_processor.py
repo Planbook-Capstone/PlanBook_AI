@@ -309,57 +309,7 @@ class BackgroundTaskProcessor:
             logger.error(f"Error processing CV task {task_id}: {e}")
             await self.mark_task_failed(task_id, str(e))
 
-    async def process_embeddings_task(self, task_id: str):
-        """Xử lý embeddings task bất đồng bộ"""
 
-        task = await self.task_service.get_task_status(task_id)
-        if not task:
-            logger.error(f"Task {task_id} not found")
-            return
-
-        try:
-            await self.mark_task_processing(task_id)
-
-            # Lấy dữ liệu task
-            book_id = task["data"]["book_id"]
-            book_structure = task["data"]["book_structure"]
-
-            await self.update_task_progress(task_id, 20, "Creating embeddings...")
-
-            # Import Qdrant service
-            from app.services.qdrant_service import get_qdrant_service
-            qdrant_service = get_qdrant_service()
-
-            # Tạo embeddings
-            embeddings_result = await qdrant_service.process_textbook(
-                book_id=book_id, book_structure=book_structure
-            )
-
-            if not embeddings_result.get("success"):
-                raise Exception(
-                    f"Embeddings creation failed: {embeddings_result.get('error')}"
-                )
-
-            await self.update_task_progress(
-                task_id, 90, "Embeddings created successfully"
-            )
-
-            # Tạo kết quả
-            result = {
-                "success": True,
-                "book_id": book_id,
-                "embeddings_info": {
-                    "collection_name": embeddings_result.get("collection_name"),
-                    "vector_count": embeddings_result.get("total_chunks", 0),
-                    "vector_dimension": embeddings_result.get("vector_dimension"),
-                },
-            }
-
-            await self.mark_task_completed(task_id, result)
-
-        except Exception as e:
-            logger.error(f"Error processing embeddings task {task_id}: {e}")
-            await self.mark_task_failed(task_id, str(e))
 
     async def create_quick_analysis_task(
         self,
@@ -367,6 +317,7 @@ class BackgroundTaskProcessor:
         filename: str,
         create_embeddings: bool = True,
         lesson_id: Optional[str] = None,
+        book_id: Optional[str] = None,
     ) -> str:
         """Tạo task phân tích nhanh sách giáo khoa - sử dụng Celery"""
 
@@ -375,6 +326,7 @@ class BackgroundTaskProcessor:
             "filename": filename,
             "create_embeddings": create_embeddings,
             "lesson_id": lesson_id,
+            "book_id": book_id,
         }
 
         # Sử dụng Celery thay vì asyncio.create_task
@@ -390,6 +342,7 @@ class BackgroundTaskProcessor:
         self,
         docx_content: bytes,
         filename: str,
+        book_id: str,
         create_embeddings: bool = True,
     ) -> str:
         """Tạo task import hướng dẫn từ file DOCX - sử dụng Celery"""
@@ -397,6 +350,7 @@ class BackgroundTaskProcessor:
         task_data = {
             "file_content": docx_content,
             "filename": filename,
+            "book_id": book_id,
             "create_embeddings": create_embeddings,
         }
 
@@ -462,138 +416,9 @@ class BackgroundTaskProcessor:
                 "error": str(e)
             }
 
-    # DEPRECATED: Phương thức này đã được thay thế bằng Celery task
-    # Sử dụng create_quick_analysis_task() thay thế
-    async def process_quick_analysis_task(self, task_id: str):
-        """
-        DEPRECATED: Method này đã được thay thế bằng Celery task
-        Sử dụng create_quick_analysis_task() để tạo task và Celery worker sẽ xử lý
-        """
-        logger.warning(
-            f"process_quick_analysis_task() is deprecated. Task {task_id} should be processed by Celery worker."
-        )
 
-        # Redirect to Celery task status check
-        task_status = await self.task_service.get_task_status(task_id)
-        if task_status:
-            logger.info(f"Task {task_id} status: {task_status.get('status')}")
-        else:
-            logger.error(f"Task {task_id} not found in MongoDB")
 
-    async def process_pdf_auto_task(self, task_id: str):
-        """Xử lý task PDF với tự động phân tích metadata"""
 
-        task = await self.task_service.get_task_status(task_id)
-        if not task:
-            logger.error(f"Task {task_id} not found")
-            return
-
-        try:
-            await self.mark_task_processing(task_id)
-
-            # Lấy dữ liệu task
-            file_content = task["data"]["file_content"]
-            filename = task["data"]["filename"]
-            create_embeddings = task["data"].get("create_embeddings", True)
-
-            await self.update_task_progress(
-                task_id, 10, "Starting PDF processing with auto metadata detection..."
-            )
-
-            # Import services
-            from app.services.integrated_textbook_service import IntegratedTextbookService
-            from app.services.qdrant_service import get_qdrant_service
-
-            integrated_textbook_service = IntegratedTextbookService()
-            qdrant_service = get_qdrant_service()
-
-            # Bước 1: Tự động phân tích metadata và cấu trúc
-            await self.update_task_progress(
-                task_id, 20, "Analyzing PDF content and extracting metadata..."
-            )
-
-            integrated_result = await integrated_textbook_service.process_pdf_complete(
-                pdf_content=file_content, filename=filename
-            )
-
-            if not integrated_result.get("success"):
-                raise Exception(
-                    f"PDF analysis failed: {integrated_result.get('error')}"
-                )
-
-            # Lấy metadata và structure đã được phân tích tự động
-            extracted_metadata = integrated_result["extracted_metadata"]
-            book_structure = integrated_result["formatted_structure"]
-
-            await self.update_task_progress(
-                task_id, 60, "PDF structure analysis completed"
-            )
-
-            # Bước 2: Tạo embeddings nếu được yêu cầu
-            embeddings_result = None
-            if create_embeddings:
-                await self.update_task_progress(task_id, 70, "Creating embeddings...")
-
-                embeddings_result = await qdrant_service.process_textbook(
-                    book_id=extracted_metadata.get("id", "unknown"),
-                    book_structure=book_structure,
-                )
-
-                if embeddings_result.get("success"):
-                    await self.update_task_progress(
-                        task_id, 90, "Embeddings created successfully"
-                    )
-                else:
-                    logger.warning(
-                        f"Embeddings creation failed: {embeddings_result.get('error')}"
-                    )
-
-            # Tạo kết quả cuối cùng
-            result = {
-                "success": True,
-                "book_id": extracted_metadata.get("id"),
-                "filename": filename,
-                "auto_detected_metadata": extracted_metadata,
-                "book_structure": book_structure,
-                "statistics": {
-                    "total_pages": integrated_result.get("processing_info", {}).get(
-                        "total_pages", 0
-                    ),
-                    "total_chapters": len(book_structure.get("chapters", [])),
-                    "total_lessons": sum(
-                        len(ch.get("lessons", []))
-                        for ch in book_structure.get("chapters", [])
-                    ),
-                },
-                "processing_info": {
-                    "ocr_applied": True,
-                    "llm_analysis": True,
-                    "auto_metadata_detection": True,
-                    "processing_method": "integrated_auto_async",
-                },
-                "embeddings_created": embeddings_result.get("success", False)
-                if embeddings_result
-                else False,
-                "embeddings_info": {
-                    "collection_name": embeddings_result.get("collection_name")
-                    if embeddings_result
-                    else None,
-                    "vector_count": embeddings_result.get("total_chunks", 0)
-                    if embeddings_result
-                    else 0,
-                    "vector_dimension": embeddings_result.get("vector_dimension")
-                    if embeddings_result
-                    else None,
-                }
-                if embeddings_result
-                else None,
-            }
-
-            await self.mark_task_completed(task_id, result)
-
-        except Exception as e:
-            logger.error(f"Error processing auto PDF task {task_id}: {e}")
-            await self.mark_task_failed(task_id, str(e))
 
     async def process_guide_import_task(self, task_id: str):
         """Xử lý task import hướng dẫn từ file DOCX"""
@@ -608,6 +433,7 @@ class BackgroundTaskProcessor:
             # Lấy dữ liệu task
             file_content = task["data"]["file_content"]
             filename = task["data"]["filename"]
+            book_id = task["data"]["book_id"]
             create_embeddings = task["data"].get("create_embeddings", True)
 
             await self.update_task_progress(task_id, 10, "Starting DOCX guide import...")
@@ -629,21 +455,19 @@ class BackgroundTaskProcessor:
 
             await self.update_task_progress(task_id, 40, "Text extraction completed")
 
-            # Bước 2: Tạo guide ID và metadata
-            import uuid
-            guide_id = f"guide_{uuid.uuid4().hex[:8]}"
+            # Bước 2: Sử dụng book_id từ request (đã được xử lý trong endpoint)
 
             # Bước 3: Tạo embeddings nếu được yêu cầu
             embeddings_result = None
             if create_embeddings:
                 await self.update_task_progress(task_id, 60, "Creating embeddings for guide content...")
 
-                # Sử dụng process_textbook với text_content cho guide
+                # Sử dụng process_textbook với parameter content thống nhất cho guide
                 embeddings_result = await qdrant_service.process_textbook(
-                    book_id=guide_id,
-                    text_content=extracted_text,
+                    book_id=book_id,
+                    content=extracted_text,  # Sử dụng parameter content thống nhất
                     lesson_id=f"guide_{filename}",
-                    book_title=f"Guide: {filename}"
+                    content_type="guide"
                 )
 
                 if embeddings_result.get("success"):
@@ -658,7 +482,7 @@ class BackgroundTaskProcessor:
             # Tạo kết quả cuối cùng
             result = {
                 "success": True,
-                "guide_id": guide_id,
+                "book_id": book_id,
                 "filename": filename,
                 "content_length": len(extracted_text),
                 "content_preview": extracted_text[:500] + "..." if len(extracted_text) > 500 else extracted_text,

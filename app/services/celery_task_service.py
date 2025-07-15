@@ -79,8 +79,6 @@ class CeleryTaskService:
         """
         task_mapping = {
             "quick_analysis": "app.tasks.pdf_tasks.process_pdf_quick_analysis",
-            "process_textbook": "app.tasks.pdf_tasks.process_pdf_textbook",
-            "process_textbook_auto": "app.tasks.pdf_tasks.process_pdf_textbook_auto",
             "process_cv": "app.tasks.cv_tasks.process_cv_task",
             "create_embeddings": "app.tasks.embeddings_tasks.create_embeddings_task",
             "update_embeddings": "app.tasks.embeddings_tasks.update_embeddings_task",
@@ -193,11 +191,11 @@ class CeleryTaskService:
         """Kiểm tra task_type có hợp lệ không"""
         valid_types = {
             "quick_analysis",
-            "process_textbook",
-            "process_textbook_auto",
             "process_cv",
             "create_embeddings",
             "update_embeddings",
+            "lesson_plan_content_generation",
+            "smart_exam_generation",
             "guide_import"
         }
         return task_type in valid_types

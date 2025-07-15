@@ -69,9 +69,11 @@ async def _create_embeddings_async(task_id: str) -> Dict[str, Any]:
         # Import Qdrant service
         from app.services.qdrant_service import qdrant_service
         
-        # Tạo embeddings
+        # Tạo embeddings - sử dụng parameter content thống nhất
         embeddings_result = await qdrant_service.process_textbook(
-            book_id=book_id, book_structure=book_structure
+            book_id=book_id,
+            content=book_structure,  # Sử dụng parameter content thống nhất
+            content_type="textbook"
         )
         
         if not embeddings_result.get("success"):

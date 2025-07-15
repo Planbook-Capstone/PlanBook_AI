@@ -20,6 +20,8 @@ class SmartExamGenerationService:
 
     def __init__(self):
         self.llm_service = get_openrouter_service()
+        # Đảm bảo service được khởi tạo đầy đủ
+        self.llm_service._ensure_service_initialized()
         logger.info("🔄 SmartExamGenerationService: First-time initialization triggered")
 
     async def generate_smart_exam(

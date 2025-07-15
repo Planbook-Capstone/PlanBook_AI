@@ -25,10 +25,11 @@ async def create_embeddings(enhanced_result: Dict[str, Any], book_metadata: Dict
         if isinstance(book_structure_dict, str):
             book_structure_dict = json.loads(book_structure_dict)
 
-        # Tạo embeddings và lưu vào Qdrant
+        # Tạo embeddings và lưu vào Qdrant - sử dụng parameter content thống nhất
         embedding_result = await qdrant_service.process_textbook(
             book_id=book_metadata.get("id"),
-            book_structure=book_structure_dict,  # Đảm bảo gửi dictionary
+            content=book_structure_dict,  # Sử dụng parameter content thống nhất
+            content_type="textbook"
         )
 
         # Thêm thông tin về embeddings vào kết quả

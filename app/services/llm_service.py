@@ -38,6 +38,8 @@ class LLMService:
             if settings.OPENROUTER_API_KEY:
                 logger.info("🔧 LLMService: Setting up OpenRouter integration...")
                 self.openrouter_service = get_openrouter_service()
+                # Đảm bảo service được khởi tạo đầy đủ
+                self.openrouter_service._ensure_service_initialized()
                 if self.openrouter_service.is_available():
                     self.use_openrouter = True
                     logger.info("✅ LLMService: OpenRouter integration ready")
