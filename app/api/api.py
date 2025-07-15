@@ -14,6 +14,7 @@ from app.api.endpoints import (
     llm_endpoints,
     auth_endpoints,
     protected_demo,
+    rag_endpoints,
 )
 
 from app.services.kafka_service import kafka_service
@@ -68,6 +69,9 @@ api_router.include_router(
 )
 api_router.include_router(
     protected_demo.router, prefix="/demo", tags=["Authentication Demo"]
+)
+api_router.include_router(
+    rag_endpoints.router, prefix="/rag", tags=["RAG Services"]
 )
 # Add API router to app
 app.include_router(api_router, prefix=settings.API_PREFIX)
