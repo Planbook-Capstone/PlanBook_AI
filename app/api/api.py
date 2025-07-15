@@ -1,5 +1,6 @@
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
+import json
 
 from app.api.endpoints.auto_grading import auto_grading_endpoint
 from app.core.config import settings
@@ -117,9 +118,11 @@ async def start_kafka_consumer_background():
         print(f"[ERROR] Kafka consumer error: {e}")
 
 
-async def handle_incoming_message(message_data: dict):
+async def handle_incoming_message(data: dict):
     """Handle incoming messages from other services via Kafka"""
     try:
+        message_data_str = data.get("payload", "{}")
+        message_data = json.loads(message_data_str)
         print(f"[KAFKA] 📨 Received message from other service: {message_data}")
 
         # Extract message information
@@ -139,7 +142,7 @@ async def handle_incoming_message(message_data: dict):
         # Process message based on type
         if message_type == "lesson_plan_request":
             await handle_lesson_plan_request(data)
-        elif message_type == "lesson_plan_content_generation_request":
+        elif message_type == "Chấm điểm":
             await handle_lesson_plan_content_generation_request(data)
         elif message_type == "exam_generation_request":
             await handle_exam_generation_request(data)
@@ -217,7 +220,7 @@ async def handle_lesson_plan_content_generation_request(data: dict):
         user_id = data.get("user_id", "")
         lesson_plan_json = data.get("lesson_plan_json", {})
         lesson_id = data.get("lesson_id", "")
-
+        tool_log_id = lesson_plan_json.get("tool_log_id","")
         if not user_id:
             print(f"[KAFKA] ❌ Missing user_id in lesson plan content generation request")
             return
@@ -256,6 +259,7 @@ async def handle_lesson_plan_content_generation_request(data: dict):
             "type": "lesson_plan_content_generation_response",
             "data": {
                 "status": "accepted",
+                "tool_log_id": tool_log_id,
                 "task_id": task_id,
                 "user_id": user_id,
                 "message": "Lesson plan content generation task created successfully",

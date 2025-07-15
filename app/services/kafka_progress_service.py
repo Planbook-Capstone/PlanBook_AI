@@ -244,6 +244,7 @@ class SyncKafkaProgressService:
 
     def send_progress_update_sync(
         self,
+        tool_log_id: str,
         task_id: str,
         user_id: str,
         progress: int,
@@ -258,6 +259,7 @@ class SyncKafkaProgressService:
         try:
             # Chuẩn bị message data
             progress_data = {
+                "tool_log_id": tool_log_id,
                 "task_id": task_id,
                 "user_id": user_id,
                 "progress": progress,
