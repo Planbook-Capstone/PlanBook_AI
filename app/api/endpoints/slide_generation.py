@@ -18,7 +18,7 @@ from app.models.slide_generation_models import (
 )
 from app.services.slide_generation_service import get_slide_generation_service
 from app.services.mongodb_task_service import get_mongodb_task_service
-from app.tasks.slide_generation_tasks import trigger_slide_generation_task
+from app.tasks.slide_generation_tasks import trigger_slide_generation_task, test_slide_generation_task
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -59,7 +59,8 @@ async def generate_slides_sync(request: SlideGenerationRequest):
         result = await slide_service.generate_slides_from_lesson(
             lesson_id=request.lesson_id,
             template_id=request.template_id,
-            config_prompt=request.config_prompt
+            config_prompt=request.config_prompt,
+            presentation_title=request.presentation_title
         )
         
         if result["success"]:
@@ -340,7 +341,7 @@ async def health_check():
                 "/health"  # Health check
             ]
         }
-        
+
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return {
@@ -351,4 +352,31 @@ async def health_check():
                 "llm_service": False,
                 "google_slides": False
             }
+        }
+
+
+@router.post("/test-celery")
+async def test_celery():
+    """
+    Test endpoint để kiểm tra Celery worker có hoạt động không
+    """
+    try:
+        logger.info("🧪 Testing Celery worker...")
+
+        # Trigger test task
+        result = test_slide_generation_task.delay("Test from API endpoint")
+
+        return {
+            "success": True,
+            "message": "Celery test task triggered",
+            "task_id": result.id,
+            "status": "Task sent to worker"
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Celery test failed: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Celery worker may not be running"
         }

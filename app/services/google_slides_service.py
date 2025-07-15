@@ -245,6 +245,15 @@ Service will be disabled.
             }
 
         try:
+            # Bước 0: Validate template trước khi copy
+            logger.info(f"Validating template {template_id} before copying...")
+            validation_result = await self.validate_template(template_id)
+            if not validation_result["success"]:
+                return {
+                    "success": False,
+                    "error": f"Template validation failed: {validation_result['error']}"
+                }
+
             # Bước 1: Copy template thành file mới ngay từ đầu
             logger.info(f"Copying template {template_id} to new file: {new_title}")
             copy_result = await self.copy_template(template_id, new_title)
@@ -305,6 +314,81 @@ Service will be disabled.
             return {
                 "success": False,
                 "error": str(e)
+            }
+
+    async def validate_template(self, template_id: str) -> Dict[str, Any]:
+        """
+        Kiểm tra template có tồn tại và có thể truy cập được không
+
+        Args:
+            template_id: ID của Google Slides template
+
+        Returns:
+            Dict kết quả validation
+        """
+        if not self.is_available():
+            return {
+                "success": False,
+                "error": "Google Slides service not available"
+            }
+
+        try:
+            # Kiểm tra file có tồn tại và có thể truy cập
+            logger.info(f"Validating template file: {template_id}")
+
+            # Thử lấy metadata của file
+            file_metadata = self.drive_service.files().get(
+                fileId=template_id,
+                fields="id,name,mimeType,capabilities"
+            ).execute()
+
+            # Kiểm tra mime type
+            mime_type = file_metadata.get('mimeType', '')
+            if mime_type != 'application/vnd.google-apps.presentation':
+                logger.error(f"Invalid template mime type: {mime_type}")
+                return {
+                    "success": False,
+                    "error": f"Template is not a Google Slides presentation (mime type: {mime_type})"
+                }
+
+            # Kiểm tra quyền truy cập
+            capabilities = file_metadata.get('capabilities', {})
+            if not capabilities.get('canCopy', False):
+                logger.error(f"Cannot copy template: missing copy permission")
+                return {
+                    "success": False,
+                    "error": "Missing permission to copy this template"
+                }
+
+            logger.info(f"✅ Template validation successful: {file_metadata.get('name')}")
+            return {
+                "success": True,
+                "template_name": file_metadata.get('name'),
+                "template_id": template_id
+            }
+
+        except HttpError as e:
+            logger.error(f"HTTP error validating template {template_id}: {e}")
+            if e.resp.status == 404:
+                return {
+                    "success": False,
+                    "error": f"Template not found: {template_id}"
+                }
+            elif e.resp.status == 403:
+                return {
+                    "success": False,
+                    "error": f"Permission denied: You don't have access to this template"
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": f"HTTP error validating template: {e}"
+                }
+        except Exception as e:
+            logger.error(f"Error validating template {template_id}: {e}")
+            return {
+                "success": False,
+                "error": f"Error validating template: {str(e)}"
             }
 
     async def analyze_template_structure(self, template_id: str) -> Dict[str, Any]:
@@ -378,43 +462,75 @@ Service will be disabled.
                 "error": "Google Slides service not available"
             }
 
-        try:
-            copied_file = self.drive_service.files().copy(
-                fileId=template_id,
-                body={'name': new_title}
-            ).execute()
+        # Retry logic for Google API calls
+        max_retries = 3
+        retry_delay = 2  # seconds
 
-            self.drive_service.permissions().create(
-            fileId=copied_file.get('id'),
-            body={
-                'type': 'anyone',
-                'role': 'writer'
-            },
-            fields='id',
-            supportsAllDrives=True,
-            sendNotificationEmail=False
-            ).execute()
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Attempting to copy template {template_id} (attempt {attempt + 1}/{max_retries})")
 
+                copied_file = self.drive_service.files().copy(
+                    fileId=template_id,
+                    body={'name': new_title}
+                ).execute()
 
-            return {
-                "success": True,
-                "file_id": copied_file.get('id'),
-                "name": copied_file.get('name'),
-                "web_view_link": f"https://docs.google.com/presentation/d/{copied_file.get('id')}/edit"
-            }
+                # Set permissions for the copied file
+                self.drive_service.permissions().create(
+                    fileId=copied_file.get('id'),
+                    body={
+                        'type': 'anyone',
+                        'role': 'writer'
+                    },
+                    fields='id',
+                    supportsAllDrives=True,
+                    sendNotificationEmail=False
+                ).execute()
 
-        except HttpError as e:
-            logger.error(f"HTTP error copying template {template_id}: {e}")
-            return {
-                "success": False,
-                "error": f"HTTP error: {e}"
-            }
-        except Exception as e:
-            logger.error(f"Error copying template {template_id}: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
+                logger.info(f"✅ Template copied successfully on attempt {attempt + 1}")
+                return {
+                    "success": True,
+                    "file_id": copied_file.get('id'),
+                    "name": copied_file.get('name'),
+                    "web_view_link": f"https://docs.google.com/presentation/d/{copied_file.get('id')}/edit"
+                }
+
+            except HttpError as e:
+                logger.error(f"HTTP error copying template {template_id} (attempt {attempt + 1}): {e}")
+
+                # Check if it's a retryable error
+                if e.resp.status in [500, 502, 503, 504] and attempt < max_retries - 1:
+                    logger.info(f"Retryable error, waiting {retry_delay} seconds before retry...")
+                    import asyncio
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    continue
+                else:
+                    return {
+                        "success": False,
+                        "error": f"HTTP error: {e}"
+                    }
+
+            except Exception as e:
+                logger.error(f"Error copying template {template_id} (attempt {attempt + 1}): {e}")
+
+                if attempt < max_retries - 1:
+                    logger.info(f"Unexpected error, waiting {retry_delay} seconds before retry...")
+                    import asyncio
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    continue
+                else:
+                    return {
+                        "success": False,
+                        "error": str(e)
+                    }
+
+        # This should never be reached, but just in case
+        return {
+            "success": False,
+            "error": f"Failed to copy template after {max_retries} attempts"
+        }
 
     async def update_copied_presentation_content(
         self,

@@ -15,12 +15,23 @@ from app.services.slide_generation_service import get_slide_generation_service
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(bind=True, name="slide_generation.generate_slides_task")
-def generate_slides_task(self, task_id: str, lesson_id: str, template_id: str, 
+@celery_app.task(name="app.tasks.slide_generation_tasks.test_task")
+def test_slide_generation_task(message: str = "Test slide generation task"):
+    """Simple test task để kiểm tra Celery worker"""
+    logger.info(f"🧪 TEST TASK EXECUTED: {message}")
+    return {
+        "success": True,
+        "message": message,
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+@celery_app.task(bind=True, name="app.tasks.slide_generation_tasks.generate_slides_task")
+def generate_slides_task(self, task_id: str, lesson_id: str, template_id: str,
                         config_prompt: str = None, presentation_title: str = None):
     """
     Celery task để tạo slide tự động bất đồng bộ
-    
+
     Args:
         task_id: ID của task trong MongoDB
         lesson_id: ID của bài học
@@ -28,18 +39,33 @@ def generate_slides_task(self, task_id: str, lesson_id: str, template_id: str,
         config_prompt: Prompt cấu hình tùy chỉnh (optional)
         presentation_title: Tiêu đề presentation tùy chỉnh (optional)
     """
+
+    logger.info(f"🚀 CELERY TASK STARTED: generate_slides_task")
+    logger.info(f"   Task ID: {task_id}")
+    logger.info(f"   Lesson ID: {lesson_id}")
+    logger.info(f"   Template ID: {template_id}")
+    logger.info(f"   Config Prompt: {config_prompt}")
+    logger.info(f"   Presentation Title: {presentation_title}")
     
     async def _async_generate_slides():
         """Async wrapper cho slide generation"""
-        task_service = get_mongodb_task_service()
-        
+        logger.info(f"🔄 ASYNC FUNCTION STARTED for task: {task_id}")
+
+        try:
+            logger.info("🔄 Getting MongoDB task service...")
+            task_service = get_mongodb_task_service()
+            logger.info("✅ MongoDB task service obtained")
+        except Exception as e:
+            logger.error(f"❌ Failed to get MongoDB task service: {e}")
+            raise
+
         try:
             logger.info(f"🚀 Bắt đầu task tạo slide: {task_id}")
             
             # Cập nhật trạng thái: Bắt đầu xử lý
+            await task_service.mark_task_processing(task_id)
             await task_service.update_task_progress(
-                task_id, 
-                status="PROGRESS", 
+                task_id,
                 progress=10,
                 message="Đang khởi tạo dịch vụ tạo slide..."
             )
@@ -48,19 +74,15 @@ def generate_slides_task(self, task_id: str, lesson_id: str, template_id: str,
             slide_service = get_slide_generation_service()
             
             if not slide_service.is_available():
-                await task_service.update_task_progress(
+                await task_service.mark_task_failed(
                     task_id,
-                    status="FAILURE",
-                    progress=0,
-                    message="❌ Dịch vụ tạo slide không khả dụng",
-                    result={"success": False, "error": "Service not available"}
+                    error="Dịch vụ tạo slide không khả dụng"
                 )
                 return
             
             # Cập nhật: Đang lấy nội dung bài học
             await task_service.update_task_progress(
                 task_id,
-                status="PROGRESS",
                 progress=20,
                 message="📖 Đang lấy nội dung bài học..."
             )
@@ -68,7 +90,6 @@ def generate_slides_task(self, task_id: str, lesson_id: str, template_id: str,
             # Cập nhật: Đang phân tích template
             await task_service.update_task_progress(
                 task_id,
-                status="PROGRESS", 
                 progress=30,
                 message="🔍 Đang phân tích cấu trúc template Google Slides..."
             )
@@ -76,7 +97,6 @@ def generate_slides_task(self, task_id: str, lesson_id: str, template_id: str,
             # Cập nhật: Đang sinh nội dung với LLM
             await task_service.update_task_progress(
                 task_id,
-                status="PROGRESS",
                 progress=50,
                 message="🤖 Đang sử dụng AI để sinh nội dung slide..."
             )
@@ -92,21 +112,17 @@ def generate_slides_task(self, task_id: str, lesson_id: str, template_id: str,
                 # Cập nhật: Đang tạo slides
                 await task_service.update_task_progress(
                     task_id,
-                    status="PROGRESS",
                     progress=80,
                     message="📊 Đang tạo slides trên Google Slides..."
                 )
-                
+
                 # Hoàn thành thành công
-                await task_service.update_task_progress(
+                await task_service.mark_task_completed(
                     task_id,
-                    status="SUCCESS",
-                    progress=100,
-                    message=f"✅ Tạo slide thành công! Đã tạo {result['slides_created']} slide.",
                     result={
                         "success": True,
                         "lesson_id": result["lesson_id"],
-                        "template_id": result["template_id"],
+                        "template_id": result["original_template_id"],
                         "presentation_id": result["presentation_id"],
                         "presentation_title": result["presentation_title"],
                         "web_view_link": result["web_view_link"],
@@ -121,17 +137,9 @@ def generate_slides_task(self, task_id: str, lesson_id: str, template_id: str,
             else:
                 # Xử lý lỗi
                 error_message = result.get("error", "Unknown error")
-                await task_service.update_task_progress(
+                await task_service.mark_task_failed(
                     task_id,
-                    status="FAILURE",
-                    progress=0,
-                    message=f"❌ Lỗi tạo slide: {error_message}",
-                    result={
-                        "success": False,
-                        "error": error_message,
-                        "lesson_id": lesson_id,
-                        "template_id": template_id
-                    }
+                    error=f"Lỗi tạo slide: {error_message}"
                 )
                 
                 logger.error(f"❌ Task {task_id} thất bại: {error_message}")
@@ -140,50 +148,48 @@ def generate_slides_task(self, task_id: str, lesson_id: str, template_id: str,
             logger.error(f"❌ Lỗi không mong muốn trong task {task_id}: {e}")
             
             try:
-                await task_service.update_task_progress(
+                await task_service.mark_task_failed(
                     task_id,
-                    status="FAILURE",
-                    progress=0,
-                    message=f"❌ Lỗi hệ thống: {str(e)}",
-                    result={
-                        "success": False,
-                        "error": str(e),
-                        "lesson_id": lesson_id,
-                        "template_id": template_id
-                    }
+                    error=f"Lỗi hệ thống: {str(e)}"
                 )
             except Exception as update_error:
                 logger.error(f"❌ Không thể cập nhật trạng thái task: {update_error}")
     
     # Chạy async function
+    logger.info(f"🔄 Starting Celery task execution for task_id: {task_id}")
+
     try:
-        # Tạo event loop mới nếu cần
+        # Sử dụng asyncio.run() thay vì event loop phức tạp
+        logger.info("🔄 Running async slide generation function...")
+        asyncio.run(_async_generate_slides())
+        logger.info(f"✅ Celery task completed successfully for task_id: {task_id}")
+
+    except Exception as e:
+        logger.error(f"❌ Lỗi chạy async task {task_id}: {e}")
+        logger.error(f"❌ Exception type: {type(e).__name__}")
+        logger.error(f"❌ Exception details: {str(e)}")
+
+        # Fallback: cập nhật trạng thái lỗi trực tiếp - sử dụng new_event_loop
         try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
+            logger.info("🔄 Attempting to update task status to FAILURE...")
+            task_service = get_mongodb_task_service()
+
+            # Create a new event loop instead of using asyncio.run() again
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-        
-        # Chạy async function
-        loop.run_until_complete(_async_generate_slides())
-        
-    except Exception as e:
-        logger.error(f"❌ Lỗi chạy async task: {e}")
-        # Fallback: cập nhật trạng thái lỗi trực tiếp
-        try:
-            task_service = get_mongodb_task_service()
-            asyncio.run(task_service.update_task_progress(
-                task_id,
-                status="FAILURE",
-                progress=0,
-                message=f"❌ Lỗi hệ thống: {str(e)}",
-                result={"success": False, "error": str(e)}
-            ))
-        except:
-            pass
+            try:
+                loop.run_until_complete(task_service.mark_task_failed(
+                    task_id,
+                    error=f"Lỗi hệ thống: {str(e)}"
+                ))
+                logger.info("✅ Task status updated to FAILURE")
+            finally:
+                loop.close()
+        except Exception as update_error:
+            logger.error(f"❌ Failed to update task status: {update_error}")
 
 
-@celery_app.task(bind=True, name="slide_generation.cleanup_old_presentations")
+@celery_app.task(bind=True, name="app.tasks.slide_generation_tasks.cleanup_old_presentations")
 def cleanup_old_presentations_task(self, days_old: int = 7):
     """
     Celery task để dọn dẹp các presentation cũ trên Google Drive
@@ -260,14 +266,28 @@ async def trigger_slide_generation_task(
         )
         
         # Trigger Celery task
-        generate_slides_task.delay(
-            task_id=task_id,
-            lesson_id=lesson_id,
-            template_id=template_id,
-            config_prompt=config_prompt,
-            presentation_title=presentation_title
-        )
-        
+        logger.info(f"🔄 About to trigger Celery task for task_id: {task_id}")
+        logger.info(f"   Lesson ID: {lesson_id}")
+        logger.info(f"   Template ID: {template_id}")
+
+        try:
+            # Trigger Celery task với apply_async và queue cụ thể
+            celery_result = generate_slides_task.apply_async(
+                args=[task_id, lesson_id, template_id, config_prompt, presentation_title],
+                queue='slide_generation_queue'
+            )
+
+            logger.info(f"✅ Celery task triggered successfully:")
+            logger.info(f"   Task ID: {task_id}")
+            logger.info(f"   Celery Result ID: {celery_result.id}")
+            logger.info(f"   Celery State: {celery_result.state}")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to trigger Celery task: {e}")
+            logger.error(f"   Exception type: {type(e).__name__}")
+            logger.error(f"   Exception details: {str(e)}")
+            raise
+
         logger.info(f"✅ Đã trigger slide generation task: {task_id}")
         return task_id
         
