@@ -3,24 +3,25 @@ Qdrant Service - Quản lý vector embeddings với Qdrant
 """
 
 import logging
-import threading
-from typing import Dict, Any, List, Optional, Union, cast
-import uuid
+from typing import Dict, Any, Optional
 import datetime
-import re
 
 # Heavy imports sẽ được lazy load trong __init__ method
 
 from app.core.config import settings
 from app.services.semantic_analysis_service import get_semantic_analysis_service
+from app.services.smart_chunking_service import get_smart_chunking_service
 
 logger = logging.getLogger(__name__)
 
 
 class QdrantService:
     """
-    Service quản lý vector embeddings với Qdrant
+    Service quản lý vector embeddings với Qdrant - Unified Collection
     """
+
+    # Legacy unified collection name (for backward compatibility)
+    UNIFIED_COLLECTION_NAME = "textbooks_all"
 
     def __init__(self):
         """Initialize Qdrant service"""
@@ -29,6 +30,7 @@ class QdrantService:
         self.vector_size: Optional[int] = None
         self._service_initialized = False
         self.semantic_analysis_service = get_semantic_analysis_service()
+        self.smart_chunking_service = get_smart_chunking_service()
 
     def _ensure_service_initialized(self):
         """Ensure Qdrant service is initialized"""
@@ -36,10 +38,9 @@ class QdrantService:
             logger.info("🔄 QdrantService: First-time initialization triggered")
             self._init_embedding_model()
             self._init_qdrant_client()
+            self._ensure_unified_collection_exists()
             self._service_initialized = True
             logger.info("✅ QdrantService: Initialization completed")
-
-
 
     def _init_embedding_model(self):
         """Khởi tạo mô hình embedding"""
@@ -93,69 +94,129 @@ class QdrantService:
         """Khởi tạo kết nối Qdrant"""
         try:
             from qdrant_client import QdrantClient
+
+            logger.info(f"🔄 Initializing Qdrant client...")
+            logger.info(f"   - URL: {settings.QDRANT_URL}")
+            logger.info(f"   - API Key: {'***' if settings.QDRANT_API_KEY else 'None'}")
+
             self.qdrant_client = QdrantClient(
                 url=settings.QDRANT_URL,
                 api_key=settings.QDRANT_API_KEY if settings.QDRANT_API_KEY else None,
             )
-            logger.info(f"Qdrant client initialized: {settings.QDRANT_URL}")
+
+            # Test connection
+            collections = self.qdrant_client.get_collections()
+            logger.info(f"✅ Qdrant client initialized successfully: {settings.QDRANT_URL}")
+            logger.info(f"   - Found {len(collections.collections)} existing collections")
+
         except Exception as e:
-            logger.error(f"Failed to initialize Qdrant client: {e}")
+            logger.error(f"❌ Failed to initialize Qdrant client: {e}")
+            logger.error(f"   - URL: {settings.QDRANT_URL}")
+            logger.error(f"   - Make sure Qdrant server is running")
             self.qdrant_client = None
 
-    async def create_collection(self, collection_name: str) -> bool:
-        """Tạo collection trong Qdrant"""
-        self._ensure_service_initialized()
-        if not self.qdrant_client or not self.embedding_model or not self.vector_size:
-            logger.error(
-                "Qdrant client, embedding model, or vector size not initialized"
-            )
+    def _ensure_unified_collection_exists(self):
+        """Legacy method - không còn sử dụng unified collection"""
+        logger.info("Unified collection is deprecated. Using individual collections per book.")
+        return True
+
+    def _ensure_collection_exists(self, collection_name: str) -> bool:
+        """
+        Đảm bảo collection tồn tại - tự động tạo nếu chưa có
+
+        Args:
+            collection_name: Tên collection cần đảm bảo tồn tại
+
+        Returns:
+            bool: True nếu collection tồn tại hoặc được tạo thành công, False nếu có lỗi
+        """
+        if not self.qdrant_client or not self.vector_size:
+            logger.error("Cannot create collection: Qdrant client or vector size not initialized")
             return False
 
         try:
             from qdrant_client.http import models as qdrant_models
+
             # Kiểm tra xem collection đã tồn tại chưa
             collections = self.qdrant_client.get_collections().collections
             existing_names = [c.name for c in collections]
 
-            if collection_name in existing_names:
-                # Xóa collection cũ nếu đã tồn tại
-                self.qdrant_client.delete_collection(collection_name)
-                logger.info(f"Deleted existing collection: {collection_name}")
+            if collection_name not in existing_names:
+                logger.info(f"Collection '{collection_name}' not found. Creating new collection...")
 
-            # Tạo collection mới
-            self.qdrant_client.create_collection(
-                collection_name=collection_name,
-                vectors_config=qdrant_models.VectorParams(
-                    size=self.vector_size, distance=qdrant_models.Distance.COSINE
-                ),
-            )
+                # Tạo collection mới
+                self.qdrant_client.create_collection(
+                    collection_name=collection_name,
+                    vectors_config=qdrant_models.VectorParams(
+                        size=self.vector_size, distance=qdrant_models.Distance.COSINE
+                    ),
+                )
+                logger.info(f"✅ Successfully created new collection: {collection_name}")
 
-            logger.info(f"Created collection: {collection_name}")
+                # Tạo payload index cho các trường quan trọng
+                logger.info(f"Creating indexes for collection: {collection_name}")
+                self.qdrant_client.create_payload_index(
+                    collection_name=collection_name,
+                    field_name="book_id",
+                    field_schema="keyword",
+                )
+                self.qdrant_client.create_payload_index(
+                    collection_name=collection_name,
+                    field_name="lesson_id",
+                    field_schema="keyword",
+                )
+                self.qdrant_client.create_payload_index(
+                    collection_name=collection_name,
+                    field_name="type",
+                    field_schema="keyword",
+                )
+                self.qdrant_client.create_payload_index(
+                    collection_name=collection_name,
+                    field_name="content_type",
+                    field_schema="keyword",
+                )
+                logger.info(f"✅ Successfully created indexes for collection: {collection_name}")
+            else:
+                logger.info(f"✅ Collection '{collection_name}' already exists - ready to add content")
+
             return True
 
         except Exception as e:
-            logger.error(f"Error creating collection: {e}")
+            logger.error(f"❌ Error ensuring collection '{collection_name}' exists: {e}")
             return False
 
     async def process_textbook(
         self,
         book_id: str,
-        text_content: Optional[str] = None,
+        content: Optional[Any] = None,  # Có thể là str hoặc Dict
         lesson_id: Optional[str] = None,
-        book_title: Optional[str] = None,
-        book_structure: Optional[Dict[str, Any]] = None,
+        content_type: str = "textbook",  # "textbook" | "guide"
+        # Backward compatibility parameters
+        text_content: Optional[str] = None,
+        book_content: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Xử lý sách giáo khoa và tạo embeddings
+        Xử lý sách giáo khoa/guide và tạo embeddings vào collection riêng
 
         Args:
-            book_id: ID của sách
-            text_content: Nội dung text đơn giản (cho simple processing)
-            lesson_id: ID bài học (cho simple processing)
-            book_title: Tiêu đề sách
-            book_structure: Cấu trúc sách đầy đủ (cho full processing)
+            book_id: ID của sách hoặc guide
+            content: Nội dung cần xử lý (str cho guide, Dict hoặc str cho textbook)
+            lesson_id: ID bài học
+            content_type: Loại nội dung ("textbook" hoặc "guide")
+            text_content: [DEPRECATED] Sử dụng content thay thế
+            book_content: [DEPRECATED] Sử dụng content thay thế
         """
         self._ensure_service_initialized()
+
+        # Debug logging
+        logger.info(f"🔍 process_textbook called with:")
+        logger.info(f"   - book_id: {book_id}")
+        logger.info(f"   - lesson_id: {lesson_id} (type: {type(lesson_id)})")
+        logger.info(f"   - content_type: {content_type}")
+        logger.info(f"   - has_content: {content is not None}")
+        logger.info(f"   - content_type_obj: {type(content)}")
+        logger.info(f"   - has_text_content (deprecated): {text_content is not None}")
+        logger.info(f"   - has_book_content (deprecated): {book_content is not None}")
 
         if (
             not self.qdrant_client
@@ -167,105 +228,199 @@ class QdrantService:
                 "error": "Qdrant client or embedding model not initialized",
             }
 
+        # ✅ Kiểm tra lesson_id trùng lặp trước khi xử lý
+        if lesson_id:
+            lesson_check = await self.check_lesson_id_exists(lesson_id)
+
+            if not lesson_check["success"]:
+                return {
+                    "success": False,
+                    "error": f"Failed to check lesson_id: {lesson_check.get('error')}",
+                    "lesson_id": lesson_id
+                }
+
+            if lesson_check["exists"]:
+                return {
+                    "success": False,
+                    "error": f"Lesson ID '{lesson_id}' already exists in book '{lesson_check['existing_book_id']}'. Please use a different lesson_id or delete the existing lesson first.",
+                    "lesson_id": lesson_id,
+                    "existing_book_id": lesson_check["existing_book_id"],
+                    "conflict": True
+                }
+
         try:
-            # Tạo collection cho sách
-            collection_name = f"textbook_{book_id}"
-            collection_created = await self.create_collection(collection_name)
+            # Xác định collection name dựa trên content_type và book_id
+            if content_type == "guide":
+                collection_name = f"guide_{book_id}"
+            else:  # textbook
+                collection_name = f"textbook_{book_id}"
 
-            if not collection_created:
-                return {"success": False, "error": "Failed to create collection"}
+            # Đảm bảo collection tồn tại - tự động tạo nếu chưa có
+            if not self._ensure_collection_exists(collection_name):
+                logger.error(f"❌ Failed to create or access collection '{collection_name}'. Check Qdrant connection and permissions.")
+                return {"success": False, "error": f"Failed to create or access collection '{collection_name}'. Check Qdrant connection and logs for details."}
 
-            # Xử lý dữ liệu đầu vào
-            if book_structure:
-                # Xử lý book_structure đầy đủ
-                return await self._process_book_structure(book_id, book_structure, collection_name)
-            elif text_content:
-                # Xử lý text_content đơn giản
-                return await self._process_simple_text(book_id, text_content, lesson_id, book_title, collection_name)
-            else:
-                return {"success": False, "error": "Either book_structure or text_content must be provided"}
+            # Xử lý dữ liệu đầu vào - thống nhất cho cả guide và textbook
+            content_text = None
 
+            # Ưu tiên sử dụng parameter content mới
+            if content is not None:
+                if isinstance(content, dict):
+                    content_text = str(content)  # Convert dict to string
+                else:
+                    content_text = str(content)  # Convert to string
+            # Backward compatibility với các parameter cũ
+            elif content_type == "guide" and text_content:
+                content_text = text_content
+            elif content_type == "textbook" and book_content:
+                if isinstance(book_content, dict):
+                    content_text = str(book_content)  # Convert dict to string
+                else:
+                    content_text = str(book_content)  # Convert to string
 
+            if not content_text:
+                return {"success": False, "error": "Missing required content. Please provide 'content' parameter."}
 
+            # Xử lý content thống nhất
+            return await self._process_content_to_collection(
+                book_id=book_id,
+                content=content_text,
+                content_type=content_type,
+                lesson_id=lesson_id,
+                collection_name=collection_name
+            )
         except Exception as e:
             logger.error(f"Error processing textbook: {e}")
             return {"success": False, "error": str(e)}
 
-    async def _process_simple_text(
-        self, book_id: str, text_content: str, lesson_id: str, book_title: Optional[str], collection_name: str
+    async def _process_content_to_collection(
+        self, book_id: str, content: str, content_type: str, collection_name: str,
+        lesson_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Xử lý text content đơn giản"""
+        """Xử lý nội dung text vào collection cụ thể - hàm thống nhất cho cả textbook và guide"""
         from qdrant_client.http import models as qdrant_models
 
-        # Tạo chunks từ text content
-        text_chunks = self._create_text_chunks_from_text(
-            text_content,
-            settings.MAX_CHUNK_SIZE,
-            settings.CHUNK_OVERLAP,
+        # Debug logging
+        logger.info(f"🔍 Processing content to collection: {collection_name}")
+        logger.info(f"   - book_id: {book_id}")
+        logger.info(f"   - lesson_id: {lesson_id} (type: {type(lesson_id)})")
+        logger.info(f"   - content_type: {content_type}")
+
+        # Tạo chunks từ content sử dụng smart chunking service
+        chunk_infos = self.smart_chunking_service.chunk_textbook_content(
+            content,
+            max_tokens=settings.MAX_CHUNK_SIZE
         )
 
         # Chuẩn bị dữ liệu
         points = []
         import uuid
 
-        # Tạo embeddings cho từng chunk với semantic metadata
-        for i, chunk_text in enumerate(text_chunks):
-            chunk_id = str(uuid.uuid4())
-            chunk_vector = self.embedding_model.encode(chunk_text).tolist()
+        # Tạo embeddings cho từng chunk với semantic metadata từ smart chunking
+        for i, chunk_info in enumerate(chunk_infos):
+            try:
+                chunk_id = str(uuid.uuid4())
+                chunk_text = getattr(chunk_info, 'text', '')
+                if not chunk_text:
+                    logger.warning(f"Empty chunk text at index {i}, skipping...")
+                    continue
 
-            # Phân loại semantic cho chunk sử dụng LLM
-            semantic_info = await self.semantic_analysis_service.analyze_content_semantic(chunk_text)
+                chunk_vector = self.embedding_model.encode(chunk_text).tolist()
 
-            points.append(
-                qdrant_models.PointStruct(
-                    id=chunk_id,
-                    vector=chunk_vector,
-                    payload={
-                        "book_id": book_id,
-                        "lesson_id": lesson_id,
-                        "chunk_index": i,
-                        "type": "lesson_content",
-                        "text": chunk_text,
-                        # Semantic metadata - Multi-label với confidence
-                        "semantic_tags": semantic_info["semantic_tags"],
-                        "key_concepts": semantic_info["key_concepts"],
-                        "contains_examples": semantic_info["contains_examples"],
-                        "contains_definitions": semantic_info["contains_definitions"],
-                        "contains_formulas": semantic_info["contains_formulas"],
-                        "estimated_difficulty": semantic_info["difficulty"],
-                        "analysis_method": semantic_info["analysis_method"],
-                        "word_count": len(chunk_text.split()),
-                        "char_count": len(chunk_text),
-                    },
+                # Sử dụng semantic info từ smart chunking service
+                semantic_info = {
+                    'chunk_type': chunk_info.chunk_type,
+                    'semantic_tag': chunk_info.semantic_tag,
+                    'concepts': chunk_info.concepts,
+                    'token_count': chunk_info.token_count,
+                    'is_semantic_complete': chunk_info.is_semantic_complete
+                }
+
+                # Debug logging để kiểm tra cấu trúc dữ liệu
+                if i == 0:
+                    logger.info(f"🔍 ChunkInfo attributes: {dir(chunk_info)}")
+                    logger.info(f"🔍 semantic_info keys: {list(semantic_info.keys())}")
+                    logger.info(f"🔍 semantic_tag value: {semantic_info.get('semantic_tag', 'NOT_FOUND')}")
+
+                # Xác định content_type_detail dựa trên content_type
+                if content_type == "guide":
+                    content_type_detail = "guide_content"
+                else:
+                    content_type_detail = "lesson_content"
+
+                # Đảm bảo lesson_id có giá trị hợp lệ
+                safe_lesson_id = lesson_id if lesson_id is not None else ""
+
+                # Debug logging cho chunk đầu tiên
+                if i == 0:
+                    logger.info(f"🔍 Creating point with lesson_id: {lesson_id} -> safe_lesson_id: {safe_lesson_id} (type: {type(safe_lesson_id)})")
+
+                points.append(
+                    qdrant_models.PointStruct(
+                        id=chunk_id,
+                        vector=chunk_vector,
+                        payload={
+                            "book_id": book_id,
+                            "lesson_id": safe_lesson_id,
+                            "chunk_index": i,
+                            "type": "content",
+                            "content_type": content_type_detail,
+                            "text": chunk_text,
+                            # Smart chunking metadata - defensive access
+                            "chunk_type": semantic_info.get("chunk_type", "content"),
+                            "semantic_tag": semantic_info.get("semantic_tag", "theory"),
+                            "concepts": semantic_info.get("concepts", []),
+                            "token_count": semantic_info.get("token_count", 0),
+                            "is_semantic_complete": semantic_info.get("is_semantic_complete", False),
+                            "parent_title": getattr(chunk_info, 'parent_title', ''),
+                            "overlap_context": getattr(chunk_info, 'overlap_context', ''),
+                            # Legacy compatibility - defensive access
+                            "semantic_tags": [semantic_info.get("semantic_tag", "theory")],
+                            "key_concepts": semantic_info.get("concepts", []),
+                            "contains_examples": semantic_info.get("chunk_type", "content") == "example",
+                            "contains_definitions": semantic_info.get("chunk_type", "content") == "definition",
+                            "contains_formulas": "formula" in chunk_text.lower(),
+                            "estimated_difficulty": "basic",
+                            "analysis_method": "smart_chunking",
+                            "word_count": len(chunk_text.split()),
+                            "char_count": len(chunk_text),
+                            "processed_at": datetime.datetime.now().isoformat(),
+                        },
+                    )
                 )
-            )
+            except Exception as e:
+                logger.error(f"Error processing chunk {i}: {e}")
+                logger.error(f"ChunkInfo type: {type(chunk_info)}")
+                logger.error(f"ChunkInfo attributes: {dir(chunk_info) if hasattr(chunk_info, '__dict__') else 'No attributes'}")
+                continue
 
-        total_chunks = len(text_chunks)
+        total_chunks = len(chunk_infos)
 
-        # Lưu vào Qdrant theo batch
+        # Lưu vào Qdrant theo batch vào collection cụ thể
         batch_size = 100
         for i in range(0, len(points), batch_size):
             batch = points[i : i + batch_size]
             self.qdrant_client.upsert(collection_name=collection_name, points=batch)
             logger.info(
-                f"Uploaded batch {i//batch_size + 1}/{(len(points)-1)//batch_size + 1} to Qdrant"
+                f"Uploaded batch {i//batch_size + 1}/{(len(points)-1)//batch_size + 1} to collection {collection_name}"
             )
 
-        # Lưu metadata
+        # Lưu metadata vào collection
         zero_vector = [0.0] * self.vector_size
+        safe_lesson_id = lesson_id if lesson_id is not None else ""
         metadata_point = qdrant_models.PointStruct(
             id=str(uuid.uuid4()),
             vector=zero_vector,
             payload={
                 "book_id": book_id,
-                "lesson_id": lesson_id,
+                "lesson_id": safe_lesson_id,
                 "type": "metadata",
+                "content_type": content_type,
                 "total_chunks": total_chunks,
                 "processed_at": datetime.datetime.now().isoformat(),
                 "model": settings.EMBEDDING_MODEL,
                 "chunk_size": settings.MAX_CHUNK_SIZE,
                 "chunk_overlap": settings.CHUNK_OVERLAP,
-                "book_title": book_title or "Unknown",
             },
         )
 
@@ -282,10 +437,123 @@ class QdrantService:
             "vector_dimension": self.vector_size,
         }
 
-    async def _process_book_structure(
-        self, book_id: str, book_structure: Dict[str, Any], collection_name: str
+    async def _process_content_unified(
+        self, book_id: str, content: str, content_type: str, lesson_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Xử lý book structure đầy đủ"""
+        """Xử lý nội dung text vào unified collection - hàm thống nhất cho cả textbook và guide"""
+        from qdrant_client.http import models as qdrant_models
+
+        # Tạo chunks từ content sử dụng smart chunking service
+        chunk_infos = self.smart_chunking_service.chunk_textbook_content(
+            content,
+            max_tokens=settings.MAX_CHUNK_SIZE
+        )
+
+        # Chuẩn bị dữ liệu
+        points = []
+        import uuid
+
+        # Tạo embeddings cho từng chunk với semantic metadata từ smart chunking
+        for i, chunk_info in enumerate(chunk_infos):
+            chunk_id = str(uuid.uuid4())
+            chunk_text = chunk_info.text
+            chunk_vector = self.embedding_model.encode(chunk_text).tolist()
+
+            # Sử dụng semantic info từ smart chunking service
+            semantic_info = {
+                'chunk_type': chunk_info.chunk_type,
+                'semantic_tag': chunk_info.semantic_tag,
+                'concepts': chunk_info.concepts,
+                'token_count': chunk_info.token_count,
+                'is_semantic_complete': chunk_info.is_semantic_complete
+            }
+
+            # Xác định content_type_detail dựa trên content_type
+            if content_type == "guide":
+                content_type_detail = "guide_content"
+            else:
+                content_type_detail = "lesson_content"
+
+            points.append(
+                qdrant_models.PointStruct(
+                    id=chunk_id,
+                    vector=chunk_vector,
+                    payload={
+                        "book_id": book_id,
+                        "lesson_id": lesson_id,
+                        "chunk_index": i,
+                        "type": "content",
+                        "content_type": content_type_detail,
+                        "text": chunk_text,
+                        # Smart chunking metadata - defensive access
+                        "chunk_type": semantic_info.get("chunk_type", "content"),
+                        "semantic_tag": semantic_info.get("semantic_tag", "theory"),
+                        "concepts": semantic_info.get("concepts", []),
+                        "token_count": semantic_info.get("token_count", 0),
+                        "is_semantic_complete": semantic_info.get("is_semantic_complete", False),
+                        "parent_title": getattr(chunk_info, 'parent_title', ''),
+                        "overlap_context": getattr(chunk_info, 'overlap_context', ''),
+                        # Legacy compatibility - defensive access
+                        "semantic_tags": [semantic_info.get("semantic_tag", "theory")],
+                        "key_concepts": semantic_info.get("concepts", []),
+                        "contains_examples": semantic_info["chunk_type"] == "example",
+                        "contains_definitions": semantic_info["chunk_type"] == "definition",
+                        "contains_formulas": "formula" in chunk_text.lower(),
+                        "estimated_difficulty": "basic",
+                        "analysis_method": "smart_chunking",
+                        "word_count": len(chunk_text.split()),
+                        "char_count": len(chunk_text),
+                        "processed_at": datetime.datetime.now().isoformat(),
+                    },
+                )
+            )
+
+        total_chunks = len(chunk_infos)
+
+        # Lưu vào Qdrant theo batch vào unified collection
+        batch_size = 100
+        for i in range(0, len(points), batch_size):
+            batch = points[i : i + batch_size]
+            self.qdrant_client.upsert(collection_name=self.UNIFIED_COLLECTION_NAME, points=batch)
+            logger.info(
+                f"Uploaded batch {i//batch_size + 1}/{(len(points)-1)//batch_size + 1} to unified collection"
+            )
+
+        # Lưu metadata vào unified collection
+        zero_vector = [0.0] * self.vector_size
+        metadata_point = qdrant_models.PointStruct(
+            id=str(uuid.uuid4()),
+            vector=zero_vector,
+            payload={
+                "book_id": book_id,
+                "lesson_id": lesson_id,
+                "type": "metadata",
+                "content_type": content_type,
+                "total_chunks": total_chunks,
+                "processed_at": datetime.datetime.now().isoformat(),
+                "model": settings.EMBEDDING_MODEL,
+                "chunk_size": settings.MAX_CHUNK_SIZE,
+                "chunk_overlap": settings.CHUNK_OVERLAP,
+            },
+        )
+
+        self.qdrant_client.upsert(
+            collection_name=self.UNIFIED_COLLECTION_NAME, points=[metadata_point]
+        )
+
+        return {
+            "success": True,
+            "book_id": book_id,
+            "lesson_id": lesson_id,
+            "collection_name": self.UNIFIED_COLLECTION_NAME,
+            "total_chunks": total_chunks,
+            "vector_dimension": self.vector_size,
+        }
+
+    async def _process_book_structure_unified(
+        self, book_id: str, book_structure: Dict[str, Any], content_type: str
+    ) -> Dict[str, Any]:
+        """Xử lý book structure đầy đủ vào unified collection"""
         from qdrant_client.http import models as qdrant_models
 
         points = []
@@ -295,7 +563,6 @@ class QdrantService:
         # Xử lý từng chapter và lesson
         for chapter in book_structure.get("chapters", []):
             chapter_id = chapter.get("id", "unknown")
-
             for lesson in chapter.get("lessons", []):
                 lesson_id = lesson.get("id", "unknown")
                 lesson_content = lesson.get("content", "")
@@ -303,8 +570,19 @@ class QdrantService:
                 if not lesson_content.strip():
                     continue
 
-                # Tạo chunks từ lesson content
-                text_chunks = self._create_text_chunks_from_text(
+                # ✅ Kiểm tra lesson_id trùng lặp
+                lesson_check = await self.check_lesson_id_exists(lesson_id)
+
+                if not lesson_check["success"]:
+                    logger.warning(f"Failed to check lesson_id {lesson_id}: {lesson_check.get('error')}")
+                    continue
+
+                if lesson_check["exists"]:
+                    logger.warning(f"Skipping lesson_id '{lesson_id}' - already exists in book '{lesson_check['existing_book_id']}'")
+                    continue
+
+                # Tạo chunks từ lesson content sử dụng chunking service
+                text_chunks = self.chunking_service.create_text_chunks(
                     lesson_content,
                     settings.MAX_CHUNK_SIZE,
                     settings.CHUNK_OVERLAP,
@@ -315,8 +593,10 @@ class QdrantService:
                     chunk_id = str(uuid.uuid4())
                     chunk_vector = self.embedding_model.encode(chunk_text).tolist()
 
-                    # Phân loại semantic cho chunk sử dụng LLM
-                    semantic_info = await self.semantic_analysis_service.analyze_content_semantic(chunk_text)
+                    # Phân loại semantic cho chunk sử dụng rule-based service
+                    from app.services.fast_semantic_service import get_fast_semantic_service
+                    fast_semantic = get_fast_semantic_service()
+                    semantic_info = fast_semantic.analyze_chunk_semantic(chunk_text)
 
                     points.append(
                         qdrant_models.PointStruct(
@@ -327,7 +607,8 @@ class QdrantService:
                                 "chapter_id": chapter_id,
                                 "lesson_id": lesson_id,
                                 "chunk_index": i,
-                                "type": "lesson_content",
+                                "type": "content",
+                                "content_type": "lesson_content",
                                 "text": chunk_text,
                                 # Semantic metadata - Multi-label với confidence
                                 "semantic_tags": semantic_info["semantic_tags"],
@@ -335,25 +616,26 @@ class QdrantService:
                                 "contains_examples": semantic_info["contains_examples"],
                                 "contains_definitions": semantic_info["contains_definitions"],
                                 "contains_formulas": semantic_info["contains_formulas"],
-                                "estimated_difficulty": semantic_info["difficulty"],
+                                "estimated_difficulty": semantic_info.get("estimated_difficulty", semantic_info.get("difficulty", "basic")),
                                 "analysis_method": semantic_info["analysis_method"],
                                 "word_count": len(chunk_text.split()),
                                 "char_count": len(chunk_text),
+                                "processed_at": datetime.datetime.now().isoformat(),
                             },
                         )
                     )
                     total_chunks += 1
 
-        # Lưu vào Qdrant theo batch
+        # Lưu vào unified collection theo batch
         batch_size = 100
         for i in range(0, len(points), batch_size):
             batch = points[i : i + batch_size]
-            self.qdrant_client.upsert(collection_name=collection_name, points=batch)
+            self.qdrant_client.upsert(collection_name=self.UNIFIED_COLLECTION_NAME, points=batch)
             logger.info(
-                f"Uploaded batch {i//batch_size + 1}/{(len(points)-1)//batch_size + 1} to Qdrant"
+                f"Uploaded batch {i//batch_size + 1}/{(len(points)-1)//batch_size + 1} to unified collection"
             )
 
-        # Lưu metadata
+        # Lưu metadata vào unified collection
         zero_vector = [0.0] * self.vector_size
         metadata_point = qdrant_models.PointStruct(
             id=str(uuid.uuid4()),
@@ -361,223 +643,35 @@ class QdrantService:
             payload={
                 "book_id": book_id,
                 "type": "metadata",
+                "content_type": content_type,
                 "total_chunks": total_chunks,
                 "processed_at": datetime.datetime.now().isoformat(),
                 "model": settings.EMBEDDING_MODEL,
                 "chunk_size": settings.MAX_CHUNK_SIZE,
                 "chunk_overlap": settings.CHUNK_OVERLAP,
-                "book_title": book_structure.get("title", "Unknown"),
                 "total_chapters": len(book_structure.get("chapters", [])),
                 "total_lessons": sum(len(ch.get("lessons", [])) for ch in book_structure.get("chapters", [])),
             },
         )
 
         self.qdrant_client.upsert(
-            collection_name=collection_name, points=[metadata_point]
+            collection_name=self.UNIFIED_COLLECTION_NAME, points=[metadata_point]
         )
 
         return {
             "success": True,
             "book_id": book_id,
-            "collection_name": collection_name,
+            "collection_name": self.UNIFIED_COLLECTION_NAME,
             "total_chunks": total_chunks,
             "vector_dimension": self.vector_size,
         }
 
 
 
-    def _create_text_chunks_from_text(
-        self, text: str, max_size: int, overlap: int
-    ) -> List[str]:
-        """Tạo chunks từ text content với semantic awareness"""
-        if not text or not text.strip():
-            return []
-
-        # Sử dụng semantic chunking nếu có thể
-        try:
-            return self._semantic_chunking(text, max_size, overlap)
-        except Exception as e:
-            logger.warning(f"Semantic chunking failed, fallback to simple chunking: {e}")
-            return self._simple_chunking(text, max_size, overlap)
-
-    def _semantic_chunking(self, text: str, max_size: int, overlap: int) -> List[str]:
-        """Chia chunks dựa trên ngữ nghĩa"""
-        
-        # 1. Phân tách theo cấu trúc văn bản
-        semantic_chunks = []
-        
-        # Chia theo tiêu đề/đề mục (H1, H2, ##, etc.)
-        header_pattern = r'(^#{1,6}\s+.+$|^[A-Z][^.!?]*:$|^\d+\.\s+[A-Z][^.!?]*$)'
-        sections = re.split(header_pattern, text, flags=re.MULTILINE)
-        
-        current_section = ""
-        
-        for i, section in enumerate(sections):
-            if not section.strip():
-                continue
-                
-            # Kiểm tra nếu là header
-            if re.match(header_pattern, section.strip(), re.MULTILINE):
-                # Lưu section trước đó nếu có
-                if current_section.strip():
-                    semantic_chunks.extend(self._split_by_paragraphs(current_section, max_size))
-                current_section = section + "\n"
-            else:
-                current_section += section
-        
-        # Xử lý section cuối
-        if current_section.strip():
-            semantic_chunks.extend(self._split_by_paragraphs(current_section, max_size))
-        
-        # Nếu không có structure rõ ràng, fallback về paragraph-based
-        if not semantic_chunks:
-            semantic_chunks = self._split_by_paragraphs(text, max_size)
-        
-        # Thêm overlap thông minh
-        return self._add_semantic_overlap(semantic_chunks, overlap)
-
-    def _split_by_paragraphs(self, text: str, max_size: int) -> List[str]:
-        """Chia theo đoạn văn"""
-        # Chia theo paragraph (2+ newlines)
-        paragraphs = re.split(r'\n\s*\n', text.strip())
-        chunks = []
-        current_chunk = ""
-        
-        for para in paragraphs:
-            para = para.strip()
-            if not para:
-                continue
-                
-            # Nếu thêm paragraph này vào chunk hiện tại mà không vượt quá max_size
-            test_chunk = current_chunk + "\n\n" + para if current_chunk else para
-            
-            if len(test_chunk) <= max_size:
-                current_chunk = test_chunk
-            else:
-                # Lưu chunk hiện tại
-                if current_chunk:
-                    chunks.append(current_chunk)
-                
-                # Nếu paragraph quá dài, chia nhỏ hơn
-                if len(para) > max_size:
-                    chunks.extend(self._split_by_sentences(para, max_size))
-                    current_chunk = ""
-                else:
-                    current_chunk = para
-        
-        # Thêm chunk cuối
-        if current_chunk:
-            chunks.append(current_chunk)
-        
-        return chunks
-
-    def _split_by_sentences(self, text: str, max_size: int) -> List[str]:
-        """Chia theo câu khi paragraph quá dài"""
-        
-        # Chia theo câu (dấu .!?)
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        chunks = []
-        current_chunk = ""
-        
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence:
-                continue
-                
-            test_chunk = current_chunk + " " + sentence if current_chunk else sentence
-            
-            if len(test_chunk) <= max_size:
-                current_chunk = test_chunk
-            else:
-                if current_chunk:
-                    chunks.append(current_chunk)
-                
-                # Nếu câu quá dài, chia theo từ
-                if len(sentence) > max_size:
-                    chunks.extend(self._simple_chunking(sentence, max_size, 0))
-                    current_chunk = ""
-                else:
-                    current_chunk = sentence
-        
-        if current_chunk:
-            chunks.append(current_chunk)
-        
-        return chunks
-
-    def _add_semantic_overlap(self, chunks: List[str], overlap: int) -> List[str]:
-        """Thêm overlap thông minh dựa trên sentences"""
-        if len(chunks) <= 1 or overlap <= 0:
-            return chunks
-        
-        import re
-        overlapped_chunks = []
-        
-        for i, chunk in enumerate(chunks):
-            if i == 0:
-                overlapped_chunks.append(chunk)
-            else:
-                # Lấy câu cuối của chunk trước
-                prev_chunk = chunks[i-1]
-                prev_sentences = re.split(r'(?<=[.!?])\s+', prev_chunk)
-                
-                # Lấy overlap_text từ chunk trước
-                overlap_text = ""
-                for j in range(len(prev_sentences)-1, -1, -1):
-                    test_overlap = prev_sentences[j] + " " + overlap_text if overlap_text else prev_sentences[j]
-                    if len(test_overlap) <= overlap:
-                        overlap_text = test_overlap
-                    else:
-                        break
-                
-                # Kết hợp với chunk hiện tại
-                if overlap_text:
-                    overlapped_chunk = overlap_text + "\n\n" + chunk
-                else:
-                    overlapped_chunk = chunk
-                
-                overlapped_chunks.append(overlapped_chunk)
-        
-        return overlapped_chunks
-
-    def _simple_chunking(self, text: str, max_size: int, overlap: int) -> List[str]:
-        """Fallback chunking method (original logic)"""
-        chunks = []
-        text = text.strip()
-
-        # Nếu text ngắn hơn max_size, trả về luôn
-        if len(text) <= max_size:
-            return [text]
-
-        # Chia text thành các chunks với overlap
-        start = 0
-        while start < len(text):
-            end = start + max_size
-
-            # Nếu không phải chunk cuối, tìm vị trí ngắt tự nhiên
-            if end < len(text):
-                # Tìm dấu câu hoặc khoảng trắng gần nhất
-                for i in range(end, start + max_size // 2, -1):
-                    if text[i] in ".!?\n ":
-                        end = i + 1
-                        break
-
-            chunk = text[start:end].strip()
-            if chunk:
-                chunks.append(chunk)
-
-            # Di chuyển start với overlap
-            start = max(start + max_size - overlap, end)
-
-            # Tránh vòng lặp vô hạn
-            if start >= len(text):
-                break
-
-        return chunks
-
     async def search_textbook(
         self, book_id: str, query: str, limit: int = 5, semantic_filters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Tìm kiếm trong sách giáo khoa bằng vector similarity"""
+        """Tìm kiếm trong sách giáo khoa bằng vector similarity trong unified collection"""
         from qdrant_client.http import models as qdrant_models
         self._ensure_service_initialized()
 
@@ -588,6 +682,7 @@ class QdrantService:
             }
 
         try:
+            # Sử dụng collection riêng cho textbook
             collection_name = f"textbook_{book_id}"
 
             # Kiểm tra xem collection có tồn tại không
@@ -597,17 +692,26 @@ class QdrantService:
             if collection_name not in existing_names:
                 return {
                     "success": False,
-                    "error": f"Collection not found for book_id {book_id}. Please create embeddings first.",
+                    "error": f"Textbook collection {collection_name} not found. Please create embeddings first.",
                 }
 
             # Tạo embedding cho query
             query_vector = self.embedding_model.encode(query).tolist()
 
-            # Chuẩn bị filters cho Qdrant
-            qdrant_filter = None
-            if semantic_filters:
-                filter_conditions = []
+            # Chuẩn bị filters cho Qdrant - bắt buộc filter theo book_id và type="content"
+            filter_conditions = [
+                qdrant_models.FieldCondition(
+                    key="book_id",
+                    match=qdrant_models.MatchValue(value=book_id)
+                ),
+                qdrant_models.FieldCondition(
+                    key="type",
+                    match=qdrant_models.MatchValue(value="content")
+                )
+            ]
 
+            # Thêm semantic filters nếu có
+            if semantic_filters:
                 # Filter by semantic tags
                 if "semantic_tags" in semantic_filters:
                     tag_types = semantic_filters["semantic_tags"]
@@ -649,7 +753,7 @@ class QdrantService:
                         )
                     )
 
-                # Filter by lesson_id
+                # Filter by lesson_id (nếu muốn tìm trong lesson cụ thể)
                 if "lesson_id" in semantic_filters:
                     filter_conditions.append(
                         qdrant_models.FieldCondition(
@@ -658,10 +762,8 @@ class QdrantService:
                         )
                     )
 
-                if filter_conditions:
-                    qdrant_filter = qdrant_models.Filter(
-                        must=filter_conditions
-                    )
+            # Tạo filter cuối cùng
+            qdrant_filter = qdrant_models.Filter(must=filter_conditions)
 
             # Tìm kiếm trong Qdrant
             search_result = self.qdrant_client.search(
@@ -694,8 +796,6 @@ class QdrantService:
                     {
                         "text": payload.get("text", ""),
                         "score": scored_point.score,
-                        "chapter_title": payload.get("chapter_title", ""),
-                        "lesson_title": payload.get("lesson_title", ""),
                         "lesson_id": payload.get("lesson_id", ""),
                         "chapter_id": payload.get("chapter_id", ""),
                         "type": payload.get("type", ""),
@@ -721,9 +821,9 @@ class QdrantService:
             return {"success": False, "error": str(e)}
 
     async def global_search(
-        self, query: str, limit: int = 5, semantic_filters: Optional[Dict[str, Any]] = None
+        self, query: str, limit: int = 10, book_id: Optional[str] = None, lesson_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Tìm kiếm toàn bộ trong tất cả collections"""
+        """Tìm kiếm toàn cục trong tất cả sách giáo khoa với filter tùy chọn"""
         from qdrant_client.http import models as qdrant_models
 
         if not self.qdrant_client or not self.embedding_model:
@@ -733,84 +833,66 @@ class QdrantService:
             }
 
         try:
-            # Lấy tất cả collections
+            # Lấy danh sách tất cả collections
             collections = self.qdrant_client.get_collections().collections
-            textbook_collections = [c.name for c in collections if c.name.startswith("textbook_")]
+            collection_names = [c.name for c in collections]
 
-            if not textbook_collections:
+            # Lọc các collection textbook và guide
+            textbook_collections = [name for name in collection_names if name.startswith("textbook_")]
+            guide_collections = [name for name in collection_names if name.startswith("guide_")]
+
+            if book_id:
+                # Nếu có book_id, chỉ tìm trong collection của book đó
+                target_collection = f"textbook_{book_id}"
+                if target_collection not in collection_names:
+                    return {
+                        "success": True,
+                        "query": query,
+                        "results": [],
+                        "message": f"Collection {target_collection} not found"
+                    }
+                search_collections = [target_collection]
+            else:
+                # Nếu không có book_id, tìm trong tất cả collections
+                search_collections = textbook_collections + guide_collections
+
+            if not search_collections:
                 return {
                     "success": True,
                     "query": query,
                     "results": [],
-                    "message": "No textbook collections found"
+                    "message": "No textbook or guide collections found"
                 }
 
             # Tạo embedding cho query
             query_vector = self.embedding_model.encode(query).tolist()
 
-            # Chuẩn bị filters cho Qdrant (tái sử dụng logic từ search_textbook)
-            qdrant_filter = None
-            if semantic_filters:
-                filter_conditions = []
+            # Chuẩn bị filters cho Qdrant - chỉ tìm content, không tìm metadata
+            filter_conditions = [
+                qdrant_models.FieldCondition(
+                    key="type",
+                    match=qdrant_models.MatchValue(value="content")
+                )
+            ]
 
-                # Filter by semantic tags
-                if "semantic_tags" in semantic_filters:
-                    tag_types = semantic_filters["semantic_tags"]
-                    if isinstance(tag_types, str):
-                        tag_types = [tag_types]
-
-                    for tag_type in tag_types:
-                        filter_conditions.append(
-                            qdrant_models.FieldCondition(
-                                key="semantic_tags",
-                                match=qdrant_models.MatchAny(any=[tag_type])
-                            )
-                        )
-
-                # Filter by difficulty
-                if "difficulty" in semantic_filters:
-                    filter_conditions.append(
-                        qdrant_models.FieldCondition(
-                            key="estimated_difficulty",
-                            match=qdrant_models.MatchValue(value=semantic_filters["difficulty"])
-                        )
+            # Thêm filter cho lesson_id nếu có
+            if lesson_id:
+                filter_conditions.append(
+                    qdrant_models.FieldCondition(
+                        key="lesson_id",
+                        match=qdrant_models.MatchValue(value=lesson_id)
                     )
+                )
 
-                # Filter by content features
-                if "has_examples" in semantic_filters:
-                    filter_conditions.append(
-                        qdrant_models.FieldCondition(
-                            key="contains_examples",
-                            match=qdrant_models.MatchValue(value=semantic_filters["has_examples"])
-                        )
-                    )
 
-                if "has_formulas" in semantic_filters:
-                    filter_conditions.append(
-                        qdrant_models.FieldCondition(
-                            key="contains_formulas",
-                            match=qdrant_models.MatchValue(value=semantic_filters["has_formulas"])
-                        )
-                    )
 
-                # Filter by lesson_id
-                if "lesson_id" in semantic_filters:
-                    filter_conditions.append(
-                        qdrant_models.FieldCondition(
-                            key="lesson_id",
-                            match=qdrant_models.MatchValue(value=semantic_filters["lesson_id"])
-                        )
-                    )
+            # Tạo filter cuối cùng
+            qdrant_filter = qdrant_models.Filter(must=filter_conditions)
 
-                if filter_conditions:
-                    qdrant_filter = qdrant_models.Filter(
-                        must=filter_conditions
-                    )
-
-            # Tìm kiếm trong tất cả collections và gộp kết quả
+            # Tìm kiếm trong tất cả collections
             all_results = []
 
-            for collection_name in textbook_collections:
+            for collection_name in search_collections:
                 try:
                     search_result = self.qdrant_client.search(
                         collection_name=collection_name,
@@ -821,72 +903,80 @@ class QdrantService:
                         score_threshold=0.3,
                     )
 
-                    # Extract book_id from collection name
-                    book_id = collection_name.replace("textbook_", "")
-
-                    # Format kết quả
-                    for scored_point in search_result:
-                        payload = scored_point.payload or {}
-
-                        # Bỏ qua metadata point
-                        if payload.get("type") == "metadata":
-                            continue
-
-                        # Chuẩn bị semantic metadata
-                        semantic_tags = payload.get("semantic_tags", [])
-
-                        # Backward compatibility
-                        if not semantic_tags and "semantic_type" in payload:
-                            semantic_tags = [{"type": payload["semantic_type"], "confidence": 0.8}]
-
-                        all_results.append({
-                            "text": payload.get("text", ""),
-                            "score": scored_point.score,
-                            "book_id": book_id,
-                            "chapter_title": payload.get("chapter_title", ""),
-                            "lesson_title": payload.get("lesson_title", ""),
-                            "lesson_id": payload.get("lesson_id", ""),
-                            "chapter_id": payload.get("chapter_id", ""),
-                            "type": payload.get("type", ""),
-                            "semantic_tags": semantic_tags,
-                            "key_concepts": payload.get("key_concepts", []),
-                            "estimated_difficulty": payload.get("estimated_difficulty", "basic"),
-                            "contains_examples": payload.get("contains_examples", False),
-                            "contains_definitions": payload.get("contains_definitions", False),
-                            "contains_formulas": payload.get("contains_formulas", False),
-                            "analysis_method": payload.get("analysis_method", "unknown")
-                        })
+                    # Thêm collection_name vào mỗi result
+                    for result in search_result:
+                        result.payload["source_collection"] = collection_name
+                        all_results.append(result)
 
                 except Exception as e:
-                    logger.warning(f"Error searching collection {collection_name}: {e}")
+                    logger.warning(f"Error searching in collection {collection_name}: {e}")
                     continue
 
-            # Sắp xếp theo score và giới hạn kết quả
-            all_results.sort(key=lambda x: x["score"], reverse=True)
-            final_results = all_results[:limit]
+            # Sắp xếp kết quả theo score
+            all_results.sort(key=lambda x: x.score, reverse=True)
+
+            # Lấy top results
+            search_result = all_results[:limit]
+
+            # Format kết quả
+            results = []
+            for scored_point in search_result:
+                payload = scored_point.payload or {}
+
+                # Bỏ qua metadata point (đã được filter ở trên nhưng double check)
+                if payload.get("type") == "metadata":
+                    continue
+
+                # Chuẩn bị semantic metadata
+                semantic_tags = payload.get("semantic_tags", [])
+
+                # Backward compatibility
+                if not semantic_tags and "semantic_type" in payload:
+                    semantic_tags = [{"type": payload["semantic_type"], "confidence": 0.8}]
+
+                results.append({
+                    "text": payload.get("text", ""),
+                    "score": scored_point.score,
+                    "book_id": payload.get("book_id", ""),
+                    "lesson_id": payload.get("lesson_id", ""),
+                    "type": payload.get("type", ""),
+                    "content_type": payload.get("content_type", ""),
+                    "semantic_tags": semantic_tags,
+                    "key_concepts": payload.get("key_concepts", []),
+                    "estimated_difficulty": payload.get("estimated_difficulty", "basic"),
+                    "contains_examples": payload.get("contains_examples", False),
+                    "contains_definitions": payload.get("contains_definitions", False),
+                    "contains_formulas": payload.get("contains_formulas", False),
+                    "analysis_method": payload.get("analysis_method", "unknown")
+                })
+
+            # Sắp xếp theo score (kết quả đã được giới hạn bởi limit trong search)
+            results.sort(key=lambda x: x["score"], reverse=True)
 
             return {
                 "success": True,
                 "query": query,
-                "results": final_results,
-                "collections_searched": len(textbook_collections),
-                "total_results_found": len(all_results)
+                "results": results,
+                "collections_searched": search_collections,
+                "total_results_found": len(results)
             }
 
         except Exception as e:
             logger.error(f"Error in global search: {e}")
             return {"success": False, "error": str(e)}
 
-    async def delete_textbook_by_id(self, book_id: str) -> Dict[str, Any]:
+    async def delete_textbook_by_book_id(self, book_id: str) -> Dict[str, Any]:
         """
-        Xóa textbook bằng book_id (xóa collection trong Qdrant)
-        
+        Xóa textbook bằng book_id (xóa tất cả points có book_id trong unified collection)
+
         Args:
             book_id: ID của textbook cần xóa
-            
+
         Returns:
             Dict chứa kết quả xóa
         """
+        from qdrant_client.http import models as qdrant_models
+
         try:
             if not self.qdrant_client:
                 return {
@@ -894,36 +984,63 @@ class QdrantService:
                     "error": "Qdrant client not initialized"
                 }
 
-            collection_name = f"textbook_{book_id}"
-            
-            # Kiểm tra collection có tồn tại không
+            collection_name = self.UNIFIED_COLLECTION_NAME
+
+            # Kiểm tra unified collection có tồn tại không
             collections = self.qdrant_client.get_collections().collections
             existing_names = [c.name for c in collections]
-            
+
             if collection_name not in existing_names:
                 return {
                     "success": False,
-                    "error": f"Textbook with ID '{book_id}' not found",
-                    "book_id": book_id,
-                    "collection_name": collection_name
+                    "error": f"Unified collection {collection_name} not found",
+                    "book_id": book_id
                 }
-            
-            # Lấy thông tin về collection trước khi xóa
-            collection_info = self.qdrant_client.get_collection(collection_name)
-            vector_count = getattr(collection_info, 'vectors_count', 0)
-            
-            # Xóa collection
-            self.qdrant_client.delete_collection(collection_name)
-            logger.info(f"Deleted textbook collection: {collection_name}")
-            
+
+            # Đếm số points sẽ bị xóa trước khi xóa
+            count_filter = qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="book_id",
+                        match=qdrant_models.MatchValue(value=book_id)
+                    )
+                ]
+            )
+
+            # Scroll để đếm points
+            scroll_result = self.qdrant_client.scroll(
+                collection_name=collection_name,
+                scroll_filter=count_filter,
+                limit=1,
+                with_payload=False,
+                with_vectors=False
+            )
+
+            if not scroll_result[0]:  # Không tìm thấy points nào
+                return {
+                    "success": False,
+                    "error": f"No data found for book_id '{book_id}'",
+                    "book_id": book_id
+                }
+
+            # Xóa tất cả points có book_id này
+            delete_result = self.qdrant_client.delete(
+                collection_name=collection_name,
+                points_selector=qdrant_models.FilterSelector(
+                    filter=count_filter
+                )
+            )
+
+            logger.info(f"Deleted all points for book_id: {book_id} from unified collection")
+
             return {
                 "success": True,
-                "message": f"Textbook '{book_id}' deleted successfully",
+                "message": f"Textbook '{book_id}' deleted successfully from unified collection",
                 "book_id": book_id,
                 "collection_name": collection_name,
-                "deleted_vectors": vector_count
+                "operation_info": delete_result.operation_id if hasattr(delete_result, 'operation_id') else "completed"
             }
-            
+
         except Exception as e:
             logger.error(f"Error deleting textbook {book_id}: {e}")
             return {
@@ -932,78 +1049,174 @@ class QdrantService:
                 "book_id": book_id
             }
 
-    async def delete_textbook_by_lesson_id(self, lesson_id: str) -> Dict[str, Any]:
+    async def check_lesson_id_exists(self, lesson_id: str) -> Dict[str, Any]:
         """
-        Xóa textbook bằng lesson_id (tìm collection chứa lesson_id rồi xóa)
+        Kiểm tra lesson_id đã tồn tại trong unified collection chưa
 
         Args:
-            lesson_id: ID của lesson để tìm textbook cần xóa
-            
+            lesson_id: ID của lesson cần kiểm tra
+
+        Returns:
+            Dict chứa thông tin về lesson_id existence
+        """
+        self._ensure_service_initialized()
+
+        if not self.qdrant_client:
+            return {
+                "success": False,
+                "exists": False,
+                "error": "Qdrant client not initialized"
+            }
+
+        try:
+            from qdrant_client.http import models as qdrant_models
+
+            collection_name = self.UNIFIED_COLLECTION_NAME
+
+            # Kiểm tra unified collection có tồn tại không
+            collections = self.qdrant_client.get_collections().collections
+            existing_names = [c.name for c in collections]
+
+            if collection_name not in existing_names:
+                return {
+                    "success": True,
+                    "exists": False,
+                    "message": f"Unified collection {collection_name} not found - lesson_id is available"
+                }
+
+            # Tạo filter để tìm lesson_id
+            lesson_filter = qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="lesson_id",
+                        match=qdrant_models.MatchValue(value=lesson_id)
+                    ),
+                    qdrant_models.FieldCondition(
+                        key="type",
+                        match=qdrant_models.MatchValue(value="content")
+                    )
+                ]
+            )
+
+            # Scroll để tìm lesson (chỉ cần 1 point để confirm existence)
+            scroll_result = self.qdrant_client.scroll(
+                collection_name=collection_name,
+                scroll_filter=lesson_filter,
+                limit=1,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            points = scroll_result[0]
+
+            if points:
+                # Lesson_id đã tồn tại
+                existing_point = points[0]
+                existing_book_id = existing_point.payload.get("book_id", "unknown")
+
+                return {
+                    "success": True,
+                    "exists": True,
+                    "lesson_id": lesson_id,
+                    "existing_book_id": existing_book_id,
+                    "message": f"Lesson ID '{lesson_id}' already exists in book '{existing_book_id}'"
+                }
+            else:
+                # Lesson_id chưa tồn tại
+                return {
+                    "success": True,
+                    "exists": False,
+                    "lesson_id": lesson_id,
+                    "message": f"Lesson ID '{lesson_id}' is available"
+                }
+
+        except Exception as e:
+            logger.error(f"Error checking lesson_id existence {lesson_id}: {e}")
+            return {
+                "success": False,
+                "exists": False,
+                "error": f"Error checking lesson_id: {str(e)}",
+                "lesson_id": lesson_id
+            }
+
+    async def delete_textbook_by_lesson_id(self, lesson_id: str) -> Dict[str, Any]:
+        """
+        Xóa lesson bằng lesson_id (xóa tất cả points có lesson_id trong unified collection)
+
+        Args:
+            lesson_id: ID của lesson cần xóa
+
         Returns:
             Dict chứa kết quả xóa
         """
+        from qdrant_client.http import models as qdrant_models
+
         try:
-            from qdrant_client.http import models as qdrant_models
             if not self.qdrant_client:
                 return {
                     "success": False,
                     "error": "Qdrant client not initialized"
                 }
 
-            # Tìm collection chứa lesson_id
+            collection_name = self.UNIFIED_COLLECTION_NAME
+
+            # Kiểm tra unified collection có tồn tại không
             collections = self.qdrant_client.get_collections().collections
-            found_collection = None
-            found_book_id = None
+            existing_names = [c.name for c in collections]
 
-            for collection in collections:
-                if collection.name.startswith("textbook_"):
-                    try:
-                        # Tìm kiếm lesson_id trong collection này
-                        search_result = self.qdrant_client.scroll(
-                            collection_name=collection.name,
-                            scroll_filter=qdrant_models.Filter(
-                                must=[
-                                    qdrant_models.FieldCondition(
-                                        key="lesson_id",
-                                        match=qdrant_models.MatchValue(value=lesson_id),
-                                    )
-                                ]
-                            ),
-                            limit=1,
-                            with_payload=True,
-                        )
-
-                        if search_result[0]:  # Tìm thấy lesson
-                            found_collection = collection.name
-                            found_book_id = collection.name.replace("textbook_", "")
-                            break
-
-                    except Exception as e:
-                        logger.warning(f"Error searching in collection {collection.name}: {e}")
-                        continue
-
-            if not found_collection:
+            if collection_name not in existing_names:
                 return {
                     "success": False,
-                    "error": f"No textbook found containing lesson_id: {lesson_id}",
+                    "error": f"Unified collection {collection_name} not found",
                     "lesson_id": lesson_id
                 }
 
-            # Lấy thông tin về collection trước khi xóa
-            collection_info = self.qdrant_client.get_collection(found_collection)
-            vector_count = getattr(collection_info, 'vectors_count', 0)
-            
-            # Xóa collection
-            self.qdrant_client.delete_collection(found_collection)
-            logger.info(f"Deleted textbook collection: {found_collection} (found by lesson_id: {lesson_id})")
-            
+            # Tạo filter để tìm tất cả points có lesson_id này
+            delete_filter = qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="lesson_id",
+                        match=qdrant_models.MatchValue(value=lesson_id)
+                    )
+                ]
+            )
+
+            # Scroll để tìm lesson và lấy book_id trước khi xóa
+            scroll_result = self.qdrant_client.scroll(
+                collection_name=collection_name,
+                scroll_filter=delete_filter,
+                limit=1,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            if not scroll_result[0]:  # Không tìm thấy lesson
+                return {
+                    "success": False,
+                    "error": f"No lesson found with lesson_id: {lesson_id}",
+                    "lesson_id": lesson_id
+                }
+
+            # Lấy book_id từ kết quả tìm kiếm
+            found_book_id = scroll_result[0][0].payload.get("book_id", "unknown")
+
+            # Xóa tất cả points có lesson_id này từ unified collection
+            delete_result = self.qdrant_client.delete(
+                collection_name=collection_name,
+                points_selector=qdrant_models.FilterSelector(
+                    filter=delete_filter
+                )
+            )
+
+            logger.info(f"Deleted all points for lesson_id: {lesson_id} from unified collection")
+
             return {
                 "success": True,
-                "message": f"Textbook containing lesson '{lesson_id}' deleted successfully",
+                "message": f"Lesson '{lesson_id}' deleted successfully from unified collection",
                 "lesson_id": lesson_id,
                 "book_id": found_book_id,
-                "collection_name": found_collection,
-                "deleted_vectors": vector_count
+                "collection_name": collection_name,
+                "operation_info": delete_result.operation_id if hasattr(delete_result, 'operation_id') else "completed"
             }
             
         except Exception as e:
@@ -1014,95 +1227,433 @@ class QdrantService:
                 "lesson_id": lesson_id
             }
 
+    async def get_textbook_info_by_book_id(self, book_id: str) -> Dict[str, Any]:
+        """
+        Lấy thông tin chi tiết về textbook theo book_id
 
+        Args:
+            book_id: ID của textbook cần lấy thông tin
 
-    def get_semantic_suggestions(self, book_id: str) -> Dict[str, Any]:
-        """Lấy thống kê semantic để gợi ý filter options"""
-        
+        Returns:
+            Dict chứa thông tin chi tiết về textbook
+        """
+        self._ensure_service_initialized()
+
         if not self.qdrant_client:
-            return {"success": False, "error": "Qdrant client not initialized"}
-        
-        try:
-            collection_name = f"textbook_{book_id}"
-            
-            # Get all points to analyze
-            points = self.qdrant_client.scroll(
-                collection_name=collection_name,
-                limit=1000,  # Adjust based on your data size
-                with_payload=True
-            )[0]  # scroll returns (points, next_page_token)
-            
-            # Analyze semantic distribution
-            semantic_stats = {
-                "semantic_types": {},
-                "difficulty_levels": {},
-                "content_features": {
-                    "has_examples": 0,
-                    "has_definitions": 0,
-                    "has_formulas": 0,
-                },
-                "concepts": {},
-                "total_chunks": 0
+            return {
+                "success": False,
+                "error": "Qdrant client not initialized"
             }
-            
-            for point in points:
-                payload = point.payload or {}
-                
-                # Skip metadata points
-                if payload.get("type") == "metadata":
-                    continue
-                    
-                semantic_stats["total_chunks"] += 1
-                
-                # Count semantic tags (multi-label)
-                semantic_tags = payload.get("semantic_tags", [])
-                for tag_info in semantic_tags:
-                    if isinstance(tag_info, dict) and "type" in tag_info:
-                        tag_type = tag_info["type"]
-                        semantic_stats["semantic_types"][tag_type] = (
-                            semantic_stats["semantic_types"].get(tag_type, 0) + 1
-                        )
-                
-                # Count difficulty levels
-                difficulty = payload.get("estimated_difficulty", "basic")
-                semantic_stats["difficulty_levels"][difficulty] = (
-                    semantic_stats["difficulty_levels"].get(difficulty, 0) + 1
-                )
-                
-                # Count content features
-                if payload.get("contains_examples"):
-                    semantic_stats["content_features"]["has_examples"] += 1
-                if payload.get("contains_definitions"):
-                    semantic_stats["content_features"]["has_definitions"] += 1
-                if payload.get("contains_formulas"):
-                    semantic_stats["content_features"]["has_formulas"] += 1
-                
-                # Count key concepts
-                key_concepts = payload.get("key_concepts", [])
-                for concept in key_concepts:
-                    semantic_stats["concepts"][concept] = (
-                        semantic_stats["concepts"].get(concept, 0) + 1
+
+        try:
+            from qdrant_client.http import models as qdrant_models
+
+            collection_name = self.UNIFIED_COLLECTION_NAME
+
+            # Kiểm tra unified collection có tồn tại không
+            collections = self.qdrant_client.get_collections().collections
+            existing_names = [c.name for c in collections]
+
+            if collection_name not in existing_names:
+                return {
+                    "success": False,
+                    "error": f"Unified collection {collection_name} not found",
+                    "book_id": book_id
+                }
+
+            # Tìm metadata point của textbook
+            metadata_filter = qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="book_id",
+                        match=qdrant_models.MatchValue(value=book_id)
+                    ),
+                    qdrant_models.FieldCondition(
+                        key="type",
+                        match=qdrant_models.MatchValue(value="metadata")
                     )
-            
-            # Sort and limit concepts
-            sorted_concepts = sorted(
-                semantic_stats["concepts"].items(), 
-                key=lambda x: x[1], 
-                reverse=True
-            )[:20]
-            
-            semantic_stats["top_concepts"] = dict(sorted_concepts)
-            del semantic_stats["concepts"]  # Remove full list
-            
+                ]
+            )
+
+            metadata_result = self.qdrant_client.scroll(
+                collection_name=collection_name,
+                scroll_filter=metadata_filter,
+                limit=1,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            if not metadata_result[0]:
+                return {
+                    "success": False,
+                    "error": f"Textbook with book_id '{book_id}' not found",
+                    "book_id": book_id
+                }
+
+            # Lấy metadata
+            metadata_point = metadata_result[0][0]
+            metadata_payload = metadata_point.payload or {}
+
+            # Tìm content points để lấy thống kê
+            content_filter = qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="book_id",
+                        match=qdrant_models.MatchValue(value=book_id)
+                    ),
+                    qdrant_models.FieldCondition(
+                        key="type",
+                        match=qdrant_models.MatchValue(value="content")
+                    )
+                ]
+            )
+
+            content_result = self.qdrant_client.scroll(
+                collection_name=collection_name,
+                scroll_filter=content_filter,
+                limit=1000,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            # Tính toán thống kê
+            total_chunks = len(content_result[0])
+            unique_lessons = set()
+
+            for point in content_result[0]:
+                payload = point.payload or {}
+                lesson_id = payload.get("lesson_id")
+                if lesson_id:
+                    unique_lessons.add(lesson_id)
+
             return {
                 "success": True,
                 "book_id": book_id,
-                "statistics": semantic_stats
+                "book_info": {
+                    "book_id": book_id,
+                    "total_chunks": metadata_payload.get("total_chunks", total_chunks),
+                    "total_lessons": len(unique_lessons),
+                    "processed_at": metadata_payload.get("processed_at"),
+                },
+                "statistics": {
+                    "total_chunks": total_chunks,
+                    "total_lessons": len(unique_lessons),
+                    "unique_lesson_ids": list(unique_lessons)
+                },
+                "collection_name": collection_name
             }
-            
+
         except Exception as e:
-            logger.error(f"Error getting semantic suggestions: {e}")
-            return {"success": False, "error": str(e)}
+            logger.error(f"Error getting textbook info for book_id {book_id}: {e}")
+            return {
+                "success": False,
+                "error": f"Error getting textbook info: {str(e)}",
+                "book_id": book_id
+            }
+
+    async def get_textbook_lessons_by_book_id(self, book_id: str) -> Dict[str, Any]:
+        """
+        Lấy danh sách lessons theo book_id
+
+        Args:
+            book_id: ID của textbook
+
+        Returns:
+            Dict chứa danh sách lessons
+        """
+        self._ensure_service_initialized()
+
+        if not self.qdrant_client:
+            return {
+                "success": False,
+                "error": "Qdrant client not initialized"
+            }
+
+        try:
+            from qdrant_client.http import models as qdrant_models
+
+            collection_name = self.UNIFIED_COLLECTION_NAME
+
+            # Tìm tất cả content points của book_id
+            content_filter = qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="book_id",
+                        match=qdrant_models.MatchValue(value=book_id)
+                    ),
+                    qdrant_models.FieldCondition(
+                        key="type",
+                        match=qdrant_models.MatchValue(value="content")
+                    )
+                ]
+            )
+
+            content_result = self.qdrant_client.scroll(
+                collection_name=collection_name,
+                scroll_filter=content_filter,
+                limit=1000,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            if not content_result[0]:
+                return {
+                    "success": False,
+                    "error": f"No lessons found for book_id '{book_id}'",
+                    "book_id": book_id
+                }
+
+            # Tổng hợp thông tin lessons
+            lessons_map = {}
+
+            for point in content_result[0]:
+                payload = point.payload or {}
+                lesson_id = payload.get("lesson_id")
+
+                if lesson_id and lesson_id not in lessons_map:
+                    lessons_map[lesson_id] = {
+                        "lesson_id": lesson_id,
+                        "book_id": book_id,
+                        "chunk_count": 0,
+                        "has_examples": False,
+                        "has_definitions": False,
+                        "has_formulas": False
+                    }
+
+                if lesson_id:
+                    lessons_map[lesson_id]["chunk_count"] += 1
+
+                    # Cập nhật content features
+                    if payload.get("contains_examples"):
+                        lessons_map[lesson_id]["has_examples"] = True
+                    if payload.get("contains_definitions"):
+                        lessons_map[lesson_id]["has_definitions"] = True
+                    if payload.get("contains_formulas"):
+                        lessons_map[lesson_id]["has_formulas"] = True
+
+            lessons_list = list(lessons_map.values())
+            lessons_list.sort(key=lambda x: x["lesson_id"])  # Sort by lesson_id
+
+            return {
+                "success": True,
+                "book_id": book_id,
+                "total_lessons": len(lessons_list),
+                "lessons": lessons_list,
+                "collection_name": collection_name
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting textbook lessons for book_id {book_id}: {e}")
+            return {
+                "success": False,
+                "error": f"Error getting textbook lessons: {str(e)}",
+                "book_id": book_id
+            }
+
+    async def get_lesson_info_by_lesson_id(self, lesson_id: str) -> Dict[str, Any]:
+        """
+        Lấy thông tin chi tiết về lesson theo lesson_id
+
+        Args:
+            lesson_id: ID của lesson
+
+        Returns:
+            Dict chứa thông tin chi tiết về lesson
+        """
+        self._ensure_service_initialized()
+
+        if not self.qdrant_client:
+            return {
+                "success": False,
+                "error": "Qdrant client not initialized"
+            }
+
+        try:
+            from qdrant_client.http import models as qdrant_models
+
+            collection_name = self.UNIFIED_COLLECTION_NAME
+
+            # Tìm tất cả content points của lesson_id
+            lesson_filter = qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="lesson_id",
+                        match=qdrant_models.MatchValue(value=lesson_id)
+                    ),
+                    qdrant_models.FieldCondition(
+                        key="type",
+                        match=qdrant_models.MatchValue(value="content")
+                    )
+                ]
+            )
+
+            lesson_result = self.qdrant_client.scroll(
+                collection_name=collection_name,
+                scroll_filter=lesson_filter,
+                limit=1000,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            if not lesson_result[0]:
+                return {
+                    "success": False,
+                    "error": f"Lesson with lesson_id '{lesson_id}' not found",
+                    "lesson_id": lesson_id
+                }
+
+            # Tổng hợp thông tin lesson
+            chunks = []
+            semantic_tags = set()
+            key_concepts = set()
+            lesson_info = None
+
+            for point in lesson_result[0]:
+                payload = point.payload or {}
+
+                # Lấy lesson info từ point đầu tiên
+                if lesson_info is None:
+                    lesson_info = {
+                        "lesson_id": lesson_id,
+                        "book_id": payload.get("book_id", "Unknown"),
+                    }
+
+                # Collect chunk info
+                chunks.append({
+                    "chunk_index": payload.get("chunk_index", 0),
+                    "text_preview": payload.get("text", "")[:200] + "..." if len(payload.get("text", "")) > 200 else payload.get("text", ""),
+                    "word_count": payload.get("word_count", 0),
+                    "char_count": payload.get("char_count", 0),
+                    "contains_examples": payload.get("contains_examples", False),
+                    "contains_definitions": payload.get("contains_definitions", False),
+                    "contains_formulas": payload.get("contains_formulas", False),
+                    "estimated_difficulty": payload.get("estimated_difficulty", "basic")
+                })
+
+                # Collect semantic info
+                for tag in payload.get("semantic_tags", []):
+                    if isinstance(tag, dict) and "type" in tag:
+                        semantic_tags.add(tag["type"])
+
+                for concept in payload.get("key_concepts", []):
+                    key_concepts.add(concept)
+
+            # Sort chunks by index
+            chunks.sort(key=lambda x: x["chunk_index"])
+
+            return {
+                "success": True,
+                "lesson_info": lesson_info,
+                "total_chunks": len(chunks),
+                "chunks": chunks,
+                "semantic_tags": list(semantic_tags),
+                "key_concepts": list(key_concepts)[:20],  # Limit to top 20
+                "collection_name": collection_name
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting lesson info for lesson_id {lesson_id}: {e}")
+            return {
+                "success": False,
+                "error": f"Error getting lesson info: {str(e)}",
+                "lesson_id": lesson_id
+            }
+
+    async def get_all_textbooks(self) -> Dict[str, Any]:
+        """
+        Lấy danh sách tất cả textbooks từ individual collections
+
+        Returns:
+            Dict chứa danh sách textbooks với metadata
+        """
+        from qdrant_client.http import models as qdrant_models
+
+        try:
+            if not self.qdrant_client:
+                logger.error("❌ Qdrant client not initialized in get_all_textbooks")
+                return {
+                    "success": False,
+                    "error": "Qdrant client not initialized"
+                }
+
+            # Lấy tất cả collections
+            collections = self.qdrant_client.get_collections().collections
+            existing_names = [c.name for c in collections]
+
+            logger.info(f"🔍 Found {len(existing_names)} collections: {existing_names}")
+
+            # Tìm các collections textbook và guide
+            textbook_collections = [name for name in existing_names if name.startswith(('textbook_', 'guide_'))]
+
+            if not textbook_collections:
+                return {
+                    "success": True,
+                    "textbooks": [],
+                    "message": "No textbooks found. No textbook or guide collections exist."
+                }
+
+            # Tìm metadata từ tất cả collections
+            textbooks = []
+
+            for collection_name in textbook_collections:
+                try:
+                    logger.info(f"🔍 Checking collection: {collection_name}")
+
+                    # Tìm metadata points trong collection này
+                    metadata_filter = qdrant_models.Filter(
+                        must=[
+                            qdrant_models.FieldCondition(
+                                key="type",
+                                match=qdrant_models.MatchValue(value="metadata")
+                            )
+                        ]
+                    )
+
+                    scroll_result = self.qdrant_client.scroll(
+                        collection_name=collection_name,
+                        scroll_filter=metadata_filter,
+                        limit=100,
+                        with_payload=True,
+                        with_vectors=False
+                    )
+
+                    if scroll_result[0]:
+                        for point in scroll_result[0]:
+                            payload = point.payload or {}
+
+                            # Lấy thông tin từ metadata point
+                            book_id = payload.get("book_id", "unknown")
+                            content_type = payload.get("content_type", "unknown")
+
+                            textbook_data = {
+                                "book_id": book_id,
+                                "content_type": content_type,
+                                "collection_name": collection_name,
+                                "total_chunks": payload.get("total_chunks", 0),
+                                "processed_at": payload.get("processed_at"),
+                                "model": payload.get("model", "unknown"),
+                                "chunk_size": payload.get("chunk_size", 0),
+                                "chunk_overlap": payload.get("chunk_overlap", 0),
+                            }
+                            textbooks.append(textbook_data)
+
+                except Exception as e:
+                    logger.warning(f"Error processing collection {collection_name}: {e}")
+                    continue
+
+            return {
+                "success": True,
+                "textbooks": textbooks,
+                "total_textbooks": len(textbooks),
+                "collections_checked": textbook_collections
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting all textbooks: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
 
 # Factory function để tạo QdrantService instance
