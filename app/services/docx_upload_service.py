@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, Any
 from fastapi import UploadFile
 
-from app.services.google_drive_service import google_drive_service
+from app.services.google_drive_service import get_google_drive_service
 from app.models.online_document_models import OnlineDocumentResponse, OnlineDocumentLinks
 
 logger = logging.getLogger(__name__)
@@ -192,14 +192,15 @@ class DocxUploadService:
         """
         try:
             # Kiểm tra Google Drive service
-            if not google_drive_service.is_available():
+            drive_service = get_google_drive_service()
+            if not drive_service.is_available():
                 return {
                     "success": False,
                     "error": "Google Drive service không khả dụng"
                 }
-            
+
             # Upload file
-            upload_result = await google_drive_service.upload_docx_file(
+            upload_result = await drive_service.upload_docx_file(
                 file_path=file_path,
                 filename=original_filename,
                 convert_to_google_docs=convert_to_google_docs

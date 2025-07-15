@@ -14,9 +14,11 @@ from app.api.endpoints import (
     llm_endpoints,
     auth_endpoints,
     protected_demo,
+    rag_endpoints,
 )
-from app.services.lesson_plan_framework_service import lesson_plan_framework_service
+
 from app.services.kafka_service import kafka_service
+from app.core.kafka_config import get_responses_topic
 from app.api.endpoints import auto_grading
 
 # Initialize FastAPI app
@@ -67,6 +69,9 @@ api_router.include_router(
 )
 api_router.include_router(
     protected_demo.router, prefix="/demo", tags=["Authentication Demo"]
+)
+api_router.include_router(
+    rag_endpoints.router, prefix="/rag", tags=["RAG Services"]
 )
 # Add API router to app
 app.include_router(api_router, prefix=settings.API_PREFIX)
@@ -121,7 +126,9 @@ async def handle_incoming_message(message_data: dict):
         source = message_data.get("source", "unknown")
         timestamp = message_data.get("timestamp", "")
         data = message_data.get("data", {})
-        message_type = data.get("type", "unknown")
+
+        # Message type có thể ở top level hoặc trong data
+        message_type = message_data.get("type") or data.get("type", "unknown")
 
         print(f"[KAFKA] 📋 Message details:")
         print(f"  - Source: {source}")
@@ -132,6 +139,8 @@ async def handle_incoming_message(message_data: dict):
         # Process message based on type
         if message_type == "lesson_plan_request":
             await handle_lesson_plan_request(data)
+        elif message_type == "lesson_plan_content_generation_request":
+            await handle_lesson_plan_content_generation_request(data)
         elif message_type == "exam_generation_request":
             await handle_exam_generation_request(data)
         elif message_type == "grading_request":
@@ -154,7 +163,6 @@ async def handle_lesson_plan_request(data: dict):
         subject = data.get("subject", "")
         grade = data.get("grade", "")
         lesson_id = data.get("lesson_id", "")
-        requirements = data.get("requirements", [])
 
         # Process the lesson plan request
         # You can call your existing lesson plan service here
@@ -172,11 +180,104 @@ async def handle_lesson_plan_request(data: dict):
             }
         }
 
-        await kafka_service.send_message_async(response_message)
+        await kafka_service.send_message_async(response_message, topic=get_responses_topic())
         print(f"[KAFKA] ✅ Sent response for lesson plan request")
 
     except Exception as e:
         print(f"[KAFKA] ❌ Error handling lesson plan request: {e}")
+
+
+async def _send_error_response(user_id: str, error_message: str, timestamp: str):
+    """Send error response back to SpringBoot via Kafka"""
+    try:
+        error_response = {
+            "type": "lesson_plan_content_generation_response",
+            "data": {
+                "status": "error",
+                "user_id": user_id,
+                "error": error_message,
+                "message": "Failed to process lesson plan content generation request",
+                "timestamp": timestamp
+            }
+        }
+
+        await kafka_service.send_message_async(error_response, topic=get_responses_topic(), key=user_id)
+        print(f"[KAFKA] ✅ Sent error response for user {user_id}: {error_message}")
+
+    except Exception as e:
+        print(f"[KAFKA] ❌ Failed to send error response: {e}")
+
+
+async def handle_lesson_plan_content_generation_request(data: dict):
+    """Handle lesson plan content generation request from SpringBoot"""
+    try:
+        print(f"[KAFKA] 📝 Processing lesson plan content generation request: {data}")
+
+        # Extract request parameters
+        user_id = data.get("user_id", "")
+        lesson_plan_json = data.get("lesson_plan_json", {})
+        lesson_id = data.get("lesson_id", "")
+
+        if not user_id:
+            print(f"[KAFKA] ❌ Missing user_id in lesson plan content generation request")
+            return
+
+        if not lesson_plan_json:
+            print(f"[KAFKA] ❌ Missing lesson_plan_json in lesson plan content generation request")
+            await _send_error_response(user_id, "Missing lesson_plan_json in request", data.get("timestamp", ""))
+            return
+
+        # Remove validation for 'id' field since SpringBoot lesson_plan_json has different format
+        # The lesson_plan_json from SpringBoot contains title and sections, not id/type/status
+        print(f"[KAFKA] 📋 Lesson plan content generation for user {user_id}, lesson {lesson_id}")
+
+        print(f"[KAFKA] 📋 Lesson plan content generation for user {user_id}, lesson {lesson_id}")
+
+        # Import the lesson plan endpoint function
+        from app.api.endpoints.lesson_plan import LessonPlanContentRequest
+        from app.services.background_task_processor import get_background_task_processor
+
+        # Create request object
+        request_obj = LessonPlanContentRequest(
+            lesson_plan_json=lesson_plan_json,
+            lesson_id=lesson_id,
+            user_id=user_id
+        )
+
+        # Create task using background task processor
+        task_id = await get_background_task_processor().create_lesson_plan_content_task(
+            lesson_plan_json=request_obj.lesson_plan_json,
+            lesson_id=request_obj.lesson_id,
+            user_id=request_obj.user_id
+        )
+
+        # Send initial response back via Kafka
+        response_message = {
+            "type": "lesson_plan_content_generation_response",
+            "data": {
+                "status": "accepted",
+                "task_id": task_id,
+                "user_id": user_id,
+                "message": "Lesson plan content generation task created successfully",
+                "timestamp": data.get("timestamp", "")
+            }
+        }
+
+        await kafka_service.send_message_async(response_message, topic=get_responses_topic(), key=user_id)
+        print(f"[KAFKA] ✅ Sent response for lesson plan content generation request - Task ID: {task_id}")
+
+    except Exception as e:
+        print(f"[KAFKA] ❌ Error handling lesson plan content generation request: {e}")
+
+        # Extract user_id for error response
+        user_id = data.get("user_id", "")
+        timestamp = data.get("timestamp", "")
+
+        # Send error response back via Kafka using the helper function
+        if user_id:
+            await _send_error_response(user_id, str(e), timestamp)
+        else:
+            print(f"[KAFKA] ❌ Cannot send error response: missing user_id in data")
 
 
 async def handle_exam_generation_request(data: dict):
@@ -203,7 +304,7 @@ async def handle_exam_generation_request(data: dict):
             }
         }
 
-        await kafka_service.send_message_async(response_message)
+        await kafka_service.send_message_async(response_message, topic=get_responses_topic())
         print(f"[KAFKA] ✅ Sent response for exam generation request")
 
     except Exception as e:
@@ -217,7 +318,6 @@ async def handle_grading_request(data: dict):
 
         # Extract request parameters
         exam_id = data.get("exam_id", "")
-        student_answers = data.get("student_answers", [])
 
         print(f"[KAFKA] 📊 Grading request for exam {exam_id}")
 
@@ -232,7 +332,7 @@ async def handle_grading_request(data: dict):
             }
         }
 
-        await kafka_service.send_message_async(response_message)
+        await kafka_service.send_message_async(response_message, topic=get_responses_topic())
         print(f"[KAFKA] ✅ Sent response for grading request")
 
     except Exception as e:
@@ -246,7 +346,6 @@ async def handle_textbook_processing_request(data: dict):
 
         # Extract request parameters
         textbook_path = data.get("textbook_path", "")
-        processing_type = data.get("processing_type", "")
 
         print(f"[KAFKA] 📚 Textbook processing request for {textbook_path}")
 
@@ -261,7 +360,7 @@ async def handle_textbook_processing_request(data: dict):
             }
         }
 
-        await kafka_service.send_message_async(response_message)
+        await kafka_service.send_message_async(response_message, topic=get_responses_topic())
         print(f"[KAFKA] ✅ Sent response for textbook processing request")
 
     except Exception as e:

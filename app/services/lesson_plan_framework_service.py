@@ -420,21 +420,15 @@ Chỉ trả về JSON, không thêm text giải thích.
             self.client.close()
 
 
-# Lazy loading global instance để tránh khởi tạo ngay khi import
-_lesson_plan_framework_service_instance = None
-
+# Factory function để tạo LessonPlanFrameworkService instance
 def get_lesson_plan_framework_service() -> LessonPlanFrameworkService:
     """
-    Lấy singleton instance của LessonPlanFrameworkService
-    Lazy initialization
+    Tạo LessonPlanFrameworkService instance mới
 
     Returns:
-        LessonPlanFrameworkService: Service instance
+        LessonPlanFrameworkService: Fresh instance
     """
-    global _lesson_plan_framework_service_instance
-    if _lesson_plan_framework_service_instance is None:
-        _lesson_plan_framework_service_instance = LessonPlanFrameworkService()
-    return _lesson_plan_framework_service_instance
+    return LessonPlanFrameworkService()
 
 # Backward compatibility - deprecated, sử dụng get_lesson_plan_framework_service() thay thế
 # Lazy loading để tránh khởi tạo ngay khi import
@@ -442,12 +436,4 @@ def _get_lesson_plan_framework_service_lazy():
     """Lazy loading cho backward compatibility"""
     return get_lesson_plan_framework_service()
 
-# Tạo proxy object để lazy loading
-class _LessonPlanFrameworkServiceProxy:
-    def __getattr__(self, name):
-        return getattr(_get_lesson_plan_framework_service_lazy(), name)
 
-    def __call__(self, *args, **kwargs):
-        return _get_lesson_plan_framework_service_lazy()(*args, **kwargs)
-
-lesson_plan_framework_service = _LessonPlanFrameworkServiceProxy()

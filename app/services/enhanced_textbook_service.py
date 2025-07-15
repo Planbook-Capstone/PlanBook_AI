@@ -12,7 +12,7 @@ import fitz  # PyMuPDF
 from PIL import Image
 import io
 
-from app.services.simple_ocr_service import simple_ocr_service
+from app.services.simple_ocr_service import get_simple_ocr_service
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,7 @@ class EnhancedTextbookService:
 
     def __init__(self):
         self.executor = ThreadPoolExecutor(max_workers=4)
+        self.ocr_service = get_simple_ocr_service()
 
     async def process_textbook_to_structure(
         self,
@@ -178,7 +179,7 @@ class EnhancedTextbookService:
             image = Image.open(io.BytesIO(img_data))
 
             # Use SimpleOCRService's _ocr_image method which handles EasyOCR initialization
-            text = await simple_ocr_service._ocr_image(image, page_data['page_number'])
+            text = await self.ocr_service._ocr_image(image, page_data['page_number'])
             return text
 
         except Exception as e:
@@ -258,27 +259,33 @@ class EnhancedTextbookService:
             from app.services.openrouter_service import get_openrouter_service
 
             openrouter_service = get_openrouter_service()
-            if not openrouter_service.available:
-                logger.warning("OpenRouter service not available, returning original content")
-                return self.clean_text_content(raw_text)
-
             logger.info("🤖 Sending raw content to OpenRouter for refinement...")
 
             prompt = f"""
-Bạn là chuyên gia giáo dục, hãy lọc và chỉnh sửa nội dung sách giáo khoa sau đây.
+Bạn là chuyên gia giáo dục, hãy lọc và cấu trúc lại nội dung sách giáo khoa để tối ưu cho hệ thống chunking thông minh.
 
-YÊU CẦU:
-1. Giữ lại toàn bộ nội dung giáo dục quan trọng (khái niệm, định nghĩa, công thức, ví dụ)
-2. Loại bỏ các thông tin không liên quan (header, footer, số trang, watermark)
-3. Sắp xếp lại nội dung theo logic rõ ràng
-4. Giữ nguyên thuật ngữ chuyên môn
-5. Đảm bảo nội dung đầy đủ và dễ hiểu cho học sinh
-6. Trả về CHỈ NỘI DUNG THUẦN TÚY, không có format markdown, không có ký tự đặc biệt
+YÊU CẦU CẤU TRÚC:
+1. ĐỊNH NGHĨA: Bắt đầu bằng "Định nghĩa:" hoặc sử dụng cấu trúc "X là..." rõ ràng
+2. BÀI TẬP/VÍ DỤ: Đánh số rõ ràng "Bài 1.", "Ví dụ 1:", "Hãy cho biết..."
+3. BẢNG BIỂU: Bắt đầu bằng "Bảng X:" và giữ nguyên cấu trúc bảng
+4. TIỂU MỤC: Sử dụng "I.", "II.", "1.", "2." cho các phần chính
+
+YÊU CẦU NỘI DUNG:
+- Giữ lại toàn bộ khái niệm, định nghĩa, công thức, ví dụ quan trọng
+- Loại bỏ header, footer, số trang, watermark không liên quan
+- Giữ nguyên thuật ngữ khoa học và công thức (H2O, 1.672 x 10^-27, etc.)
+- Đảm bảo mỗi bài tập/ví dụ có đầy đủ đề bài và lời giải
+- Bảng phải hoàn chỉnh với tiêu đề và nội dung
+
+ĐỊNH DẠNG XUẤT:
+- Text thuần túy, không markdown
+- Mỗi phần cách nhau bằng dòng trống
+- Giữ nguyên ký hiệu khoa học (^, ², ³, →, ←, etc.)
 
 NỘI DUNG CẦN CHỈNH SỬA:
 {raw_text[:8000]}
 
-Trả về nội dung đã được lọc và chỉnh sửa (chỉ text thuần túy):"""
+Trả về nội dung đã được cấu trúc lại theo yêu cầu:"""
 
             result = await openrouter_service.generate_content(
                 prompt=prompt,
@@ -305,5 +312,12 @@ Trả về nội dung đã được lọc và chỉnh sửa (chỉ text thuần 
 
 
 
-# Global instance
-enhanced_textbook_service = EnhancedTextbookService()
+# Factory function để tạo EnhancedTextbookService instance
+def get_enhanced_textbook_service() -> EnhancedTextbookService:
+    """
+    Tạo EnhancedTextbookService instance mới
+
+    Returns:
+        EnhancedTextbookService: Fresh instance
+    """
+    return EnhancedTextbookService()

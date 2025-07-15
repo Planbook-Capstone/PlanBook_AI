@@ -13,26 +13,10 @@ logger = logging.getLogger(__name__)
 class OpenRouterService:
     """
     Service sử dụng OpenRouter API để gọi các LLM models
-    Singleton pattern với Lazy Initialization
     """
 
-    _instance = None
-    _lock = threading.Lock()
-
-    def __new__(cls):
-        """Singleton pattern implementation với thread-safe"""
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super(OpenRouterService, cls).__new__(cls)
-                    cls._instance._initialized = False
-        return cls._instance
-
     def __init__(self):
-        """Lazy initialization - chỉ khởi tạo một lần"""
-        if self._initialized:
-            return
-
+        """Initialize OpenRouter service"""
         # Chỉ set flag, không khởi tạo service ngay
         self.api_key = None
         self.base_url = None
@@ -41,7 +25,6 @@ class OpenRouterService:
         self.site_name = None
         self.available = False
         self._service_initialized = False
-        self._initialized = True
 
     def _ensure_service_initialized(self):
         """Ensure OpenRouter service is initialized"""
@@ -215,35 +198,12 @@ class OpenRouterService:
             }
 
 
-# Hàm để lấy singleton instance
+# Factory function để tạo OpenRouterService instance
 def get_openrouter_service() -> OpenRouterService:
     """
-    Lấy singleton instance của OpenRouterService
-    Thread-safe lazy initialization
+    Tạo OpenRouterService instance mới
 
     Returns:
-        OpenRouterService: Singleton instance
+        OpenRouterService: Fresh instance
     """
     return OpenRouterService()
-
-
-# Backward compatibility - deprecated, sử dụng get_openrouter_service() thay thế
-# Lazy loading để tránh khởi tạo ngay khi import
-_openrouter_service_instance = None
-
-def _get_openrouter_service_lazy():
-    """Lazy loading cho backward compatibility"""
-    global _openrouter_service_instance
-    if _openrouter_service_instance is None:
-        _openrouter_service_instance = get_openrouter_service()
-    return _openrouter_service_instance
-
-# Tạo proxy object để lazy loading
-class _OpenRouterServiceProxy:
-    def __getattr__(self, name):
-        return getattr(_get_openrouter_service_lazy(), name)
-
-    def __call__(self, *args, **kwargs):
-        return _get_openrouter_service_lazy()(*args, **kwargs)
-
-openrouter_service = _OpenRouterServiceProxy()

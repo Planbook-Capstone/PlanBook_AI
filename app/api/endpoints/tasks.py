@@ -7,7 +7,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query
 from typing import Dict, Any
 
-from app.services.background_task_processor import background_task_processor
+from app.services.background_task_processor import get_background_task_processor
 
 logger = logging.getLogger(__name__)
 
@@ -143,11 +143,13 @@ async def get_task_status(task_id: str) -> Dict[str, Any]:
             "message": "Creating embeddings...",
             "result": null  // Chỉ có khi completed
         }"""
-    try:  # Sử dụng method tối ưu hơn nếu có
-        if hasattr(background_task_processor, "get_task_status_optimized"):
-            task = await background_task_processor.get_task_status_optimized(task_id)
+    try:
+        background_processor = get_background_task_processor()
+        # Sử dụng method tối ưu hơn nếu có
+        if hasattr(background_processor, "get_task_status_optimized"):
+            task = await background_processor.get_task_status_optimized(task_id)
         else:
-            task = await background_task_processor.get_task_status(task_id)
+            task = await background_processor.get_task_status(task_id)
 
         if not task:
             raise HTTPException(
@@ -291,7 +293,8 @@ async def get_task_result(task_id: str) -> Dict[str, Any]:
     try:
         logger.info(f"Getting result for task: {task_id}")
 
-        task = await background_task_processor.get_task_status(task_id)
+        background_processor = get_background_task_processor()
+        task = await background_processor.get_task_status(task_id)
 
         if not task:
             raise HTTPException(
@@ -379,7 +382,7 @@ async def get_all_tasks(
     """
     try:
         # Get all tasks
-        result = await background_task_processor.get_all_tasks()
+        result = await get_background_task_processor().get_all_tasks()
         tasks = result["tasks"]
 
         # Filter by status if provided
@@ -510,7 +513,7 @@ async def cancel_task(task_id: str) -> Dict[str, Any]:
     """
     try:
         # Check if task exists
-        task = background_task_processor.get_task_status(task_id)
+        task = get_background_task_processor().get_task_status(task_id)
         if not task:
             raise HTTPException(
                 status_code=404, detail=f"Task with ID {task_id} not found"
@@ -524,7 +527,7 @@ async def cancel_task(task_id: str) -> Dict[str, Any]:
             )
 
         # Mark task as cancelled
-        background_task_processor.mark_task_failed(task_id, "Cancelled by user")
+        get_background_task_processor().mark_task_failed(task_id, "Cancelled by user")
 
         return {
             "success": True,
@@ -559,15 +562,15 @@ async def cleanup_old_tasks(
     """
     try:
         # Count tasks before cleanup
-        before_count = len(background_task_processor.task_service.tasks)
+        before_count = len(get_background_task_processor().task_service.tasks)
 
         # Perform cleanup
-        background_task_processor.task_service.cleanup_old_tasks(
+        get_background_task_processor().task_service.cleanup_old_tasks(
             max_age_hours=max_age_hours
         )
 
         # Count tasks after cleanup
-        after_count = len(background_task_processor.task_service.tasks)
+        after_count = len(get_background_task_processor().task_service.tasks)
         cleaned_count = before_count - after_count
 
         return {
@@ -595,15 +598,15 @@ async def get_task_statistics() -> Dict[str, Any]:
         GET /api/v1/tasks/statistics
     """
     try:
-        stats = background_task_processor.task_service.get_task_statistics()
+        stats = get_background_task_processor().task_service.get_task_statistics()
 
         return {
             "success": True,
             "statistics": stats,
-            "timestamp": background_task_processor.task_service.tasks
+            "timestamp": get_background_task_processor().task_service.tasks
             and max(
                 task["created_at"]
-                for task in background_task_processor.task_service.tasks.values()
+                for task in get_background_task_processor().task_service.tasks.values()
             )
             or None,
         }
@@ -658,7 +661,7 @@ async def debug_task(task_id: str) -> Dict[str, Any]:
         Dict chứa toàn bộ thông tin task
     """
     try:
-        task = background_task_processor.get_task_status(task_id)
+        task = get_background_task_processor().get_task_status(task_id)
 
         if not task:
             raise HTTPException(
@@ -702,7 +705,7 @@ async def get_task_progress_detailed(task_id: str) -> Dict[str, Any]:
         GET /api/v1/tasks/progress/abc-123
     """
     try:
-        task = await background_task_processor.get_task_status_optimized(task_id)
+        task = await get_background_task_processor().get_task_status_optimized(task_id)
 
         if not task:
             raise HTTPException(

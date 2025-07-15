@@ -20,6 +20,8 @@ class SmartExamGenerationService:
 
     def __init__(self):
         self.llm_service = get_openrouter_service()
+        # Đảm bảo service được khởi tạo đầy đủ
+        self.llm_service._ensure_service_initialized()
         logger.info("🔄 SmartExamGenerationService: First-time initialization triggered")
 
     async def generate_smart_exam(
@@ -453,21 +455,15 @@ HƯỚNG DẪN PHẦN III - TỰ LUẬN HÓA HỌC:
             )
 
 
-# Lazy loading global instance để tránh khởi tạo ngay khi import
-_smart_exam_generation_service_instance = None
-
+# Factory function để tạo SmartExamGenerationService instance
 def get_smart_exam_generation_service() -> SmartExamGenerationService:
     """
-    Lấy singleton instance của SmartExamGenerationService
-    Lazy initialization
+    Tạo SmartExamGenerationService instance mới
 
     Returns:
-        SmartExamGenerationService: Service instance
+        SmartExamGenerationService: Fresh instance
     """
-    global _smart_exam_generation_service_instance
-    if _smart_exam_generation_service_instance is None:
-        _smart_exam_generation_service_instance = SmartExamGenerationService()
-    return _smart_exam_generation_service_instance
+    return SmartExamGenerationService()
 
 # Backward compatibility - deprecated, sử dụng get_smart_exam_generation_service() thay thế
 # Lazy loading để tránh khởi tạo ngay khi import
@@ -475,12 +471,4 @@ def _get_smart_exam_generation_service_lazy():
     """Lazy loading cho backward compatibility"""
     return get_smart_exam_generation_service()
 
-# Tạo proxy object để lazy loading
-class _SmartExamGenerationServiceProxy:
-    def __getattr__(self, name):
-        return getattr(_get_smart_exam_generation_service_lazy(), name)
 
-    def __call__(self, *args, **kwargs):
-        return _get_smart_exam_generation_service_lazy()(*args, **kwargs)
-
-smart_exam_generation_service = _SmartExamGenerationServiceProxy()

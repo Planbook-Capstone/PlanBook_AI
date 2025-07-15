@@ -10,7 +10,7 @@ from copy import deepcopy
 
 from app.services.llm_service import get_llm_service
 from app.services.textbook_retrieval_service import TextbookRetrievalService
-from app.services.enhanced_textbook_service import EnhancedTextbookService
+from app.services.enhanced_textbook_service import get_enhanced_textbook_service
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +21,10 @@ class LessonPlanContentService:
     """
     
     def __init__(self):
+        """Initialize LessonPlanContentService"""
         self.llm_service = get_llm_service()
         self.textbook_service = TextbookRetrievalService()
-        self.enhanced_textbook_service = EnhancedTextbookService()
+        self.enhanced_textbook_service = get_enhanced_textbook_service()
         
         # Giới hạn độ sâu để tránh vòng lặp vô hạn
         self.MAX_DEPTH = 10
@@ -75,12 +76,22 @@ class LessonPlanContentService:
             # 3. Tạo deep copy để không thay đổi input gốc
             processed_json = deepcopy(lesson_plan_json)
             
-            # 4. Xử lý đệ quy để sinh nội dung
-            processing_result = await self._process_lesson_plan_recursive(
-                processed_json, 
-                lesson_content,
-                depth=0
-            )
+            # 4. Detect format và xử lý phù hợp
+            is_springboot_format = "title" in lesson_plan_json and "sections" in lesson_plan_json
+
+            if is_springboot_format:
+                # Xử lý SpringBoot format
+                processing_result = await self._process_springboot_format(
+                    processed_json,
+                    lesson_content
+                )
+            else:
+                # Xử lý format cũ
+                processing_result = await self._process_lesson_plan_recursive(
+                    processed_json,
+                    lesson_content,
+                    depth=0
+                )
             
             if not processing_result["success"]:
                 return {
@@ -120,6 +131,248 @@ class LessonPlanContentService:
                 "success": False,
                 "error": str(e),
                 "lesson_plan": lesson_plan_json
+            }
+
+    async def _process_springboot_format(
+        self,
+        lesson_plan_json: Dict[str, Any],
+        lesson_content: str
+    ) -> Dict[str, Any]:
+        """
+        Xử lý lesson plan với SpringBoot format (có title và sections)
+
+        Args:
+            lesson_plan_json: JSON với format SpringBoot
+            lesson_content: Nội dung bài học tham khảo
+
+        Returns:
+            Dict chứa kết quả xử lý
+        """
+        try:
+            logger.info("Processing SpringBoot format lesson plan")
+            nodes_processed = 0
+
+            # Xử lý root level nếu cần
+            if not lesson_plan_json.get("content", "").strip():
+                root_result = await self._process_springboot_node(lesson_plan_json, lesson_content)
+                if root_result.get("content_generated", False):
+                    nodes_processed += 1
+
+            # Xử lý sections
+            sections = lesson_plan_json.get("sections", [])
+            for section in sections:
+                section_result = await self._process_springboot_section_recursive(
+                    section, lesson_content
+                )
+                if not section_result["success"]:
+                    return section_result
+                nodes_processed += section_result.get("nodes_processed", 0)
+
+            return {
+                "success": True,
+                "nodes_processed": nodes_processed
+            }
+
+        except Exception as e:
+            logger.error(f"Error processing SpringBoot format: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _process_springboot_section_recursive(
+        self,
+        section: Dict[str, Any],
+        lesson_content: str
+    ) -> Dict[str, Any]:
+        """
+        Xử lý đệ quy một section trong SpringBoot format
+
+        Args:
+            section: Section cần xử lý
+            lesson_content: Nội dung bài học tham khảo
+
+        Returns:
+            Dict chứa kết quả xử lý
+        """
+        try:
+            nodes_processed = 0
+
+            # Xử lý section hiện tại
+            section_result = await self._process_springboot_node(section, lesson_content)
+            if section_result.get("content_generated", False):
+                nodes_processed += 1
+
+            # Xử lý subsections
+            subsections = section.get("subsections", [])
+            for subsection in subsections:
+                subsection_result = await self._process_springboot_section_recursive(
+                    subsection, lesson_content
+                )
+                if not subsection_result["success"]:
+                    return subsection_result
+                nodes_processed += subsection_result.get("nodes_processed", 0)
+
+            return {
+                "success": True,
+                "nodes_processed": nodes_processed
+            }
+
+        except Exception as e:
+            logger.error(f"Error processing SpringBoot section: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _process_springboot_node(
+        self,
+        node: Dict[str, Any],
+        lesson_content: str
+    ) -> Dict[str, Any]:
+        """
+        Xử lý một node trong SpringBoot format
+
+        Args:
+            node: Node cần xử lý
+            lesson_content: Nội dung bài học tham khảo
+
+        Returns:
+            Dict chứa kết quả xử lý
+        """
+        try:
+            # Kiểm tra xem có cần sinh content không
+            current_content = node.get("content", "")
+            field_type = node.get("fieldType")
+
+            # Chỉ sinh content nếu content rỗng và có fieldType phù hợp
+            if not current_content.strip() and field_type:
+                logger.info(f"Generating content for SpringBoot node: {node.get('name', 'unknown')}")
+
+                # Tạo node tương thích với format cũ để sử dụng lại logic sinh content
+                compatible_node = {
+                    "id": node.get("name", "unknown"),
+                    "type": self._map_field_type_to_type(field_type),
+                    "title": node.get("name", ""),
+                    "content": current_content,
+                    "status": "ACTIVE"
+                }
+
+                # Sinh content
+                if field_type == "TABLE":
+                    # Xử lý TABLE fieldType đặc biệt
+                    table_result = await self._process_table_field(node, lesson_content)
+                    if table_result["success"]:
+                        node["content"] = table_result["content"]
+                        return {"success": True, "content_generated": True}
+                    else:
+                        return table_result
+                else:
+                    # Xử lý các fieldType khác
+                    generated_content = await self._generate_content_for_node(
+                        compatible_node, lesson_content
+                    )
+
+                    if generated_content["success"]:
+                        node["content"] = generated_content["content"]
+                        return {"success": True, "content_generated": True}
+                    else:
+                        return {
+                            "success": False,
+                            "error": f"Failed to generate content: {generated_content['error']}"
+                        }
+
+            return {"success": True, "content_generated": False}
+
+        except Exception as e:
+            logger.error(f"Error processing SpringBoot node: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def _map_field_type_to_type(self, field_type: str) -> str:
+        """
+        Map SpringBoot fieldType to old format type
+
+        Args:
+            field_type: SpringBoot fieldType
+
+        Returns:
+            str: Mapped type for old format
+        """
+        mapping = {
+            "TEXT": "PARAGRAPH",
+            "TABLE": "PARAGRAPH",  # Will be handled specially
+            "LIST": "LIST_ITEM",
+            "SECTION": "SECTION",
+            "SUBSECTION": "SUBSECTION"
+        }
+        return mapping.get(field_type, "PARAGRAPH")
+
+    async def _process_table_field(
+        self,
+        node: Dict[str, Any],
+        lesson_content: str
+    ) -> Dict[str, Any]:
+        """
+        Xử lý fieldType TABLE đặc biệt
+
+        Args:
+            node: Node với fieldType TABLE
+            lesson_content: Nội dung bài học tham khảo
+
+        Returns:
+            Dict chứa kết quả xử lý
+        """
+        try:
+            # Lấy content từ node (có thể là JSON structure)
+            table_content = node.get("content")
+
+            if isinstance(table_content, dict) and "rows" in table_content:
+                # Xử lý table với rows/cells structure
+                rows = table_content.get("rows", [])
+                for row in rows:
+                    cells = row.get("cells", [])
+                    for cell in cells:
+                        # Sinh content cho cell nếu cần
+                        if not cell.get("content", "").strip() and cell.get("title"):
+                            cell_context = {
+                                "id": f"{node.get('name', 'table')}_cell",
+                                "title": cell.get("title", ""),
+                                "type": "table_cell"
+                            }
+
+                            cell_result = await self._generate_table_cell_content(
+                                cell_context, lesson_content
+                            )
+
+                            if cell_result["success"]:
+                                cell["content"] = cell_result["content"]
+
+                # Convert back to JSON string if needed
+                import json
+                return {
+                    "success": True,
+                    "content": json.dumps(table_content, ensure_ascii=False)
+                }
+            else:
+                # Fallback: treat as regular content
+                compatible_node = {
+                    "id": node.get("name", "table"),
+                    "type": "PARAGRAPH",
+                    "title": node.get("name", ""),
+                    "content": "",
+                    "status": "ACTIVE"
+                }
+
+                return await self._generate_content_for_node(compatible_node, lesson_content)
+
+        except Exception as e:
+            logger.error(f"Error processing table field: {e}")
+            return {
+                "success": False,
+                "error": str(e)
             }
 
     async def generate_lesson_plan_content_with_progress(
@@ -881,8 +1134,15 @@ THÔNG TIN NODE:
 NGỮ CẢNH GIÁO ÁN:
 {context_info}
 
-NỘI DUNG BÀI HỌC THAM KHẢO:
+NỘI DUNG BÀI HỌC THAM KHẢO (đã được chunking thông minh):
 {lesson_content}
+
+HƯỚNG DẪN SỬ DỤNG NỘI DUNG THAM KHẢO:
+- Nội dung trên đã được chia thành các chunks có ngữ nghĩa hoàn chỉnh
+- Mỗi chunk chứa: định nghĩa hoàn chỉnh, bài tập từ đầu đến cuối, hoặc bảng không bị cắt
+- Ưu tiên sử dụng chunks có chunk_type="definition" cho khái niệm
+- Sử dụng chunks có chunk_type="example" cho ví dụ minh họa
+- Tham khảo chunks có chunk_type="table" cho dữ liệu cụ thể
 
 YÊU CẦU QUAN TRỌNG:
 1. Nội dung PHẢI ngắn gọn, chỉ 2-3 câu (tối đa 100 từ)
@@ -890,8 +1150,9 @@ YÊU CẦU QUAN TRỌNG:
 3. PHẢI cụ thể với bài học, không được nói chung chung
 4. Tránh hoàn toàn các cụm từ mở đầu như "Để bắt đầu", "Để giúp học sinh", "Chúng ta cần"
 5. Đi thẳng vào nội dung chính, không dẫn dắt dài dòng
-6. Sử dụng thuật ngữ chính xác từ sách giáo khoa
+6. Sử dụng thuật ngữ chính xác từ sách giáo khoa (giữ nguyên công thức, ký hiệu khoa học)
 7. Tập trung vào {content_target} cụ thể, không lan man
+8. Khi trích dẫn định nghĩa, bài tập, bảng - đảm bảo trích dẫn đầy đủ ngữ nghĩa
 {specific_requirements}
 
 ĐỊNH DẠNG ĐẦU RA:
@@ -1101,7 +1362,18 @@ YÊU CẦU QUAN TRỌNG:
                     "error": "Input must be a dictionary"
                 }
 
-            # Kiểm tra các trường bắt buộc ở root level
+            # Kiểm tra format từ SpringBoot (có title và sections)
+            if "title" in lesson_plan_json and "sections" in lesson_plan_json:
+                # Format từ SpringBoot - chỉ cần validate sections
+                sections = lesson_plan_json.get("sections", [])
+                if not isinstance(sections, list):
+                    return {
+                        "valid": False,
+                        "error": "Sections must be a list"
+                    }
+                return {"valid": True}
+
+            # Format cũ với id/type/status - giữ nguyên validation
             required_fields = ["id", "type", "status"]
             for field in required_fields:
                 if field not in lesson_plan_json:
@@ -1110,8 +1382,8 @@ YÊU CẦU QUAN TRỌNG:
                         "error": f"Missing required field at root level: {field}"
                     }
 
-            # Validate đệ quy
-            validation_result = self._validate_node_recursive(lesson_plan_json, set())
+            # Validate đệ quy cho format cũ
+            validation_result = self._validate_node_recursive(lesson_plan_json, set(), is_springboot_format=False)
 
             return validation_result
 
@@ -1125,7 +1397,8 @@ YÊU CẦU QUAN TRỌNG:
     def _validate_node_recursive(
         self,
         node: Dict[str, Any],
-        visited_ids: Set[int]
+        visited_ids: Set[int],
+        is_springboot_format: bool = False
     ) -> Dict[str, Any]:
         """
         Validate một node và các children của nó
@@ -1133,6 +1406,7 @@ YÊU CẦU QUAN TRỌNG:
         Args:
             node: Node cần validate
             visited_ids: Set các ID đã thăm
+            is_springboot_format: True nếu đây là format từ SpringBoot
 
         Returns:
             Dict chứa kết quả validation
@@ -1145,53 +1419,68 @@ YÊU CẦU QUAN TRỌNG:
                     "error": "Node must be a dictionary"
                 }
 
-            # Kiểm tra các trường bắt buộc
-            required_fields = ["id", "type", "status"]
-            for field in required_fields:
-                if field not in node:
+            # Validation khác nhau cho format SpringBoot và format cũ
+            if is_springboot_format:
+                # Format SpringBoot: chỉ cần name và fieldType
+                if "name" not in node:
                     return {
                         "valid": False,
-                        "error": f"Missing required field in node: {field}"
+                        "error": "Missing required field in SpringBoot node: name"
                     }
 
-            # Kiểm tra ID hợp lệ
-            node_id = node.get("id")
-   
-            # Kiểm tra vòng lặp
-            if node_id in visited_ids:
-                return {
-                    "valid": False,
-                    "error": f"Circular reference detected for node ID: {node_id}"
-                }
+                # fieldType là optional cho SpringBoot format
+                node_id = node.get("name", "unknown")  # Dùng name làm ID
+            else:
+                # Format cũ: yêu cầu id, type, status
+                required_fields = ["id", "type", "status"]
+                for field in required_fields:
+                    if field not in node:
+                        return {
+                            "valid": False,
+                            "error": f"Missing required field in node: {field}"
+                        }
 
-            visited_ids.add(node_id)
+                # Kiểm tra ID hợp lệ
+                node_id = node.get("id")
 
-            # Kiểm tra type hợp lệ
-            node_type = node.get("type")
-            valid_types = self.CONTENT_TYPES | self.SECTION_TYPES
-            if node_type not in valid_types:
-                logger.warning(f"Unknown node type: {node_type} for node {node_id}")
+                # Kiểm tra vòng lặp
+                if node_id in visited_ids:
+                    return {
+                        "valid": False,
+                        "error": f"Circular reference detected for node ID: {node_id}"
+                    }
 
-            # Kiểm tra status hợp lệ
-            status = node.get("status")
-            valid_statuses = {"ACTIVE", "INACTIVE", "DELETED"}
-            if status not in valid_statuses:
-                return {
-                    "valid": False,
-                    "error": f"Invalid status: {status} for node {node_id}"
-                }
+                visited_ids.add(node_id)
 
-            # Validate children nếu có
-            children = node.get("children", [])
+            # Validation khác nhau cho format SpringBoot và format cũ
+            if not is_springboot_format:
+                # Kiểm tra type hợp lệ cho format cũ
+                node_type = node.get("type")
+                valid_types = self.CONTENT_TYPES | self.SECTION_TYPES
+                if node_type not in valid_types:
+                    logger.warning(f"Unknown node type: {node_type} for node {node_id}")
+
+                # Kiểm tra status hợp lệ cho format cũ
+                status = node.get("status")
+                valid_statuses = {"ACTIVE", "INACTIVE", "DELETED"}
+                if status not in valid_statuses:
+                    return {
+                        "valid": False,
+                        "error": f"Invalid status: {status} for node {node_id}"
+                    }
+
+            # Validate children/subsections
+            children_key = "subsections" if is_springboot_format else "children"
+            children = node.get(children_key, [])
             if children:
                 if not isinstance(children, list):
                     return {
                         "valid": False,
-                        "error": f"Children must be a list for node {node_id}"
+                        "error": f"{children_key.capitalize()} must be a list for node {node_id}"
                     }
 
                 for child in children:
-                    child_validation = self._validate_node_recursive(child, visited_ids.copy())
+                    child_validation = self._validate_node_recursive(child, visited_ids.copy(), is_springboot_format)
                     if not child_validation["valid"]:
                         return child_validation
 
@@ -1220,17 +1509,46 @@ YÊU CẦU QUAN TRỌNG:
             Dict chứa kết quả validation
         """
         try:
-            # So sánh cấu trúc cơ bản
-            structure_check = self._compare_json_structure(original_json, processed_json)
-            if not structure_check["valid"]:
-                return structure_check
+            # Kiểm tra format SpringBoot
+            is_springboot_format = "title" in original_json and "sections" in original_json
 
-            # Kiểm tra tất cả node có field content
-            content_check = self._check_all_nodes_have_content(processed_json)
-            if not content_check["valid"]:
-                return content_check
+            if is_springboot_format:
+                # Validation đơn giản cho SpringBoot format
+                # Chỉ cần đảm bảo cấu trúc cơ bản không thay đổi
+                if not isinstance(processed_json, dict):
+                    return {
+                        "valid": False,
+                        "error": "Processed JSON must be a dictionary"
+                    }
 
-            return {"valid": True}
+                # Kiểm tra title không thay đổi
+                if original_json.get("title") != processed_json.get("title"):
+                    return {
+                        "valid": False,
+                        "error": "Title should not change during processing"
+                    }
+
+                # Kiểm tra sections vẫn là list
+                if not isinstance(processed_json.get("sections"), list):
+                    return {
+                        "valid": False,
+                        "error": "Sections must remain a list"
+                    }
+
+                return {"valid": True}
+            else:
+                # Validation cho format cũ
+                # So sánh cấu trúc cơ bản
+                structure_check = self._compare_json_structure(original_json, processed_json)
+                if not structure_check["valid"]:
+                    return structure_check
+
+                # Kiểm tra tất cả node có field content
+                content_check = self._check_all_nodes_have_content(processed_json)
+                if not content_check["valid"]:
+                    return content_check
+
+                return {"valid": True}
 
         except Exception as e:
             logger.error(f"Error validating output JSON: {e}")
@@ -1381,21 +1699,15 @@ YÊU CẦU QUAN TRỌNG:
             return content.strip()
 
 
-# Lazy loading global instance để tránh khởi tạo ngay khi import
-_lesson_plan_content_service_instance = None
-
+# Factory function để tạo LessonPlanContentService instance
 def get_lesson_plan_content_service() -> LessonPlanContentService:
     """
-    Lấy singleton instance của LessonPlanContentService
-    Lazy initialization
+    Tạo LessonPlanContentService instance mới
 
     Returns:
-        LessonPlanContentService: Service instance
+        LessonPlanContentService: Fresh instance
     """
-    global _lesson_plan_content_service_instance
-    if _lesson_plan_content_service_instance is None:
-        _lesson_plan_content_service_instance = LessonPlanContentService()
-    return _lesson_plan_content_service_instance
+    return LessonPlanContentService()
 
 # Backward compatibility - deprecated, sử dụng get_lesson_plan_content_service() thay thế
 # Lazy loading để tránh khởi tạo ngay khi import
@@ -1403,12 +1715,4 @@ def _get_lesson_plan_content_service_lazy():
     """Lazy loading cho backward compatibility"""
     return get_lesson_plan_content_service()
 
-# Tạo proxy object để lazy loading
-class _LessonPlanContentServiceProxy:
-    def __getattr__(self, name):
-        return getattr(_get_lesson_plan_content_service_lazy(), name)
 
-    def __call__(self, *args, **kwargs):
-        return _get_lesson_plan_content_service_lazy()(*args, **kwargs)
-
-lesson_plan_content_service = _LessonPlanContentServiceProxy()

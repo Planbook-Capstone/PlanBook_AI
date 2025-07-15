@@ -15,6 +15,10 @@ class KafkaSettings(BaseSettings):
     
     # Topic Configuration
     KAFKA_TOPIC_NAME: str = os.getenv("KAFKA_TOPIC_NAME", "planbook")
+
+    # Separate topics for different directions
+    KAFKA_TOPIC_REQUESTS: str = os.getenv("KAFKA_TOPIC_REQUESTS", "planbook-requests")  # SpringBoot → FastAPI
+    KAFKA_TOPIC_RESPONSES: str = os.getenv("KAFKA_TOPIC_RESPONSES", "planbook-responses")  # FastAPI → SpringBoot
     
     # Producer Configuration
     KAFKA_PRODUCER_CONFIG: dict = {
@@ -65,14 +69,22 @@ class KafkaSettings(BaseSettings):
     }
     
     # Connection Settings
-    KAFKA_CONNECTION_TIMEOUT: int = int(os.getenv("KAFKA_CONNECTION_TIMEOUT", "10"))
-    KAFKA_REQUEST_TIMEOUT: int = int(os.getenv("KAFKA_REQUEST_TIMEOUT", "30"))
-    
+    KAFKA_CONNECTION_TIMEOUT: int = int(os.getenv("KAFKA_CONNECTION_TIMEOUT", "5"))  # Reduced from 10 to 5
+    KAFKA_REQUEST_TIMEOUT: int = int(os.getenv("KAFKA_REQUEST_TIMEOUT", "10"))  # Reduced from 30 to 10
+    KAFKA_SEND_TIMEOUT: int = int(os.getenv("KAFKA_SEND_TIMEOUT", "3"))  # New: timeout for sending messages
+
+    # Kafka Enable/Disable
+    KAFKA_ENABLED: bool = os.getenv("KAFKA_ENABLED", "True").lower() == "true"
+
+    # Retry Settings
+    KAFKA_MAX_RETRIES: int = int(os.getenv("KAFKA_MAX_RETRIES", "2"))
+    KAFKA_RETRY_BACKOFF_MS: int = int(os.getenv("KAFKA_RETRY_BACKOFF_MS", "500"))
+
     # Topic Management
     KAFKA_AUTO_CREATE_TOPICS: bool = os.getenv("KAFKA_AUTO_CREATE_TOPICS", "True").lower() == "true"
     KAFKA_TOPIC_PARTITIONS: int = int(os.getenv("KAFKA_TOPIC_PARTITIONS", "3"))
     KAFKA_TOPIC_REPLICATION_FACTOR: int = int(os.getenv("KAFKA_TOPIC_REPLICATION_FACTOR", "1"))
-    
+
     # Message Settings
     KAFKA_MAX_MESSAGE_SIZE: int = int(os.getenv("KAFKA_MAX_MESSAGE_SIZE", "1048576"))  # 1MB
     
@@ -132,6 +144,19 @@ def get_topic_name() -> str:
     return kafka_settings.KAFKA_TOPIC_NAME
 
 
+def get_requests_topic() -> str:
+    """Get the requests topic name (SpringBoot → FastAPI)"""
+    return kafka_settings.KAFKA_TOPIC_REQUESTS
+
+
+def get_responses_topic() -> str:
+    """Get the responses topic name (FastAPI → SpringBoot)"""
+    return kafka_settings.KAFKA_TOPIC_RESPONSES
+
+
+
+
+
 def get_producer_config() -> dict:
     """Get producer configuration"""
     return kafka_settings.KAFKA_PRODUCER_CONFIG.copy()
@@ -150,3 +175,33 @@ def get_aiokafka_producer_config() -> dict:
 def get_aiokafka_consumer_config() -> dict:
     """Get async consumer configuration"""
     return kafka_settings.AIOKAFKA_CONSUMER_CONFIG.copy()
+
+
+def get_connection_timeout() -> int:
+    """Get Kafka connection timeout"""
+    return kafka_settings.KAFKA_CONNECTION_TIMEOUT
+
+
+def get_request_timeout() -> int:
+    """Get Kafka request timeout"""
+    return kafka_settings.KAFKA_REQUEST_TIMEOUT
+
+
+def get_send_timeout() -> int:
+    """Get Kafka send timeout"""
+    return kafka_settings.KAFKA_SEND_TIMEOUT
+
+
+def is_kafka_enabled() -> bool:
+    """Check if Kafka is enabled"""
+    return kafka_settings.KAFKA_ENABLED
+
+
+def get_max_retries() -> int:
+    """Get max retries for Kafka operations"""
+    return kafka_settings.KAFKA_MAX_RETRIES
+
+
+def get_retry_backoff_ms() -> int:
+    """Get retry backoff in milliseconds"""
+    return kafka_settings.KAFKA_RETRY_BACKOFF_MS

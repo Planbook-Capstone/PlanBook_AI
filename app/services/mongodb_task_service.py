@@ -256,7 +256,7 @@ class MongoDBTaskService:
     async def update_task_progress(
         self, task_id: str, progress: int, message: Optional[str] = None
     ):
-        """Cập nhật tiến độ task và lưu progress history"""
+        """Cập nhật tiến độ task và lưu progress history, đồng thời gửi qua Kafka"""
         await self.initialize()
 
         try:
@@ -267,7 +267,7 @@ class MongoDBTaskService:
                 "timestamp": time.time(),
                 "datetime": datetime.now().isoformat()
             }
-            
+
             update_data = {
                 "progress": progress,
                 "updated_at": datetime.now()
@@ -277,7 +277,7 @@ class MongoDBTaskService:
 
             # Update task và thêm vào progress_history
             await self.tasks_collection.update_one(
-                {"task_id": task_id}, 
+                {"task_id": task_id},
                 {
                     "$set": update_data,
                     "$push": {"progress_history": progress_step}
@@ -286,6 +286,9 @@ class MongoDBTaskService:
 
             # Clear cache để force refresh lần query sau
             self._clear_task_cache(task_id)
+
+            # Skip Kafka notification from MongoDB service
+            # Kafka notifications will be handled directly in Celery tasks
 
             logger.info(f"Task {task_id}: {progress}% - {message}")
         except Exception as e:
@@ -324,6 +327,10 @@ class MongoDBTaskService:
             # Clear cache
             self._clear_task_cache(task_id)
 
+            # Skip Kafka notification from MongoDB service
+            # Kafka notifications will be handled directly in Celery tasks
+            logger.info(f"✅ Task {task_id} marked as processing in MongoDB")
+
         except Exception as e:
             logger.error(f"Error marking task processing {task_id}: {e}")
 
@@ -361,6 +368,10 @@ class MongoDBTaskService:
             # Xóa cache khi task hoàn thành
             self._clear_task_cache(task_id)
 
+            # Skip Kafka notification from MongoDB service
+            # Kafka notifications will be handled directly in Celery tasks
+            logger.info(f"✅ Task {task_id} marked as completed in MongoDB")
+
         except Exception as e:
             logger.error(f"Error marking task completed {task_id}: {e}")
 
@@ -396,6 +407,10 @@ class MongoDBTaskService:
 
             # Xóa cache khi task thất bại
             self._clear_task_cache(task_id)
+
+            # Skip Kafka notification from MongoDB service
+            # Kafka notifications will be handled directly in Celery tasks
+            logger.info(f"✅ Task {task_id} marked as failed in MongoDB")
 
         except Exception as e:
             logger.error(f"Error marking task failed {task_id}: {e}")
@@ -529,10 +544,12 @@ class MongoDBTaskService:
             }
 
 
-# Singleton instance
-mongodb_task_service = MongoDBTaskService()
-
-
+# Factory function để tạo MongoDBTaskService instance
 def get_mongodb_task_service() -> MongoDBTaskService:
-    """Lấy singleton instance của MongoDBTaskService"""
-    return mongodb_task_service
+    """
+    Tạo MongoDBTaskService instance mới
+
+    Returns:
+        MongoDBTaskService: Fresh instance
+    """
+    return MongoDBTaskService()

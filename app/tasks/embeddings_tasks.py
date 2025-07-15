@@ -9,7 +9,7 @@ from typing import Dict, Any
 from celery import current_task
 
 from app.core.celery_app import celery_app, task_with_retry
-from app.services.mongodb_task_service import mongodb_task_service
+from app.services.mongodb_task_service import get_mongodb_task_service
 
 logger = logging.getLogger(__name__)
 
@@ -47,37 +47,39 @@ def create_embeddings_task(self, task_id: str) -> Dict[str, Any]:
         
     except Exception as e:
         logger.error(f"Error in embeddings creation task {task_id}: {e}")
-        run_async_task(mongodb_task_service.mark_task_failed(task_id, str(e)))
+        run_async_task(get_mongodb_task_service().mark_task_failed(task_id, str(e)))
         raise
 
 async def _create_embeddings_async(task_id: str) -> Dict[str, Any]:
     """Async implementation của embeddings creation"""
     
-    task = await mongodb_task_service.get_task_status(task_id)
+    task = await get_mongodb_task_service().get_task_status(task_id)
     if not task:
         raise Exception(f"Task {task_id} not found in MongoDB")
     
     try:
-        await mongodb_task_service.mark_task_processing(task_id)
+        await get_mongodb_task_service().mark_task_processing(task_id)
         
         # Lấy dữ liệu task
         book_id = task["data"]["book_id"]
         book_structure = task["data"]["book_structure"]
         
-        await mongodb_task_service.update_task_progress(task_id, 20, "Creating embeddings...")
+        await get_mongodb_task_service().update_task_progress(task_id, 20, "Creating embeddings...")
         
         # Import Qdrant service
         from app.services.qdrant_service import qdrant_service
         
-        # Tạo embeddings
+        # Tạo embeddings - sử dụng parameter content thống nhất
         embeddings_result = await qdrant_service.process_textbook(
-            book_id=book_id, book_structure=book_structure
+            book_id=book_id,
+            content=book_structure,  # Sử dụng parameter content thống nhất
+            content_type="textbook"
         )
         
         if not embeddings_result.get("success"):
             raise Exception(f"Embeddings creation failed: {embeddings_result.get('error')}")
         
-        await mongodb_task_service.update_task_progress(
+        await get_mongodb_task_service().update_task_progress(
             task_id, 90, "Embeddings created successfully"
         )
         
@@ -93,12 +95,12 @@ async def _create_embeddings_async(task_id: str) -> Dict[str, Any]:
             "embeddings_result": embeddings_result,
         }
         
-        await mongodb_task_service.mark_task_completed(task_id, result)
+        await get_mongodb_task_service().mark_task_completed(task_id, result)
         return result
         
     except Exception as e:
         logger.error(f"Error in embeddings async processing {task_id}: {e}")
-        await mongodb_task_service.mark_task_failed(task_id, str(e))
+        await get_mongodb_task_service().mark_task_failed(task_id, str(e))
         raise
 
 @task_with_retry()
@@ -126,24 +128,24 @@ def update_embeddings_task(self, task_id: str) -> Dict[str, Any]:
         
     except Exception as e:
         logger.error(f"Error in embeddings update task {task_id}: {e}")
-        run_async_task(mongodb_task_service.mark_task_failed(task_id, str(e)))
+        run_async_task(get_mongodb_task_service().mark_task_failed(task_id, str(e)))
         raise
 
 async def _update_embeddings_async(task_id: str) -> Dict[str, Any]:
     """Async implementation của embeddings update"""
     
-    task = await mongodb_task_service.get_task_status(task_id)
+    task = await get_mongodb_task_service().get_task_status(task_id)
     if not task:
         raise Exception(f"Task {task_id} not found in MongoDB")
     
     try:
-        await mongodb_task_service.mark_task_processing(task_id)
+        await get_mongodb_task_service().mark_task_processing(task_id)
         
         # Lấy dữ liệu task
         book_id = task["data"]["book_id"]
         updated_content = task["data"]["updated_content"]
         
-        await mongodb_task_service.update_task_progress(task_id, 20, "Updating embeddings...")
+        await get_mongodb_task_service().update_task_progress(task_id, 20, "Updating embeddings...")
         
         # Import Qdrant service
         from app.services.qdrant_service import qdrant_service
@@ -156,7 +158,7 @@ async def _update_embeddings_async(task_id: str) -> Dict[str, Any]:
         if not update_result.get("success"):
             raise Exception(f"Embeddings update failed: {update_result.get('error')}")
         
-        await mongodb_task_service.update_task_progress(
+        await get_mongodb_task_service().update_task_progress(
             task_id, 90, "Embeddings updated successfully"
         )
         
@@ -172,10 +174,10 @@ async def _update_embeddings_async(task_id: str) -> Dict[str, Any]:
             "update_result": update_result,
         }
         
-        await mongodb_task_service.mark_task_completed(task_id, result)
+        await get_mongodb_task_service().mark_task_completed(task_id, result)
         return result
         
     except Exception as e:
         logger.error(f"Error in embeddings update async processing {task_id}: {e}")
-        await mongodb_task_service.mark_task_failed(task_id, str(e))
+        await get_mongodb_task_service().mark_task_failed(task_id, str(e))
         raise
