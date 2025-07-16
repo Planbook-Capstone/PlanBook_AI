@@ -53,7 +53,7 @@ class SmartExamGenerationService:
             # Tạo câu hỏi cho từng phần theo chuẩn THPT 2025
             all_questions = []
             part_statistics = {"part_1": 0, "part_2": 0, "part_3": 0}
-
+            logger.info(f"lesson_content: {lesson_content}")
             for lesson_matrix in exam_request.matrix:
                 lesson_questions = await self._generate_questions_for_lesson(
                     lesson_matrix, lesson_content, exam_request.subject
@@ -104,34 +104,31 @@ class SmartExamGenerationService:
             # Debug logging cho cấu trúc dữ liệu
             print(f"DEBUG: lesson_content keys: {list(lesson_content.keys()) if isinstance(lesson_content, dict) else 'Not a dict'}")
 
-            # Lấy nội dung bài học
+            # Lấy nội dung bài học từ textbook_retrieval_service format
             lesson_data = lesson_content.get(lesson_id, {})
             print(f"DEBUG: lesson_data type: {type(lesson_data)}")
             print(f"DEBUG: lesson_data keys: {list(lesson_data.keys()) if isinstance(lesson_data, dict) else 'Not a dict'}")
 
             if not lesson_data:
-                logger.warning(f"No content found for lesson: {lesson_id}")
-                return []
+                # Báo lỗi thay vì sử dụng fallback theo yêu cầu
+                error_msg = f"Không tìm thấy nội dung cho bài học {lesson_id} trong lesson_content"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
 
-            # Kiểm tra nếu lesson_data có cấu trúc {"success": True, "content": {...}}
-            if isinstance(lesson_data, dict) and "content" in lesson_data:
-                actual_content = lesson_data.get("content", {})
-                print(f"DEBUG: Found nested content structure, extracting actual content")
-                print(f"DEBUG: actual_content keys: {list(actual_content.keys()) if isinstance(actual_content, dict) else 'Not a dict'}")
-            else:
-                actual_content = lesson_data
-                print(f"DEBUG: Using lesson_data directly as content")
+            # Kiểm tra xem lesson_data có lesson_content không (từ textbook_retrieval_service)
+            if not lesson_data.get("lesson_content"):
+                error_msg = f"Lesson {lesson_id} không có nội dung lesson_content. Available keys: {list(lesson_data.keys())}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
 
-            if not actual_content:
-                logger.warning(f"No actual content found for lesson: {lesson_id}")
-                return []
+            print(f"DEBUG: Found lesson content for {lesson_id}, length: {len(lesson_data.get('lesson_content', ''))}")
 
             all_lesson_questions = []
 
-            # Tạo câu hỏi cho từng phần
+            # Tạo câu hỏi cho từng phần - truyền lesson_data thay vì actual_content
             for part in lesson_matrix.parts:
                 part_questions = await self._generate_questions_for_part(
-                    part, actual_content, subject, lesson_id
+                    part, lesson_data, subject, lesson_id
                 )
                 all_lesson_questions.extend(part_questions)
 
@@ -239,9 +236,24 @@ class SmartExamGenerationService:
         # Debug logging cho cấu trúc dữ liệu
         print(f"DEBUG: _create_prompt_for_level - lesson_data keys: {list(lesson_data.keys()) if isinstance(lesson_data, dict) else 'Not a dict'}")
 
-        # Lấy nội dung bài học - lesson_data đã được xử lý ở _generate_questions_for_lesson
-        main_content = lesson_data.get("main_content", "")
-        lesson_info = lesson_data.get("lesson_info", {})
+        # Lấy nội dung bài học từ textbook_retrieval_service format
+        # Kiểm tra các key có thể có từ textbook_retrieval_service
+        main_content = ""
+        lesson_info = {}
+
+        if "lesson_content" in lesson_data:
+            # Từ textbook_retrieval_service
+            main_content = lesson_data.get("lesson_content", "")
+            lesson_info = {
+                "lesson_id": lesson_data.get("lesson_id", lesson_id),
+                "book_id": lesson_data.get("book_id", ""),
+                "collection_name": lesson_data.get("collection_name", ""),
+                "total_chunks": lesson_data.get("total_chunks", 0)
+            }
+        else:
+            # Fallback cho format cũ
+            main_content = lesson_data.get("main_content", "")
+            lesson_info = lesson_data.get("lesson_info", {})
 
         # Debug logging
         print(f"DEBUG: main_content type: {type(main_content)}")
@@ -258,8 +270,10 @@ class SmartExamGenerationService:
             content_preview = str(main_content)[:2000] if main_content else ""
 
         if not content_preview.strip():
-            logger.warning(f"Empty content for lesson {lesson_id}, using fallback")
-            content_preview = f"Nội dung bài học {lesson_id} - {lesson_info.get('lesson_title', 'Chưa có tiêu đề')}"
+            # Báo lỗi thay vì sử dụng fallback theo yêu cầu
+            error_msg = f"Không tìm thấy nội dung cho bài học {lesson_id}. Lesson data keys: {list(lesson_data.keys())}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         # Part descriptions
         part_descriptions = {
