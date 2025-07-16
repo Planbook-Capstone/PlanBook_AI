@@ -372,7 +372,8 @@ async def get_slide_info(presentation_id: str):
     3. Thông tin chi tiết về từng element trong slide (ID, loại, nội dung text, etc.)
     4. Thông tin style chi tiết của từng element (font, màu sắc, kích thước, etc.)
     5. Thông tin transform chi tiết của từng element (vị trí, scale, shear, etc.)
-    6. Metadata từ Google Drive (thời gian tạo, chỉnh sửa, etc.)
+    6. Thông tin text alignment chi tiết của từng element (căn chỉnh, khoảng cách, thụt lề, etc.)
+    7. Metadata từ Google Drive (thời gian tạo, chỉnh sửa, etc.)
 
     Thông tin style bao gồm:
     - Shape: font, màu chữ, kích thước chữ, màu nền, đường viền, etc.
@@ -386,6 +387,14 @@ async def get_slide_info(presentation_id: str):
     - scaleX, scaleY: tỷ lệ scale của element
     - shearX, shearY: độ nghiêng của element
     - unit: đơn vị đo lường (EMU, PT, etc.)
+
+    Thông tin text alignment bao gồm:
+    - alignment: căn chỉnh text (LEFT, CENTER, RIGHT, JUSTIFIED)
+    - lineSpacing: khoảng cách dòng
+    - spaceAbove/spaceBelow: khoảng cách trước/sau đoạn văn
+    - indentStart/indentEnd/indentFirstLine: thụt lề
+    - direction: hướng text (LTR, RTL)
+    - lists: thông tin danh sách
 
     Args:
         presentation_id: ID của Google Slides presentation hoặc URL đầy đủ

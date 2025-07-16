@@ -184,6 +184,37 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
         if not processing_result.get("success"):
             raise Exception(f"Textbook processing failed: {processing_result.get('error')}")
 
+        # Upload PDF to Supabase Storage
+        await get_mongodb_task_service().update_task_progress(
+            task_id, 60, "Uploading PDF to Supabase Storage..."
+        )
+
+        file_url = None
+        uploaded_at = None
+        try:
+            from app.services.supabase_storage_service import get_supabase_storage_service
+
+            supabase_service = get_supabase_storage_service()
+            if supabase_service.is_available():
+                upload_result = await supabase_service.upload_pdf_file(
+                    file_content=file_content,
+                    book_id=book_id,
+                    lesson_id=lesson_id,
+                    original_filename=filename
+                )
+
+                if upload_result.get("success"):
+                    file_url = upload_result.get("file_url")
+                    uploaded_at = upload_result.get("uploaded_at")
+                    logger.info(f"✅ PDF uploaded to Supabase: {file_url}")
+                    logger.info(f"✅ Upload time: {uploaded_at}")
+                else:
+                    logger.warning(f"Failed to upload PDF to Supabase: {upload_result.get('error')}")
+            else:
+                logger.warning("Supabase service not available, skipping PDF upload")
+        except Exception as e:
+            logger.warning(f"Error uploading PDF to Supabase: {e}")
+
         # Auto create embeddings
         await get_mongodb_task_service().update_task_progress(
             task_id, 70, "Creating embeddings..."
@@ -206,7 +237,9 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
                 book_id=book_id,
                 content=book_content,  # Sử dụng parameter content thống nhất
                 lesson_id=lesson_id,
-                content_type="textbook"
+                content_type="textbook",
+                file_url=file_url,  # Truyền URL của file PDF từ Supabase
+                uploaded_at=uploaded_at  # Truyền thời gian upload
             )
 
             if embeddings_result and embeddings_result.get("success"):
@@ -230,6 +263,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
             "book_id": book_id,
             "filename": filename,
             "lesson_id": lesson_id,
+            "file_url": file_url,  # Thêm URL của file PDF từ Supabase
             "book_structure": processing_result.get("clean_book_structure"),
             "processing_info": {
                 "task_id": task_id,

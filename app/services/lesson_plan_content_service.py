@@ -981,7 +981,7 @@ THÔNG TIN Ô BẢNG:
 - Ngữ cảnh bảng: "{table_context}"
 
 NỘI DUNG BÀI HỌC THAM KHẢO:
-{lesson_content[:1500] if lesson_content else "Không có nội dung tham khảo"}
+{lesson_content if lesson_content else "Không có nội dung tham khảo"}
 
 YÊU CẦU QUAN TRỌNG:
 1. Nội dung PHẢI ngắn gọn, chỉ 1-2 câu (tối đa 80 từ)
