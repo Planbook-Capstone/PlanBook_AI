@@ -9,7 +9,7 @@ from typing import Dict, Any, List, Optional, Set
 from copy import deepcopy
 
 from app.services.llm_service import get_llm_service
-from app.services.textbook_retrieval_service import TextbookRetrievalService
+from app.services.textbook_retrieval_service import get_textbook_retrieval_service
 from app.services.enhanced_textbook_service import get_enhanced_textbook_service
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ class LessonPlanContentService:
     def __init__(self):
         """Initialize LessonPlanContentService"""
         self.llm_service = get_llm_service()
-        self.textbook_service = TextbookRetrievalService()
+        self.textbook_service = get_textbook_retrieval_service()
         self.enhanced_textbook_service = get_enhanced_textbook_service()
         
         # Giới hạn độ sâu để tránh vòng lặp vô hạn
