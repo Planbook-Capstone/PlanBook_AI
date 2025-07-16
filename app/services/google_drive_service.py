@@ -4,12 +4,11 @@ Service để upload file DOCX lên Google Drive và tạo link online
 
 import logging
 import os
-import tempfile
-import threading
-from typing import Dict, Any, Optional
-from pathlib import Path
+from typing import Dict, Any
 
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
@@ -39,27 +38,86 @@ class GoogleDriveService:
             logger.info("✅ GoogleDriveService: Initialization completed")
 
     def _initialize_service(self):
-        """Khởi tạo Google Drive service"""
+        """Khởi tạo Google Drive service với OAuth 2.0"""
         try:
             # Kiểm tra credentials file
             credentials_path = getattr(settings, 'GOOGLE_DRIVE_CREDENTIALS_PATH', None)
-            if not credentials_path or not os.path.exists(credentials_path):
-                logger.warning("Google Drive credentials not found. Service will be disabled.")
+            if not credentials_path:
+                credentials_path = "google-credentials.json"
+
+            if not os.path.exists(credentials_path):
+                logger.warning(f"""
+Google Drive service requires OAuth 2.0 Client credentials.
+Please ensure {credentials_path} exists in the project root.
+Service will be disabled.
+                """)
                 return
 
-            # Tạo credentials từ service account
-            SCOPES = ['https://www.googleapis.com/auth/drive.file']
-            self.credentials = service_account.Credentials.from_service_account_file(
-                credentials_path, scopes=SCOPES
-            )
+            # Scopes cần thiết
+            SCOPES = [
+                'https://www.googleapis.com/auth/drive',
+                'https://www.googleapis.com/auth/drive.file'
+            ]
+
+            creds = None
+            token_path = "token.json"  # File lưu token sau khi authenticate
+
+            # Kiểm tra xem đã có token chưa
+            if os.path.exists(token_path):
+                creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+
+            # Nếu không có credentials hợp lệ, thực hiện OAuth flow
+            if not creds or not creds.valid:
+                if creds and creds.expired and creds.refresh_token:
+                    # Refresh token nếu expired
+                    creds.refresh(Request())
+                    # Lưu lại token mới
+                    with open(token_path, 'w') as token:
+                        token.write(creds.to_json())
+                else:
+                    # Thực hiện OAuth flow mới
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        credentials_path, SCOPES
+                    )
+                    # Sử dụng local server để nhận callback
+                    creds = flow.run_local_server(port=0)
+
+                    # Lưu token để sử dụng lần sau
+                    with open(token_path, 'w') as token:
+                        token.write(creds.to_json())
+
+            self.credentials = creds
 
             # Tạo service
             self.service = build('drive', 'v3', credentials=self.credentials)
-            logger.info("Google Drive service initialized successfully")
+            logger.info("Google Drive service initialized with OAuth 2.0")
 
         except Exception as e:
             logger.error(f"Failed to initialize Google Drive service: {e}")
             self.service = None
+
+    def force_reauthorize(self) -> bool:
+        """Buộc thực hiện lại authorization flow"""
+        try:
+            # Xóa token cũ nếu có
+            token_path = "token.json"
+            if os.path.exists(token_path):
+                os.remove(token_path)
+                logger.info("Removed existing token file")
+
+            # Reset service
+            self._service_initialized = False
+            self.service = None
+            self.credentials = None
+
+            # Thực hiện lại initialization (sẽ trigger OAuth flow)
+            self._ensure_service_initialized()
+
+            return self.service is not None
+
+        except Exception as e:
+            logger.error(f"Error during reauthorization: {e}")
+            return False
 
     def is_available(self) -> bool:
         """Kiểm tra service có sẵn sàng không"""
