@@ -7,6 +7,7 @@ import logging
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from typing import Dict, Any
 from datetime import datetime
+from googleapiclient.errors import HttpError
 
 from app.models.slide_generation_models import (
     SlideGenerationRequest,
@@ -14,11 +15,14 @@ from app.models.slide_generation_models import (
     SlideGenerationTaskRequest,
     SlideGenerationTaskResponse,
     SlideGenerationError,
-    SlideGenerationErrorCodes
+    SlideGenerationErrorCodes,
+    SlideInfoRequest,
+    SlideInfoResponse
 )
 from app.services.slide_generation_service import get_slide_generation_service
 from app.services.mongodb_task_service import get_mongodb_task_service
 from app.tasks.slide_generation_tasks import trigger_slide_generation_task, test_slide_generation_task
+from app.services.google_slides_service import get_google_slides_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -338,6 +342,8 @@ async def health_check():
                 "/generate-slides",  # Sync slide generation
                 "/generate-slides-async",  # Async slide generation
                 "/template-info/{template_id}",  # Template analysis
+                "/slide-info/{presentation_id}",  # Get full slide information by ID
+                "/slide-info-by-url?url=...",  # Get full slide information by URL
                 "/health"  # Health check
             ]
         }
@@ -353,6 +359,220 @@ async def health_check():
                 "google_slides": False
             }
         }
+
+
+@router.get("/slide-info/{presentation_id}", response_model=SlideInfoResponse)
+async def get_slide_info(presentation_id: str):
+    """
+    Lấy thông tin chi tiết của Google Slides presentation
+
+    Endpoint này nhận presentation_id (có thể là ID hoặc URL đầy đủ) và trả về thông tin chi tiết về presentation, bao gồm:
+    1. Thông tin cơ bản (tiêu đề, số lượng slides, etc.)
+    2. Thông tin chi tiết về từng slide (ID, layout, elements)
+    3. Thông tin chi tiết về từng element trong slide (ID, loại, nội dung text, etc.)
+    4. Thông tin style chi tiết của từng element (font, màu sắc, kích thước, etc.)
+    5. Thông tin transform chi tiết của từng element (vị trí, scale, shear, etc.)
+    6. Metadata từ Google Drive (thời gian tạo, chỉnh sửa, etc.)
+
+    Thông tin style bao gồm:
+    - Shape: font, màu chữ, kích thước chữ, màu nền, đường viền, etc.
+    - Image: crop, brightness, contrast, transparency, etc.
+    - Table: màu nền cell, alignment, nội dung cell, etc.
+    - Video: autoplay, start/end time, mute, etc.
+    - Line: weight, dash style, màu sắc, arrow type, etc.
+
+    Thông tin transform bao gồm:
+    - translateX, translateY: vị trí của element
+    - scaleX, scaleY: tỷ lệ scale của element
+    - shearX, shearY: độ nghiêng của element
+    - unit: đơn vị đo lường (EMU, PT, etc.)
+
+    Args:
+        presentation_id: ID của Google Slides presentation hoặc URL đầy đủ
+
+    Returns:
+        SlideInfoResponse: Thông tin chi tiết của presentation
+    """
+    try:
+        logger.info(f"=== GET-SLIDE-INFO ENDPOINT CALLED ===")
+        logger.info(f"Request: presentation_id={presentation_id}")
+
+        # Sử dụng presentation_id trực tiếp
+        final_presentation_id = presentation_id
+
+        # Lấy Google Slides service
+        slides_service = get_google_slides_service()
+
+        if not slides_service.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Google Slides service not available"
+            )
+
+        # Xử lý presentation_id nếu là URL
+        if 'docs.google.com/presentation/d/' in final_presentation_id:
+            try:
+                parts = final_presentation_id.split('/d/')
+                if len(parts) > 1:
+                    final_presentation_id = parts[1].split('/')[0]
+            except:
+                pass
+
+        # Lấy thông tin chi tiết
+        result = await slides_service.get_presentation_details(final_presentation_id)
+
+        if not result.get("success", False):
+            error_message = result.get("error", "Unknown error")
+            logger.error(f"❌ Error getting slide info: {error_message}")
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error_code": SlideGenerationErrorCodes.UNKNOWN_ERROR,
+                    "error_message": error_message,
+                    "success": False
+                }
+            )
+
+        logger.info(f"✅ Successfully retrieved slide info for presentation: {final_presentation_id}")
+        return result
+
+    except HttpError as e:
+        logger.error(f"❌ Google API error: {e}")
+        status_code = e.resp.status
+        error_code = SlideGenerationErrorCodes.UNKNOWN_ERROR
+
+        if status_code == 404:
+            error_code = SlideGenerationErrorCodes.TEMPLATE_NOT_ACCESSIBLE
+        elif status_code == 403:
+            error_code = SlideGenerationErrorCodes.PERMISSION_DENIED
+        elif status_code == 429:
+            error_code = SlideGenerationErrorCodes.QUOTA_EXCEEDED
+
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                "error_code": error_code,
+                "error_message": str(e),
+                "success": False
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Error in get_slide_info: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_code": SlideGenerationErrorCodes.UNKNOWN_ERROR,
+                "error_message": str(e),
+                "success": False
+            }
+        )
+
+
+@router.get("/slide-info-by-url", response_model=SlideInfoResponse)
+async def get_slide_info_by_url(url: str):
+    """
+    Lấy thông tin chi tiết của Google Slides presentation bằng URL
+
+    Endpoint này nhận URL đầy đủ của Google Slides và trả về thông tin chi tiết về presentation, bao gồm:
+    1. Thông tin cơ bản (tiêu đề, số lượng slides, etc.)
+    2. Thông tin chi tiết về từng slide (ID, layout, elements)
+    3. Thông tin chi tiết về từng element trong slide (ID, loại, nội dung text, etc.)
+    4. Thông tin style chi tiết của từng element (font, màu sắc, kích thước, etc.)
+    5. Thông tin transform chi tiết của từng element (vị trí, scale, shear, etc.)
+    6. Metadata từ Google Drive (thời gian tạo, chỉnh sửa, etc.)
+
+    Thông tin style bao gồm:
+    - Shape: font, màu chữ, kích thước chữ, màu nền, đường viền, etc.
+    - Image: crop, brightness, contrast, transparency, etc.
+    - Table: màu nền cell, alignment, nội dung cell, etc.
+    - Video: autoplay, start/end time, mute, etc.
+    - Line: weight, dash style, màu sắc, arrow type, etc.
+
+    Thông tin transform bao gồm:
+    - translateX, translateY: vị trí của element
+    - scaleX, scaleY: tỷ lệ scale của element
+    - shearX, shearY: độ nghiêng của element
+    - unit: đơn vị đo lường (EMU, PT, etc.)
+
+    Args:
+        url: URL đầy đủ của Google Slides presentation
+
+    Returns:
+        SlideInfoResponse: Thông tin chi tiết của presentation
+    """
+    try:
+        logger.info(f"=== GET-SLIDE-INFO-BY-URL ENDPOINT CALLED ===")
+        logger.info(f"Request: url={url}")
+
+        # Lấy Google Slides service
+        slides_service = get_google_slides_service()
+
+        if not slides_service.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Google Slides service not available"
+            )
+
+        # Xử lý URL để lấy presentation_id
+        presentation_id = url
+        if 'docs.google.com/presentation/d/' in url:
+            try:
+                parts = url.split('/d/')
+                if len(parts) > 1:
+                    presentation_id = parts[1].split('/')[0]
+            except:
+                pass
+
+        # Lấy thông tin chi tiết
+        result = await slides_service.get_presentation_details(presentation_id)
+
+        if not result.get("success", False):
+            error_message = result.get("error", "Unknown error")
+            logger.error(f"❌ Error getting slide info: {error_message}")
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error_code": SlideGenerationErrorCodes.UNKNOWN_ERROR,
+                    "error_message": error_message,
+                    "success": False
+                }
+            )
+
+        logger.info(f"✅ Successfully retrieved slide info for presentation: {presentation_id}")
+        return result
+
+    except HttpError as e:
+        logger.error(f"❌ Google API error: {e}")
+        status_code = e.resp.status
+        error_code = SlideGenerationErrorCodes.UNKNOWN_ERROR
+
+        if status_code == 404:
+            error_code = SlideGenerationErrorCodes.TEMPLATE_NOT_ACCESSIBLE
+        elif status_code == 403:
+            error_code = SlideGenerationErrorCodes.PERMISSION_DENIED
+        elif status_code == 429:
+            error_code = SlideGenerationErrorCodes.QUOTA_EXCEEDED
+
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                "error_code": error_code,
+                "error_message": str(e),
+                "success": False
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Error in get_slide_info_by_url: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_code": SlideGenerationErrorCodes.UNKNOWN_ERROR,
+                "error_message": str(e),
+                "success": False
+            }
+        )
 
 
 @router.post("/test-celery")

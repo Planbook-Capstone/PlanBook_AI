@@ -197,10 +197,75 @@ class SlideGenerationError(BaseModel):
     )
 
 
+# Models cho API lấy thông tin Google Slides
+class SlideInfoRequest(BaseModel):
+    """Request model cho API lấy thông tin Google Slides"""
+
+    presentation_id: str = Field(
+        ...,
+        description="ID của Google Slides presentation cần lấy thông tin",
+        example="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
+    )
+
+    @validator('presentation_id')
+    def validate_presentation_id(cls, v):
+        """Validate presentation_id format"""
+        if not v or len(v.strip()) == 0:
+            raise ValueError('presentation_id cannot be empty')
+
+        # Nếu là URL đầy đủ, extract ID
+        if 'docs.google.com/presentation/d/' in v:
+            try:
+                parts = v.split('/d/')
+                if len(parts) > 1:
+                    id_part = parts[1].split('/')[0]
+                    return id_part
+            except:
+                pass
+
+        return v.strip()
+
+
+class SlideElementInfo(BaseModel):
+    """Thông tin chi tiết về một element trong slide"""
+
+    objectId: str = Field(description="ID của element")
+    type: str = Field(description="Loại element (shape, image, table, etc.)")
+    text: Optional[str] = Field(None, description="Nội dung text (nếu có)")
+    position: Optional[Dict[str, Any]] = Field(None, description="Vị trí của element")
+    size: Optional[Dict[str, Any]] = Field(None, description="Kích thước của element")
+    transform: Optional[Dict[str, Any]] = Field(None, description="Thông tin transform (translate, scale, shear)")
+    properties: Optional[Dict[str, Any]] = Field(None, description="Các thuộc tính và style của element")
+
+
+class SlideInfo(BaseModel):
+    """Thông tin chi tiết về một slide"""
+
+    slide_id: str = Field(description="ID của slide")
+    slide_index: int = Field(description="Vị trí của slide (0-based)")
+    layout: Optional[str] = Field(None, description="Layout của slide")
+    elements: List[SlideElementInfo] = Field(default_factory=list, description="Danh sách các elements trong slide")
+    properties: Optional[Dict[str, Any]] = Field(None, description="Các thuộc tính khác của slide")
+
+
+class SlideInfoResponse(BaseModel):
+    """Response model cho API lấy thông tin Google Slides"""
+
+    success: bool = Field(description="Trạng thái thành công")
+    presentation_id: Optional[str] = Field(None, description="ID của presentation")
+    title: Optional[str] = Field(None, description="Tiêu đề của presentation")
+    slide_count: Optional[int] = Field(None, description="Số lượng slides")
+    slides: Optional[List[SlideInfo]] = Field(None, description="Thông tin chi tiết về các slides")
+    web_view_link: Optional[str] = Field(None, description="Link để xem/chỉnh sửa presentation")
+    created_time: Optional[str] = Field(None, description="Thời gian tạo presentation")
+    last_modified_time: Optional[str] = Field(None, description="Thời gian chỉnh sửa cuối cùng")
+    error: Optional[str] = Field(None, description="Thông báo lỗi nếu có")
+
+
 # Error codes constants
 class SlideGenerationErrorCodes:
     """Constants cho error codes"""
-    
+
     LESSON_NOT_FOUND = "LESSON_NOT_FOUND"
     TEMPLATE_NOT_ACCESSIBLE = "TEMPLATE_NOT_ACCESSIBLE"
     TEMPLATE_ANALYSIS_FAILED = "TEMPLATE_ANALYSIS_FAILED"

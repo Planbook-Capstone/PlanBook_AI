@@ -1314,6 +1314,451 @@ Service will be disabled.
                 "error": str(e)
             }
 
+    async def get_presentation_details(self, presentation_id: str) -> Dict[str, Any]:
+        """
+        Lấy thông tin chi tiết của Google Slides presentation
+
+        Args:
+            presentation_id: ID của presentation cần lấy thông tin
+
+        Returns:
+            Dict chứa thông tin chi tiết của presentation
+        """
+        if not self.is_available():
+            return {
+                "success": False,
+                "error": "Google Slides service not available"
+            }
+
+        try:
+            logger.info(f"🔍 Getting detailed information for presentation: {presentation_id}")
+
+            # Lấy thông tin presentation từ Slides API
+            presentation = self.slides_service.presentations().get(
+                presentationId=presentation_id
+            ).execute()
+
+            # Lấy thông tin file từ Drive API để có thêm metadata
+            file_metadata = self.drive_service.files().get(
+                fileId=presentation_id,
+                fields="id,name,createdTime,modifiedTime,webViewLink,owners,lastModifyingUser"
+            ).execute()
+
+            # Xử lý thông tin slides
+            slides_info = []
+            for i, slide in enumerate(presentation.get('slides', [])):
+                slide_id = slide.get('objectId')
+
+                # Xử lý thông tin elements trong slide
+                elements_info = []
+                for element in slide.get('pageElements', []):
+                    element_type = "unknown"
+                    element_text = None
+                    element_properties = {}
+
+                    # Xác định loại element và lấy thông tin tương ứng
+                    if 'shape' in element:
+                        element_type = "shape"
+                        shape = element['shape']
+
+                        if 'text' in shape:
+                            element_text = extract_text_from_shape(shape)
+
+                        # Lấy thông tin style chi tiết cho shape
+                        shape_style = {}
+                        if 'shapeProperties' in shape:
+                            shape_props = shape['shapeProperties']
+
+                            # Màu nền
+                            if 'shapeBackgroundFill' in shape_props:
+                                bg_fill = shape_props['shapeBackgroundFill']
+                                if 'solidFill' in bg_fill and 'color' in bg_fill['solidFill']:
+                                    color = bg_fill['solidFill']['color']
+                                    if 'rgbColor' in color:
+                                        rgb = color['rgbColor']
+                                        shape_style['backgroundColor'] = {
+                                            "red": rgb.get('red', 0),
+                                            "green": rgb.get('green', 0),
+                                            "blue": rgb.get('blue', 0)
+                                        }
+                                    elif 'themeColor' in color:
+                                        shape_style['backgroundColor'] = {
+                                            "themeColor": color['themeColor']
+                                        }
+
+                            # Đường viền
+                            if 'outline' in shape_props:
+                                outline = shape_props['outline']
+                                outline_style = {}
+
+                                if 'outlineFill' in outline and 'solidFill' in outline['outlineFill']:
+                                    fill = outline['outlineFill']['solidFill']
+                                    if 'color' in fill:
+                                        color = fill['color']
+                                        if 'rgbColor' in color:
+                                            rgb = color['rgbColor']
+                                            outline_style['color'] = {
+                                                "red": rgb.get('red', 0),
+                                                "green": rgb.get('green', 0),
+                                                "blue": rgb.get('blue', 0)
+                                            }
+                                        elif 'themeColor' in color:
+                                            outline_style['color'] = {
+                                                "themeColor": color['themeColor']
+                                            }
+
+                                if 'weight' in outline:
+                                    outline_style['weight'] = outline['weight']
+
+                                if 'dashStyle' in outline:
+                                    outline_style['dashStyle'] = outline['dashStyle']
+
+                                if outline_style:
+                                    shape_style['outline'] = outline_style
+
+                        # Lấy thông tin style text
+                        text_style = {}
+                        if 'text' in shape and 'textElements' in shape['text']:
+                            text_elements = shape['text']['textElements']
+                            for text_elem in text_elements:
+                                if 'textRun' in text_elem and 'style' in text_elem['textRun']:
+                                    style = text_elem['textRun']['style']
+
+                                    # Font family
+                                    if 'fontFamily' in style:
+                                        text_style['fontFamily'] = style['fontFamily']
+
+                                    # Font size
+                                    if 'fontSize' in style:
+                                        text_style['fontSize'] = style['fontSize']
+
+                                    # Font weight
+                                    if 'bold' in style:
+                                        text_style['bold'] = style['bold']
+
+                                    # Font style
+                                    if 'italic' in style:
+                                        text_style['italic'] = style['italic']
+
+                                    # Underline
+                                    if 'underline' in style:
+                                        text_style['underline'] = style['underline']
+
+                                    # Strikethrough
+                                    if 'strikethrough' in style:
+                                        text_style['strikethrough'] = style['strikethrough']
+
+                                    # Text color
+                                    if 'foregroundColor' in style and 'color' in style['foregroundColor']:
+                                        color = style['foregroundColor']['color']
+                                        if 'rgbColor' in color:
+                                            rgb = color['rgbColor']
+                                            text_style['color'] = {
+                                                "red": rgb.get('red', 0),
+                                                "green": rgb.get('green', 0),
+                                                "blue": rgb.get('blue', 0)
+                                            }
+                                        elif 'themeColor' in color:
+                                            text_style['color'] = {
+                                                "themeColor": color['themeColor']
+                                            }
+
+                                    # Link
+                                    if 'link' in style:
+                                        text_style['link'] = style['link']
+
+                                    break  # Chỉ lấy style của text element đầu tiên
+
+                        element_properties = {
+                            "shapeType": shape.get('shapeType', 'TEXT_BOX'),
+                            "hasText": 'text' in shape,
+                            "shapeStyle": shape_style,
+                            "textStyle": text_style
+                        }
+                    elif 'image' in element:
+                        element_type = "image"
+                        image = element['image']
+
+                        # Lấy thông tin style chi tiết cho image
+                        image_style = {}
+                        if 'imageProperties' in image:
+                            img_props = image['imageProperties']
+
+                            # Crop
+                            if 'cropProperties' in img_props:
+                                image_style['crop'] = img_props['cropProperties']
+
+                            # Brightness
+                            if 'brightness' in img_props:
+                                image_style['brightness'] = img_props['brightness']
+
+                            # Contrast
+                            if 'contrast' in img_props:
+                                image_style['contrast'] = img_props['contrast']
+
+                            # Transparency
+                            if 'transparency' in img_props:
+                                image_style['transparency'] = img_props['transparency']
+
+                            # Recolor
+                            if 'recolor' in img_props:
+                                image_style['recolor'] = img_props['recolor']
+
+                            # Shadow
+                            if 'shadow' in img_props:
+                                image_style['shadow'] = img_props['shadow']
+
+                            # Outline
+                            if 'outline' in img_props:
+                                image_style['outline'] = img_props['outline']
+
+                        element_properties = {
+                            "contentUrl": image.get('contentUrl', None),
+                            "sourceUrl": image.get('sourceUrl', None),
+                            "imageStyle": image_style
+                        }
+                    elif 'table' in element:
+                        element_type = "table"
+                        table = element['table']
+
+                        # Lấy thông tin style chi tiết cho table
+                        table_style = {}
+                        if 'tableRows' in table:
+                            table_rows = table['tableRows']
+                            cells_data = []
+
+                            for row_idx, row in enumerate(table_rows):
+                                if 'tableCells' in row:
+                                    for col_idx, cell in enumerate(row['tableCells']):
+                                        cell_data = {
+                                            "rowIndex": row_idx,
+                                            "columnIndex": col_idx,
+                                            "content": ""
+                                        }
+
+                                        # Lấy nội dung text của cell
+                                        if 'text' in cell:
+                                            cell_data["content"] = extract_text_from_shape({"text": cell['text']})
+
+                                        # Lấy style của cell
+                                        if 'tableCellProperties' in cell:
+                                            cell_props = cell['tableCellProperties']
+                                            cell_style = {}
+
+                                            # Background color
+                                            if 'tableCellBackgroundFill' in cell_props:
+                                                bg_fill = cell_props['tableCellBackgroundFill']
+                                                if 'solidFill' in bg_fill and 'color' in bg_fill['solidFill']:
+                                                    color = bg_fill['solidFill']['color']
+                                                    if 'rgbColor' in color:
+                                                        rgb = color['rgbColor']
+                                                        cell_style['backgroundColor'] = {
+                                                            "red": rgb.get('red', 0),
+                                                            "green": rgb.get('green', 0),
+                                                            "blue": rgb.get('blue', 0)
+                                                        }
+
+                                            # Content alignment
+                                            if 'contentAlignment' in cell_props:
+                                                cell_style['contentAlignment'] = cell_props['contentAlignment']
+
+                                            if cell_style:
+                                                cell_data["style"] = cell_style
+
+                                        cells_data.append(cell_data)
+
+                            if cells_data:
+                                table_style['cells'] = cells_data
+
+                        element_properties = {
+                            "rows": table.get('rows', 0),
+                            "columns": table.get('columns', 0),
+                            "hasTableCells": 'tableRows' in table,
+                            "tableStyle": table_style
+                        }
+                    elif 'video' in element:
+                        element_type = "video"
+                        video = element['video']
+
+                        # Lấy thông tin style chi tiết cho video
+                        video_style = {}
+                        if 'videoProperties' in video:
+                            video_props = video['videoProperties']
+
+                            # Autoplay
+                            if 'autoPlay' in video_props:
+                                video_style['autoPlay'] = video_props['autoPlay']
+
+                            # Start/end time
+                            if 'start' in video_props:
+                                video_style['start'] = video_props['start']
+                            if 'end' in video_props:
+                                video_style['end'] = video_props['end']
+
+                            # Mute
+                            if 'mute' in video_props:
+                                video_style['mute'] = video_props['mute']
+
+                        element_properties = {
+                            "videoProperties": video.get('videoProperties', {}),
+                            "videoStyle": video_style,
+                            "url": video.get('url', None),
+                            "id": video.get('id', None),
+                            "source": video.get('source', None)
+                        }
+                    elif 'line' in element:
+                        element_type = "line"
+                        line = element['line']
+
+                        # Lấy thông tin style chi tiết cho line
+                        line_style = {}
+                        if 'lineProperties' in line:
+                            line_props = line['lineProperties']
+
+                            # Line weight
+                            if 'weight' in line_props:
+                                line_style['weight'] = line_props['weight']
+
+                            # Dash style
+                            if 'dashStyle' in line_props:
+                                line_style['dashStyle'] = line_props['dashStyle']
+
+                            # Line fill
+                            if 'lineFill' in line_props:
+                                line_fill = line_props['lineFill']
+                                if 'solidFill' in line_fill and 'color' in line_fill['solidFill']:
+                                    color = line_fill['solidFill']['color']
+                                    if 'rgbColor' in color:
+                                        rgb = color['rgbColor']
+                                        line_style['color'] = {
+                                            "red": rgb.get('red', 0),
+                                            "green": rgb.get('green', 0),
+                                            "blue": rgb.get('blue', 0)
+                                        }
+
+                            # Line end type
+                            if 'endArrow' in line_props:
+                                line_style['endArrow'] = line_props['endArrow']
+                            if 'startArrow' in line_props:
+                                line_style['startArrow'] = line_props['startArrow']
+
+                        element_properties = {
+                            "lineProperties": line.get('lineProperties', {}),
+                            "lineStyle": line_style,
+                            "lineType": line.get('lineType', None)
+                        }
+
+                    # Lấy thông tin transform chi tiết
+                    transform_info = {}
+                    if 'transform' in element:
+                        transform = element['transform']
+
+                        # Translation (vị trí)
+                        transform_info['translateX'] = transform.get('translateX', 0)
+                        transform_info['translateY'] = transform.get('translateY', 0)
+
+                        # Scale (tỷ lệ)
+                        transform_info['scaleX'] = transform.get('scaleX', 1.0)
+                        transform_info['scaleY'] = transform.get('scaleY', 1.0)
+
+                        # Shear (nghiêng)
+                        transform_info['shearX'] = transform.get('shearX', 0)
+                        transform_info['shearY'] = transform.get('shearY', 0)
+
+                        # Unit (đơn vị)
+                        transform_info['unit'] = transform.get('unit', 'EMU')
+                    else:
+                        # Default transform values
+                        transform_info = {
+                            'translateX': 0,
+                            'translateY': 0,
+                            'scaleX': 1.0,
+                            'scaleY': 1.0,
+                            'shearX': 0,
+                            'shearY': 0,
+                            'unit': 'EMU'
+                        }
+
+                    # Lấy thông tin size chi tiết
+                    size_info = {}
+                    if 'size' in element:
+                        size = element['size']
+                        if 'width' in size:
+                            width = size['width']
+                            size_info['width'] = {
+                                'magnitude': width.get('magnitude', 0),
+                                'unit': width.get('unit', 'EMU')
+                            }
+                        if 'height' in size:
+                            height = size['height']
+                            size_info['height'] = {
+                                'magnitude': height.get('magnitude', 0),
+                                'unit': height.get('unit', 'EMU')
+                            }
+                    else:
+                        # Default size values
+                        size_info = {
+                            'width': {'magnitude': 0, 'unit': 'EMU'},
+                            'height': {'magnitude': 0, 'unit': 'EMU'}
+                        }
+
+                    # Thêm thông tin element vào danh sách
+                    elements_info.append({
+                        "objectId": element.get('objectId'),
+                        "type": element_type,
+                        "text": element_text,
+                        "position": {
+                            "x": transform_info['translateX'],
+                            "y": transform_info['translateY']
+                        },
+                        "size": size_info,
+                        "transform": transform_info,
+                        "properties": element_properties
+                    })
+
+                # Thêm thông tin slide vào danh sách
+                slide_layout = None
+                if 'slideProperties' in slide and 'layoutObjectId' in slide['slideProperties']:
+                    slide_layout = slide['slideProperties']['layoutObjectId']
+
+                slides_info.append({
+                    "slide_id": slide_id,
+                    "slide_index": i,
+                    "layout": slide_layout,
+                    "elements": elements_info,
+                    "properties": {
+                        "notesPage": "notesMaster" in slide,
+                        "masterProperties": slide.get('slideProperties', {}).get('masterProperties', {})
+                    }
+                })
+
+            # Tạo response
+            return {
+                "success": True,
+                "presentation_id": presentation_id,
+                "title": presentation.get('title', 'Untitled'),
+                "slide_count": len(presentation.get('slides', [])),
+                "slides": slides_info,
+                "web_view_link": file_metadata.get('webViewLink'),
+                "created_time": file_metadata.get('createdTime'),
+                "last_modified_time": file_metadata.get('modifiedTime'),
+                "owners": file_metadata.get('owners', []),
+                "last_modified_by": file_metadata.get('lastModifyingUser', {})
+            }
+
+        except HttpError as e:
+            logger.error(f"HTTP error getting presentation details: {e}")
+            return {
+                "success": False,
+                "error": f"HTTP error: {e}"
+            }
+        except Exception as e:
+            logger.error(f"Error getting presentation details: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
 
 def get_google_slides_service() -> GoogleSlidesService:
     return GoogleSlidesService()
