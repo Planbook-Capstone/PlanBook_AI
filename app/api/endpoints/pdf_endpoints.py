@@ -495,98 +495,71 @@ async def health_check():
         return {"status": "unhealthy", "error": str(e)}
 
 
-@router.delete("/textbook", response_model=Dict[str, Any])
-async def delete_textbook_flexible(
-    textbook_id: Optional[str] = Query(None, description="Textbook ID to delete"),
-    lesson_id: Optional[str] = Query(None, description="Lesson ID to find and delete textbook")
+
+
+@router.delete("", response_model=Dict[str, Any])
+async def delete_textbook_content(
+    book_id: str = Query(..., description="Book ID - required for both operations"),
+    lesson_id: Optional[str] = Query(None, description="Lesson ID to delete specific lesson")
 ) -> Dict[str, Any]:
     """
-    Xóa textbook linh hoạt - nhận vào textbook_id HOẶC lesson_id
+    Xóa nội dung textbook - Clean và đơn giản
 
-    Endpoint này cho phép xóa textbook bằng một trong hai cách:
-    1. Cung cấp textbook_id để xóa trực tiếp
-    2. Cung cấp lesson_id để tìm và xóa textbook chứa lesson đó
+    - book_id only: Xóa toàn bộ collection của book
+    - book_id + lesson_id: Xóa lesson cụ thể trong collection của book
 
     Args:
-        textbook_id: (Optional) ID của textbook cần xóa
-        lesson_id: (Optional) ID của lesson để tìm textbook cần xóa
+        book_id: ID của book (bắt buộc)
+        lesson_id: ID của lesson cần xóa (optional - nếu có thì xóa lesson, không có thì xóa book)
 
     Returns:
         Dict chứa kết quả xóa
 
     Examples:
-        DELETE /api/v1/pdf/textbook?textbook_id=abc123
-        DELETE /api/v1/pdf/textbook?lesson_id=lesson_01_01
+        DELETE /api/v1/pdf?book_id=hoa12                           # Xóa toàn bộ sách Hóa 12
+        DELETE /api/v1/pdf?book_id=hoa12&lesson_id=hoa12_bai1      # Xóa bài 1 trong sách Hóa 12
     """
     try:
-        from app.services.qdrant_service import get_qdrant_service
         qdrant_service = get_qdrant_service()
 
-        # Validation: phải có ít nhất một trong hai parameters
-        if not textbook_id and not lesson_id:
-            raise HTTPException(
-                status_code=400,
-                detail="Either 'textbook_id' or 'lesson_id' parameter is required"
-            )
+        # Nếu có lesson_id: xóa lesson cụ thể trong book
+        if lesson_id:
+            logger.info(f"Deleting lesson '{lesson_id}' from book '{book_id}'")
+            result = await qdrant_service.delete_lesson_in_book_clean(book_id, lesson_id)
 
-        # Validation: không được cung cấp cả hai parameters
-        if textbook_id and lesson_id:
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot provide both 'textbook_id' and 'lesson_id'. Choose one."
-            )
-
-        if not qdrant_service.qdrant_client:
-            raise HTTPException(
-                status_code=503, 
-                detail="Qdrant service is not available"
-            )
-
-        # Xóa bằng textbook_id (book_id)
-        if textbook_id:
-            logger.info(f"Deleting textbook by book_id: {textbook_id}")
-            result = await qdrant_service.delete_textbook_by_book_id(textbook_id)
-            operation = "delete_by_book_id"
-            identifier = textbook_id
-
-        # Xóa bằng lesson_id
-        else:  # lesson_id
-            logger.info(f"Deleting textbook by lesson_id: {lesson_id}")
-            result = await qdrant_service.delete_textbook_by_lesson_id(lesson_id)
-            operation = "delete_by_lesson_id"
-            identifier = lesson_id
-
-        if not result.get("success"):
-            if "not found" in result.get("error", "").lower():
-                raise HTTPException(
-                    status_code=404,
-                    detail=result.get("error")
-                )
-            else:
-                raise HTTPException(
-                    status_code=500,
-                    detail=result.get("error", "Failed to delete textbook")
-                )
-
-        logger.info(f"Successfully deleted textbook: {identifier}")
-        return {
-            "success": True,
-            "message": result.get("message"),
-            "deleted_textbook": {
-                "book_id": result.get("book_id"),
-                "lesson_id": result.get("lesson_id") if lesson_id else None,
-                "collection_name": result.get("collection_name"),
-                "deleted_vectors": result.get("deleted_vectors", 0)
-            },
-            "operation": operation,
-            "identifier_used": {
-                "textbook_id": textbook_id,
-                "lesson_id": lesson_id
+            return {
+                "success": True,
+                "operation": "delete_lesson",
+                "book_id": book_id,
+                "lesson_id": lesson_id,
+                "message": f"Lesson '{lesson_id}' deleted successfully from book '{book_id}'",
+                "details": result
             }
-        }
 
+        # Nếu không có lesson_id: xóa toàn bộ book
+        else:
+            logger.info(f"Deleting entire book: {book_id}")
+            result = await qdrant_service.delete_book_clean(book_id)
+
+            return {
+                "success": True,
+                "operation": "delete_book",
+                "book_id": book_id,
+                "message": f"Book '{book_id}' deleted successfully",
+                "details": result
+            }
+
+    except ValueError as e:
+        logger.warning(f"Invalid input: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        logger.warning(f"Resource not found: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        logger.error(f"Service error: {e}")
+        raise HTTPException(status_code=503, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in flexible textbook deletion: {e}")
+        logger.error(f"Unexpected error deleting textbook content: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
