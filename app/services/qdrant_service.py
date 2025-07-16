@@ -765,6 +765,246 @@ class QdrantService:
                 "book_id": book_id
             }
 
+    async def delete_book_clean(self, book_id: str) -> Dict[str, Any]:
+        """
+        Xóa toàn bộ book (collection) - Clean version với exception handling
+
+        Args:
+            book_id: ID của book cần xóa
+
+        Returns:
+            Dict chứa thông tin xóa thành công
+
+        Raises:
+            ValueError: Nếu book_id không hợp lệ
+            RuntimeError: Nếu Qdrant client chưa khởi tạo
+            FileNotFoundError: Nếu collection không tồn tại
+            Exception: Các lỗi khác từ Qdrant
+        """
+        self._ensure_service_initialized()
+
+        if not book_id or not book_id.strip():
+            raise ValueError("book_id cannot be empty")
+
+        if not self.qdrant_client:
+            raise RuntimeError("Qdrant client not initialized")
+
+        collection_name = f"textbook_{book_id}"
+
+        # Kiểm tra collection có tồn tại không
+        collections = self.qdrant_client.get_collections().collections
+        existing_names = [c.name for c in collections]
+
+        if collection_name not in existing_names:
+            raise FileNotFoundError(f"Book '{book_id}' not found (collection '{collection_name}' does not exist)")
+
+        # Xóa collection
+        self.qdrant_client.delete_collection(collection_name=collection_name)
+
+        logger.info(f"✅ Deleted book '{book_id}' (collection: {collection_name})")
+
+        return {
+            "book_id": book_id,
+            "collection_name": collection_name,
+            "operation": "book_deleted",
+            "message": f"Book '{book_id}' and all its lessons deleted successfully"
+        }
+
+    async def delete_lesson_clean(self, lesson_id: str) -> Dict[str, Any]:
+        """
+        Xóa lesson cụ thể - Clean version với exception handling
+
+        Args:
+            lesson_id: ID của lesson cần xóa
+
+        Returns:
+            Dict chứa thông tin xóa thành công
+
+        Raises:
+            ValueError: Nếu lesson_id không hợp lệ
+            RuntimeError: Nếu Qdrant client chưa khởi tạo
+            FileNotFoundError: Nếu lesson không tồn tại
+            Exception: Các lỗi khác từ Qdrant
+        """
+        from qdrant_client.http import models as qdrant_models
+
+        self._ensure_service_initialized()
+
+        if not lesson_id or not lesson_id.strip():
+            raise ValueError("lesson_id cannot be empty")
+
+        if not self.qdrant_client:
+            raise RuntimeError("Qdrant client not initialized")
+
+        # Tìm lesson trong các collections
+        collections = self.qdrant_client.get_collections().collections
+        textbook_collections = [c.name for c in collections if c.name.startswith("textbook_")]
+
+        if not textbook_collections:
+            raise FileNotFoundError("No textbook collections found")
+
+        # Tạo filter để tìm lesson
+        lesson_filter = qdrant_models.Filter(
+            must=[
+                qdrant_models.FieldCondition(
+                    key="lesson_id",
+                    match=qdrant_models.MatchValue(value=lesson_id)
+                ),
+                qdrant_models.FieldCondition(
+                    key="type",
+                    match=qdrant_models.MatchValue(value="content")
+                )
+            ]
+        )
+
+        # Tìm lesson trong từng collection
+        found_collection = None
+        found_book_id = None
+
+        for collection_name in textbook_collections:
+            try:
+                scroll_result = self.qdrant_client.scroll(
+                    collection_name=collection_name,
+                    scroll_filter=lesson_filter,
+                    limit=1,
+                    with_payload=True,
+                    with_vectors=False
+                )
+
+                points = scroll_result[0]
+                if points:
+                    found_collection = collection_name
+                    found_book_id = points[0].payload.get("book_id", collection_name.replace("textbook_", ""))
+                    break
+
+            except Exception as e:
+                logger.warning(f"Error checking collection {collection_name}: {e}")
+                continue
+
+        if not found_collection:
+            raise FileNotFoundError(f"Lesson '{lesson_id}' not found in any textbook collection")
+
+        # Xóa lesson
+        delete_filter = qdrant_models.Filter(
+            must=[
+                qdrant_models.FieldCondition(
+                    key="lesson_id",
+                    match=qdrant_models.MatchValue(value=lesson_id)
+                )
+            ]
+        )
+
+        self.qdrant_client.delete(
+            collection_name=found_collection,
+            points_selector=qdrant_models.FilterSelector(filter=delete_filter)
+        )
+
+        logger.info(f"✅ Deleted lesson '{lesson_id}' from book '{found_book_id}' (collection: {found_collection})")
+
+        return {
+            "lesson_id": lesson_id,
+            "book_id": found_book_id,
+            "collection_name": found_collection,
+            "operation": "lesson_deleted",
+            "message": f"Lesson '{lesson_id}' deleted successfully from book '{found_book_id}'"
+        }
+
+    async def delete_lesson_in_book_clean(self, book_id: str, lesson_id: str) -> Dict[str, Any]:
+        """
+        Xóa lesson cụ thể trong book cụ thể - Clean version với exception handling
+
+        Args:
+            book_id: ID của book chứa lesson
+            lesson_id: ID của lesson cần xóa
+
+        Returns:
+            Dict chứa thông tin xóa thành công
+
+        Raises:
+            ValueError: Nếu book_id hoặc lesson_id không hợp lệ
+            RuntimeError: Nếu Qdrant client chưa khởi tạo
+            FileNotFoundError: Nếu book hoặc lesson không tồn tại
+            Exception: Các lỗi khác từ Qdrant
+        """
+        from qdrant_client.http import models as qdrant_models
+
+        self._ensure_service_initialized()
+
+        if not book_id or not book_id.strip():
+            raise ValueError("book_id cannot be empty")
+
+        if not lesson_id or not lesson_id.strip():
+            raise ValueError("lesson_id cannot be empty")
+
+        if not self.qdrant_client:
+            raise RuntimeError("Qdrant client not initialized")
+
+        collection_name = f"textbook_{book_id}"
+
+        # Kiểm tra collection có tồn tại không
+        collections = self.qdrant_client.get_collections().collections
+        existing_names = [c.name for c in collections]
+
+        if collection_name not in existing_names:
+            raise FileNotFoundError(f"Book '{book_id}' not found (collection '{collection_name}' does not exist)")
+
+        # Kiểm tra lesson có tồn tại trong collection không
+        lesson_filter = qdrant_models.Filter(
+            must=[
+                qdrant_models.FieldCondition(
+                    key="lesson_id",
+                    match=qdrant_models.MatchValue(value=lesson_id)
+                ),
+                qdrant_models.FieldCondition(
+                    key="type",
+                    match=qdrant_models.MatchValue(value="content")
+                )
+            ]
+        )
+
+        try:
+            scroll_result = self.qdrant_client.scroll(
+                collection_name=collection_name,
+                scroll_filter=lesson_filter,
+                limit=1,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            points = scroll_result[0]
+            if not points:
+                raise FileNotFoundError(f"Lesson '{lesson_id}' not found in book '{book_id}'")
+
+        except Exception as e:
+            if "not found" in str(e).lower():
+                raise FileNotFoundError(f"Lesson '{lesson_id}' not found in book '{book_id}'")
+            raise
+
+        # Xóa lesson
+        delete_filter = qdrant_models.Filter(
+            must=[
+                qdrant_models.FieldCondition(
+                    key="lesson_id",
+                    match=qdrant_models.MatchValue(value=lesson_id)
+                )
+            ]
+        )
+
+        self.qdrant_client.delete(
+            collection_name=collection_name,
+            points_selector=qdrant_models.FilterSelector(filter=delete_filter)
+        )
+
+        logger.info(f"✅ Deleted lesson '{lesson_id}' from book '{book_id}' (collection: {collection_name})")
+
+        return {
+            "lesson_id": lesson_id,
+            "book_id": book_id,
+            "collection_name": collection_name,
+            "operation": "lesson_deleted_in_book",
+            "message": f"Lesson '{lesson_id}' deleted successfully from book '{book_id}'"
+        }
+
     async def check_lesson_id_exists(self, lesson_id: str) -> Dict[str, Any]:
         """
         Kiểm tra lesson_id đã tồn tại trong các textbook collections chưa
