@@ -68,6 +68,8 @@ api_router.include_router(
 )
 api_router.include_router(
     slide_generation.router, prefix="/slides", tags=["Slide Generation"]
+)
+api_router.include_router(
     auth_endpoints.router, prefix="/auth", tags=["Authentication"]
 )
 api_router.include_router(
