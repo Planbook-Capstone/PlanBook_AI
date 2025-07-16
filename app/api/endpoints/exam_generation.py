@@ -12,18 +12,12 @@ from urllib.parse import quote
 from datetime import datetime
 import asyncio
 from pathlib import Path
-
+from app.services.textbook_retrieval_service import get_textbook_retrieval_service
 from app.models.exam_models import (
     ExamMatrixRequest,
-    ExamResponse,
-    ExamStatistics,
-    SearchContentRequest,
-    LessonContentResponse,
-    ExamGenerationError,
 )
 from app.models.online_document_models import (
     ExamOnlineResponse,
-    OnlineDocumentError,
     OnlineDocumentLinks
 )
 from app.models.smart_exam_models import (
@@ -31,7 +25,6 @@ from app.models.smart_exam_models import (
     SmartExamResponse,
     SmartExamError
 )
-from app.services.exam_content_service import get_exam_content_service
 from app.services.exam_generation_service import get_exam_generation_service
 from app.services.exam_docx_service import exam_docx_service
 from app.services.google_drive_service import get_google_drive_service
@@ -226,8 +219,8 @@ async def generate_exam_from_matrix(request: ExamMatrixRequest):
 
         # 2. Tìm kiếm nội dung cho tất cả bài học
         logger.info("Searching for multiple lesson contents...")
-        exam_content_service = get_exam_content_service()
-        lesson_content = await exam_content_service.get_multiple_lessons_content_for_exam(
+        textbookService = get_textbook_retrieval_service()
+        lesson_content = await textbookService.get_multiple_lessons_content_for_exam(
             lesson_ids=lesson_ids
         )
         print("LessonContent" ,lesson_content)
@@ -344,131 +337,6 @@ async def generate_exam_from_matrix(request: ExamMatrixRequest):
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.post("/generate-exam-download")
-async def generate_exam_download(request: ExamMatrixRequest):
-    print("=== GENERATE-EXAM-DOWNLOAD ENDPOINT CALLED ===")
-    """
-    Tạo bài kiểm tra từ ma trận đề thi và trả về file DOCX download trực tiếp
-    (Endpoint backup cho trường hợp Google Drive không hoạt động)
-
-    Args:
-        request: Ma trận đề thi với lesson_id và cấu hình chi tiết
-
-    Returns:
-        FileResponse: File DOCX chứa đề thi và đáp án để download
-    """
-    try:
-        logger.info(f"Starting exam generation (download mode) for exam_id: {request.exam_id}")
-
-        # 1. Validate request
-        if not request.cau_hinh_de or len(request.cau_hinh_de) == 0:
-            raise HTTPException(status_code=400, detail="cau_hinh_de is required and cannot be empty")
-
-        # Lấy tất cả lesson_id từ cấu hình đề thi
-        lesson_ids = [cau_hinh.lesson_id for cau_hinh in request.cau_hinh_de]
-        logger.info(f"Extracting lesson_ids from cau_hinh_de: {lesson_ids}")
-
-        # 2. Tìm kiếm nội dung cho tất cả bài học
-        logger.info("Searching for multiple lesson contents...")
-        exam_content_service = get_exam_content_service()
-        lesson_content = await exam_content_service.get_multiple_lessons_content_for_exam(
-            lesson_ids=lesson_ids
-        )
-
-        if not lesson_content.get("success", False):
-            failed_lessons = lesson_content.get("failed_lessons", [])
-            successful_lessons = lesson_content.get("successful_lessons", [])
-            error_detail = f"Failed to retrieve content for lessons: {failed_lessons}. "
-            if successful_lessons:
-                error_detail += f"Successfully retrieved: {successful_lessons}. "
-            error_detail += f"Error: {lesson_content.get('error', 'Unknown error')}"
-
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail,
-            )
-
-        # 3. Kiểm tra chất lượng nội dung và thông báo về lessons
-        search_quality = lesson_content.get("search_quality", 0.0)
-        successful_lessons = lesson_content.get("successful_lessons", [])
-        failed_lessons = lesson_content.get("failed_lessons", [])
-
-        logger.info(f"Content retrieval summary:")
-        logger.info(f"  - Total lessons requested: {lesson_content.get('total_lessons', 0)}")
-        logger.info(f"  - Successfully retrieved: {len(successful_lessons)} lessons: {successful_lessons}")
-        logger.info(f"  - Failed to retrieve: {len(failed_lessons)} lessons: {failed_lessons}")
-        logger.info(f"  - Average search quality: {search_quality:.2f}")
-
-        if search_quality < 0.3:
-            logger.warning(f"Low search quality: {search_quality}")
-
-        if failed_lessons:
-            logger.warning(f"Some lessons failed to retrieve content: {failed_lessons}")
-            logger.warning("Exam generation will proceed with available content only")
-
-        # 4. Tạo câu hỏi từ ma trận
-        logger.info("Generating questions from matrix...")
-        exam_generation_service = get_exam_generation_service()
-        exam_result = await exam_generation_service.generate_questions_from_matrix(
-            exam_request=request, lesson_content=lesson_content
-        )
-
-        if not exam_result.get("success", False):
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to generate questions: {exam_result.get('error', 'Unknown error')}",
-            )
-
-        # 5. Tạo file DOCX
-        logger.info("Creating DOCX file...")
-        docx_result = await exam_docx_service.create_exam_docx(
-            exam_data=exam_result, exam_request=request.model_dump()
-        )
-
-        if not docx_result.get("success", False):
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to create DOCX file: {docx_result.get('error', 'Unknown error')}",
-            )
-
-        docx_file_path = docx_result.get("filepath")
-
-        # Kiểm tra file có tồn tại không
-        if not docx_file_path or not os.path.exists(docx_file_path):
-            raise HTTPException(
-                status_code=500, detail="DOCX file was created but not found on disk"
-            )
-
-        # Tạo filename với thông tin đề thi (sanitize để tránh lỗi encoding)
-        mon_hoc_safe = _sanitize_filename(request.mon_hoc)
-        exam_id_safe = _sanitize_filename(str(exam_result.get("exam_id", "unknown")))
-        filename = f"De_thi_{mon_hoc_safe}_{request.lop}_{exam_id_safe}.docx"
-
-        logger.info(
-            f"Exam generation (download mode) completed successfully. Generated {len(exam_result.get('questions', []))} questions."
-        )
-
-        # Trả về file DOCX để download và tự động xóa sau khi gửi
-        return AutoDeleteFileResponse(
-            path=docx_file_path,
-            filename=filename,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={
-                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
-                "X-Exam-Info": f"Generated from exam {_sanitize_filename(request.exam_id)}",
-                "X-Total-Questions": str(len(exam_result.get("questions", []))),
-                "X-Search-Quality": str(search_quality),
-                "X-Download-Mode": "true",
-                
-                
-            },
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error generating exam (download mode): {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 # @router.get("/download-exam/{filename}")
 async def download_exam_file(filename: str):
@@ -499,103 +367,6 @@ async def download_exam_file(filename: str):
         logger.error(f"Error downloading exam file: {e}")
         raise HTTPException(status_code=500, detail=f"Error downloading file: {str(e)}")
 
-
-@router.get("/lesson-content/{lesson_id}", response_model=Dict[str, Any])
-async def get_lesson_content_for_exam(
-    lesson_id: str,
-    search_terms: List[str] = Query(None, description="Additional search terms"),
-) -> Dict[str, Any]:
-    """
-    Lấy nội dung bài học để preview trước khi tạo đề thi
-
-    Args:
-        lesson_id: ID của bài học
-        search_terms: Các từ khóa tìm kiếm bổ sung
-
-    Returns:
-        Dict chứa nội dung bài học và thông tin chất lượng
-    """
-    try:
-        exam_content_service = get_exam_content_service()
-        lesson_content = await exam_content_service.get_lesson_content_for_exam(
-            lesson_id=lesson_id, search_terms=search_terms
-        )
-
-        if not lesson_content.get("success", False):
-            raise HTTPException(
-                status_code=404,
-                detail=f"Lesson content not found: {lesson_content.get('error', 'Unknown error')}",
-            )
-
-        return {
-            "success": True,
-            "lesson_id": lesson_id,
-            "lesson_info": lesson_content.get("content", {}).get("lesson_info", {}),
-            "content_summary": {
-                "total_words": lesson_content.get("content", {}).get("total_words", 0),
-                "total_chunks": lesson_content.get("content", {}).get(
-                    "total_chunks", 0
-                ),
-                "available_sections": lesson_content.get("content", {}).get(
-                    "available_sections", []
-                ),
-                "search_quality": lesson_content.get("search_quality", 0.0),
-            },
-            "content_preview": lesson_content.get("content", {}).get(
-                "main_content", ""
-            )[:500]
-            + "...",
-            "recommendations": _get_content_recommendations(lesson_content),
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting lesson content: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@router.post("/search-content", response_model=Dict[str, Any])
-async def search_lesson_content(request: SearchContentRequest) -> Dict[str, Any]:
-    """
-    Tìm kiếm nội dung trong bài học theo từ khóa
-
-    Args:
-        request: Thông tin tìm kiếm
-
-    Returns:
-        Dict chứa kết quả tìm kiếm
-    """
-    try:
-        exam_content_service = get_exam_content_service()
-        search_result = await exam_content_service.search_content_by_keywords(
-            lesson_id=request.lesson_id,
-            keywords=request.search_terms,
-            limit=request.limit,
-        )
-
-        if not search_result.get("success", False):
-            raise HTTPException(
-                status_code=404,
-                detail=f"Search failed: {search_result.get('error', 'Unknown error')}",
-            )
-
-        return {
-            "success": True,
-            "lesson_id": request.lesson_id,
-            "search_terms": request.search_terms,
-            "results": search_result.get("results", []),
-            "total_found": search_result.get("total_found", 0),
-            "search_quality": _calculate_search_result_quality(
-                search_result.get("results", [])
-            ),
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error searching lesson content: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @router.get("/exam-templates", response_model=Dict[str, Any])
@@ -641,41 +412,6 @@ async def get_exam_templates() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-def _get_content_recommendations(lesson_content: Dict[str, Any]) -> List[str]:
-    """Tạo recommendations dựa trên chất lượng nội dung"""
-    recommendations = []
-
-    search_quality = lesson_content.get("search_quality", 0.0)
-    content_info = lesson_content.get("content", {})
-
-    if search_quality < 0.5:
-        recommendations.append(
-            "Chất lượng nội dung thấp. Nên bổ sung thêm từ khóa tìm kiếm."
-        )
-
-    if content_info.get("total_words", 0) < 500:
-        recommendations.append(
-            "Nội dung bài học ít. Có thể cần tìm thêm tài liệu bổ sung."
-        )
-
-    if len(content_info.get("available_sections", [])) < 3:
-        recommendations.append(
-            "Cấu trúc bài học đơn giản. Nên tạo câu hỏi đa dạng hơn."
-        )
-
-    if not recommendations:
-        recommendations.append("Nội dung bài học đủ chất lượng để tạo đề thi.")
-
-    return recommendations
-
-
-def _calculate_search_result_quality(results: List[Dict[str, Any]]) -> float:
-    """Tính chất lượng kết quả tìm kiếm"""
-    if not results:
-        return 0.0
-
-    avg_score = sum(r.get("score", 0) for r in results) / len(results)
-    return round(avg_score, 2)
 
 
 @router.post("/generate-smart-exam")
