@@ -152,6 +152,59 @@ async def quick_textbook_analysis(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+@router.get("/lessons", response_model=Dict[str, Any])
+async def get_all_lessons() -> Dict[str, Any]:
+    """
+    Lấy tất cả bài học từ Qdrant
+
+    Endpoint này trả về danh sách tất cả bài học đã được import vào hệ thống với các thông tin:
+    - bookId: ID của sách
+    - lessonId: ID của bài học
+    - fileUrl: URL của file PDF trên Supabase Storage
+    - uploaded_at: Thời gian upload file lên Supabase (ưu tiên)
+    - processed_at: Thời gian xử lý (fallback)
+    - content_type: Loại nội dung (textbook/guide)
+    - total_chunks: Số lượng chunks được tạo
+
+    Returns:
+        Dict chứa danh sách tất cả bài học và thông tin tổng quan
+
+    Examples:
+        curl -X GET "http://localhost:8000/api/v1/pdf/lessons"
+    """
+    try:
+        from app.services.qdrant_service import get_qdrant_service
+
+        qdrant_service = get_qdrant_service()
+
+        logger.info("Getting all lessons from Qdrant...")
+        result = await qdrant_service.get_all_lessons()
+
+        if not result.get("success"):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to retrieve lessons: {result.get('error', 'Unknown error')}"
+            )
+
+        logger.info(f"Successfully retrieved {result.get('total_lessons', 0)} lessons")
+
+        return {
+            "success": True,
+            "data": {
+                "lessons": result.get("lessons", []),
+                "total_lessons": result.get("total_lessons", 0),
+                "collections_processed": result.get("collections_processed", 0)
+            },
+            "message": f"Retrieved {result.get('total_lessons', 0)} lessons successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_all_lessons: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
 @router.get("/textbooks", response_model=Dict[str, Any])
 async def get_all_textbook() -> Dict[str, Any]:
     """

@@ -1418,9 +1418,46 @@ Service will be disabled.
 
                         # Lấy thông tin style text
                         text_style = {}
+                        text_alignment = {}
+
                         if 'text' in shape and 'textElements' in shape['text']:
                             text_elements = shape['text']['textElements']
+
+                            # Lấy thông tin alignment từ paragraph style
+                            if 'lists' in shape['text']:
+                                text_alignment['lists'] = shape['text']['lists']
+
                             for text_elem in text_elements:
+                                # Lấy paragraph style cho alignment
+                                if 'paragraphMarker' in text_elem and 'style' in text_elem['paragraphMarker']:
+                                    para_style = text_elem['paragraphMarker']['style']
+
+                                    # Text alignment
+                                    if 'alignment' in para_style:
+                                        text_alignment['alignment'] = para_style['alignment']
+
+                                    # Line spacing
+                                    if 'lineSpacing' in para_style:
+                                        text_alignment['lineSpacing'] = para_style['lineSpacing']
+
+                                    # Space above/below
+                                    if 'spaceAbove' in para_style:
+                                        text_alignment['spaceAbove'] = para_style['spaceAbove']
+                                    if 'spaceBelow' in para_style:
+                                        text_alignment['spaceBelow'] = para_style['spaceBelow']
+
+                                    # Indentation
+                                    if 'indentStart' in para_style:
+                                        text_alignment['indentStart'] = para_style['indentStart']
+                                    if 'indentEnd' in para_style:
+                                        text_alignment['indentEnd'] = para_style['indentEnd']
+                                    if 'indentFirstLine' in para_style:
+                                        text_alignment['indentFirstLine'] = para_style['indentFirstLine']
+
+                                    # Direction
+                                    if 'direction' in para_style:
+                                        text_alignment['direction'] = para_style['direction']
+
                                 if 'textRun' in text_elem and 'style' in text_elem['textRun']:
                                     style = text_elem['textRun']['style']
 
@@ -1473,7 +1510,8 @@ Service will be disabled.
                             "shapeType": shape.get('shapeType', 'TEXT_BOX'),
                             "hasText": 'text' in shape,
                             "shapeStyle": shape_style,
-                            "textStyle": text_style
+                            "textStyle": text_style,
+                            "textAlignment": text_alignment
                         }
                     elif 'image' in element:
                         element_type = "image"

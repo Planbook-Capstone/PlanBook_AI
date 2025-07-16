@@ -85,6 +85,11 @@ class Settings(BaseSettings):
     GOOGLE_DRIVE_AUTO_DELETE_DAYS: int = int(os.getenv("GOOGLE_DRIVE_AUTO_DELETE_DAYS", "7"))
     ENABLE_GOOGLE_DRIVE: bool = os.getenv("ENABLE_GOOGLE_DRIVE", "False").lower() == "true"
 
+    # Supabase Settings
+    SUPABASE_URL: Optional[str] = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY: Optional[str] = os.getenv("SUPABASE_KEY")
+    SUPABASE_BUCKET_NAME: str = os.getenv("SUPABASE_BUCKET_NAME", "pdf-documents")
+
     # Kafka Configuration
     KAFKA_BOOTSTRAP_SERVERS: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     KAFKA_TOPIC_NAME: str = os.getenv("KAFKA_TOPIC_NAME", "planbook")

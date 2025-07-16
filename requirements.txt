@@ -41,6 +41,9 @@ tf-keras>=2.15.0
 # Vector Database
 qdrant-client>=1.6.0
 
+# Supabase
+supabase>=2.0.0
+
 # Utilities
 aiofiles>=23.0.0
 httpx>=0.25.0
