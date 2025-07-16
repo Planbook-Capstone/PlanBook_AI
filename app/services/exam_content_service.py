@@ -146,86 +146,92 @@ class ExamContentService:
             }
 
     async def _find_lesson_in_collections(self, lesson_id: str) -> Dict[str, Any]:
-        """Tìm kiếm lesson trong tất cả Qdrant collections"""
+        """Tìm kiếm lesson trong unified collection"""
         try:
+            collection_name = self.qdrant_service.UNIFIED_COLLECTION_NAME
+
+            # Kiểm tra unified collection có tồn tại không
             collections = self.qdrant_service.qdrant_client.get_collections().collections
-            
-            for collection in collections:
-                if collection.name.startswith("textbook_"):
-                    try:
-                        # Tìm kiếm lesson_id trong collection này
-                        search_result = self.qdrant_service.qdrant_client.scroll(
-                            collection_name=collection.name,
-                            scroll_filter=qdrant_models.Filter(
-                                must=[
-                                    qdrant_models.FieldCondition(
-                                        key="lesson_id",
-                                        match=qdrant_models.MatchValue(value=lesson_id),
-                                    )
-                                ]
-                            ),
-                            limit=100,  # Lấy nhiều chunks của lesson
-                            with_payload=True,
+            existing_names = [c.name for c in collections]
+
+            if collection_name not in existing_names:
+                return {
+                    "success": False,
+                    "error": f"Unified collection {collection_name} not found",
+                    "lesson_id": lesson_id
+                }
+
+            # Tìm kiếm lesson_id trong unified collection
+            search_result = self.qdrant_service.qdrant_client.scroll(
+                collection_name=collection_name,
+                scroll_filter=qdrant_models.Filter(
+                    must=[
+                        qdrant_models.FieldCondition(
+                            key="lesson_id",
+                            match=qdrant_models.MatchValue(value=lesson_id),
                         )
+                    ]
+                ),
+                limit=100,  # Lấy nhiều chunks của lesson
+                with_payload=True,
+            )
 
-                        if search_result[0]:  # Tìm thấy lesson
-                            lesson_chunks = []
-                            lesson_info = {}
+            if search_result[0]:  # Tìm thấy lesson
+                lesson_chunks = []
+                lesson_info = {}
 
-                            # Collect chunks with index for sorting
-                            chunks_with_index = []
-                            for point in search_result[0]:
-                                payload = point.payload or {}
+                # Collect chunks with index for sorting
+                chunks_with_index = []
+                for point in search_result[0]:
+                    payload = point.payload or {}
 
-                                # Bỏ qua metadata points
-                                if payload.get("type") == "metadata":
-                                    continue
-
-                                # Lưu thông tin lesson
-                                if not lesson_info:
-                                    lesson_info = {
-                                        "lesson_id": payload.get("lesson_id", ""),
-                                        "lesson_title": payload.get("lesson_title", ""),
-                                        "chapter_title": payload.get("chapter_title", ""),
-                                        "chapter_id": payload.get("chapter_id", ""),
-                                    }
-
-                                # Collect chunks with index for sorting
-                                chunk_index = payload.get("chunk_index", 0)
-                                chunks_with_index.append((chunk_index, {
-                                    "text": payload.get("text", ""),
-                                    "page": payload.get("page", 0),
-                                    "type": payload.get("type", "content"),
-                                    "section": payload.get("section", ""),
-                                }))
-
-                            # Sort by chunk_index to maintain correct order
-                            chunks_with_index.sort(key=lambda x: x[0])
-
-                            # Extract sorted chunks
-                            lesson_chunks = [chunk for _, chunk in chunks_with_index]
-
-                            return {
-                                "success": True,
-                                "collection_name": collection.name,
-                                "lesson_info": lesson_info,
-                                "content_chunks": lesson_chunks,
-                                "total_chunks": len(lesson_chunks)
-                            }
-
-                    except Exception as e:
-                        logger.warning(f"Error searching in collection {collection.name}: {e}")
+                    # Bỏ qua metadata points
+                    if payload.get("type") == "metadata":
                         continue
 
+                    # Lưu thông tin lesson
+                    if not lesson_info:
+                        lesson_info = {
+                            "lesson_id": payload.get("lesson_id", ""),
+                            "lesson_title": payload.get("lesson_title", ""),
+                            "chapter_title": payload.get("chapter_title", ""),
+                            "chapter_id": payload.get("chapter_id", ""),
+                            "book_id": payload.get("book_id", ""),
+                        }
+
+                    # Collect chunks with index for sorting
+                    chunk_index = payload.get("chunk_index", 0)
+                    chunks_with_index.append((chunk_index, {
+                        "text": payload.get("text", ""),
+                        "page": payload.get("page", 0),
+                        "type": payload.get("type", "content"),
+                        "section": payload.get("section", ""),
+                    }))
+
+                # Sort by chunk_index to maintain correct order
+                chunks_with_index.sort(key=lambda x: x[0])
+
+                # Extract sorted chunks
+                lesson_chunks = [chunk for _, chunk in chunks_with_index]
+
+                return {
+                    "success": True,
+                    "collection_name": collection_name,
+                    "lesson_info": lesson_info,
+                    "content_chunks": lesson_chunks,
+                    "total_chunks": len(lesson_chunks)
+                }
+
+            # Lesson không tìm thấy trong unified collection
             # Fallback: Tìm trong MongoDB nếu không có trong Qdrant
-            logger.info(f"Lesson {lesson_id} not found in Qdrant, searching in MongoDB...")
+            logger.info(f"Lesson {lesson_id} not found in unified collection, searching in MongoDB...")
             mongodb_result = await self._find_lesson_in_mongodb(lesson_id)
             if mongodb_result["success"]:
                 return mongodb_result
 
             return {
                 "success": False,
-                "error": f"Lesson {lesson_id} not found in any collection"
+                "error": f"Lesson {lesson_id} not found in unified collection or MongoDB"
             }
 
         except Exception as e:
@@ -301,17 +307,20 @@ class ExamContentService:
     async def _search_related_content(
         self, collection_name: str, search_terms: List[str]
     ) -> List[Dict[str, Any]]:
-        """Tìm kiếm nội dung liên quan dựa trên search terms"""
+        """Tìm kiếm nội dung liên quan dựa trên search terms trong unified collection"""
         try:
             related_content = []
-            
+
+            # Sử dụng unified collection thay vì collection_name được truyền vào
+            unified_collection_name = self.qdrant_service.UNIFIED_COLLECTION_NAME
+
             for term in search_terms:
                 # Tạo embedding cho search term
                 query_vector = self.qdrant_service.embedding_model.encode(term).tolist()
-                
-                # Tìm kiếm trong collection
+
+                # Tìm kiếm trong unified collection
                 search_result = self.qdrant_service.qdrant_client.search(
-                    collection_name=collection_name,
+                    collection_name=unified_collection_name,
                     query_vector=query_vector,
                     limit=5,  # Giới hạn kết quả cho mỗi term
                     with_payload=True,
@@ -466,34 +475,14 @@ class ExamContentService:
             }
 
 
-# Lazy loading global instance để tránh khởi tạo ngay khi import
-_exam_content_service_instance = None
-
+# Factory function để tạo ExamContentService instance
 def get_exam_content_service() -> ExamContentService:
     """
-    Lấy singleton instance của ExamContentService
-    Lazy initialization
+    Tạo ExamContentService instance mới
 
     Returns:
-        ExamContentService: Service instance
+        ExamContentService: Fresh instance
     """
-    global _exam_content_service_instance
-    if _exam_content_service_instance is None:
-        _exam_content_service_instance = ExamContentService()
-    return _exam_content_service_instance
+    return ExamContentService()
 
-# Backward compatibility - deprecated, sử dụng get_exam_content_service() thay thế
-# Lazy loading để tránh khởi tạo ngay khi import
-def _get_exam_content_service_lazy():
-    """Lazy loading cho backward compatibility"""
-    return get_exam_content_service()
 
-# Tạo proxy object để lazy loading
-class _ExamContentServiceProxy:
-    def __getattr__(self, name):
-        return getattr(_get_exam_content_service_lazy(), name)
-
-    def __call__(self, *args, **kwargs):
-        return _get_exam_content_service_lazy()(*args, **kwargs)
-
-exam_content_service = _ExamContentServiceProxy()

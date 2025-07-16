@@ -8,8 +8,8 @@ import uuid
 from typing import Dict, Any
 from datetime import datetime
 
-from app.services.simple_ocr_service import simple_ocr_service
-from app.services.llm_service import llm_service
+from app.services.simple_ocr_service import get_simple_ocr_service
+from app.services.llm_service import get_llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,8 @@ class IntegratedTextbookService:
     """Service xử lý PDF một lần: OCR + LLM Format + Metadata"""
 
     def __init__(self):
-        self.llm_service = llm_service
+        self.llm_service = get_llm_service()
+        self.ocr_service = get_simple_ocr_service()
 
     async def process_pdf_complete(
         self, pdf_content: bytes, filename: str
@@ -39,7 +40,7 @@ class IntegratedTextbookService:
             logger.info(f"Starting integrated processing for: {filename}")
 
             # Step 1: OCR extraction
-            raw_text, ocr_metadata = await simple_ocr_service.extract_text_from_pdf(
+            raw_text, ocr_metadata = await self.ocr_service.extract_text_from_pdf(
                 pdf_content, filename
             )
 
@@ -98,10 +99,17 @@ class IntegratedTextbookService:
             text_sample += "\n...[text truncated]"
 
         prompt = f"""
-Bạn là chuyên gia phân tích sách giáo khoa. Hãy phân tích văn bản sau và trả về JSON với 2 phần:
+Bạn là chuyên gia phân tích sách giáo khoa. Hãy phân tích và cấu trúc lại văn bản để tối ưu cho hệ thống chunking thông minh.
 
-1. METADATA: Thông tin về sách
-2. STRUCTURE: Cấu trúc nội dung đã format
+NHIỆM VỤ:
+1. METADATA: Trích xuất thông tin về sách
+2. STRUCTURE: Cấu trúc nội dung theo chuẩn chunking thông minh
+
+YÊU CẦU CẤU TRÚC NỘI DUNG:
+- ĐỊNH NGHĨA: Bắt đầu rõ ràng "Định nghĩa:" hoặc "X là..."
+- BÀI TẬP: Đánh số "Bài 1.", "Ví dụ 1:", "Hãy cho biết..."
+- BẢNG: Bắt đầu "Bảng X:" và giữ nguyên cấu trúc hoàn chỉnh
+- TIỂU MỤC: Sử dụng "I.", "II.", "1.", "2." cho phân cấp
 
 Văn bản từ file "{filename}":
 {text_sample}

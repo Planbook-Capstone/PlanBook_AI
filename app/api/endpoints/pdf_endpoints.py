@@ -7,8 +7,8 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Query
 from typing import Dict, Any, Optional
 
 from app.services.llm_service import get_llm_service
-from app.services.semantic_analysis_service import get_semantic_analysis_service
-from app.services.background_task_processor import background_task_processor
+from app.services.background_task_processor import get_background_task_processor
+from app.services.qdrant_service import get_qdrant_service
 
 logger = logging.getLogger(__name__)
 
@@ -20,30 +20,72 @@ router = APIRouter()
 @router.post("/import", response_model=Dict[str, Any])
 async def quick_textbook_analysis(
     file: UploadFile = File(...),
+    book_id: Optional[str] = Form(None, description="ID của textbook (bắt buộc cho PDF, tùy chọn cho DOCX guide)"),
     create_embeddings: bool = Form(True),
     lesson_id: Optional[str] = Form(None),
+    isImportGuide: bool = Form(False),
 ) -> Dict[str, Any]:
     """
-    Phân tích nhanh cấu trúc sách giáo khoa với xử lý bất đồng bộ
+    Phân tích nhanh cấu trúc sách giáo khoa hoặc import hướng dẫn với xử lý bất đồng bộ
 
-    Upload PDF và nhận task_id ngay lập tức. Hệ thống sẽ:
+    Upload PDF/DOCX và nhận task_id ngay lập tức. Hệ thống sẽ:
+
+    Với PDF (sách giáo khoa):
     1. Phân tích cấu trúc sách (chapters, lessons)
     2. Tự động trích xuất metadata
     3. Tạo embeddings và lưu vào Qdrant (nếu được yêu cầu)
     4. Trả về kết quả với định dạng giống /process-textbook
 
+    Với DOCX (hướng dẫn):
+    1. Trích xuất nội dung text từ DOCX
+    2. Tạo embeddings cho nội dung hướng dẫn
+    3. Lưu vào Qdrant collection riêng cho guides
+    4. Hỗ trợ tìm kiếm và RAG cho hướng dẫn
+
     Args:
-        file: PDF file của sách giáo khoa
+        file: PDF file của sách giáo khoa hoặc DOCX file của hướng dẫn
+        book_id: ID của textbook (bắt buộc cho PDF, tùy chọn cho DOCX guide)
         create_embeddings: Có tạo embeddings cho RAG search không
         lesson_id: ID bài học tùy chọn để liên kết với lesson cụ thể
+        isImportGuide: True nếu import file DOCX làm hướng dẫn, False cho PDF sách giáo khoa
 
     Returns:
         Dict chứa task_id để theo dõi tiến độ
+
+    Examples:
+        # Import PDF textbook với book_id bắt buộc
+        curl -X POST "http://localhost:8000/api/v1/pdf/import" \
+             -F "file=@textbook.pdf" \
+             -F "book_id=hoa12" \
+             -F "create_embeddings=true" \
+             -F "isImportGuide=false"
+
+        # Import DOCX guide với book_id tùy chọn
+        curl -X POST "http://localhost:8000/api/v1/pdf/import" \
+             -F "file=@guide.docx" \
+             -F "book_id=guide_hoa12" \
+             -F "create_embeddings=true" \
+             -F "isImportGuide=true"
     """
     try:
-        # Validate file type
-        if not file.filename or not file.filename.lower().endswith(".pdf"):
-            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+        # Validate file type and book_id based on import mode
+        if isImportGuide:
+            # Validate DOCX file for guide import
+            if not file.filename or not file.filename.lower().endswith(".docx"):
+                raise HTTPException(status_code=400, detail="Guide import only supports DOCX files")
+            # book_id is optional for guides, will use filename if not provided
+            if not book_id:
+                book_id = file.filename.replace(".docx", "").replace(" ", "_").lower()
+        else:
+            # Validate PDF file for textbook import
+            if not file.filename or not file.filename.lower().endswith(".pdf"):
+                raise HTTPException(status_code=400, detail="Textbook import only supports PDF files")
+            # book_id is required for textbooks
+            if not book_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="book_id is required for textbook import. Please provide a unique book_id (e.g., 'hoa12', 'toan10')"
+                )
 
         # Read file content
         file_content = await file.read()
@@ -52,31 +94,61 @@ async def quick_textbook_analysis(
             raise HTTPException(status_code=400, detail="Empty file uploaded")
 
         logger.info(
-            f"Starting quick analysis task for: {file.filename} ({len(file_content)} bytes)"
-        )  # Tạo task bất đồng bộ
-        task_id = await background_task_processor.create_quick_analysis_task(
-            pdf_content=file_content,
-            filename=file.filename,
-            create_embeddings=create_embeddings,
-            lesson_id=lesson_id,
+            f"Starting {'guide import' if isImportGuide else 'textbook analysis'} task for: {file.filename} "
+            f"with book_id: {book_id} ({len(file_content)} bytes)"
         )
 
-        return {
-            "success": True,
-            "task_id": task_id,
-            "filename": file.filename,
-            "status": "processing",
-            "message": "Quick textbook analysis task created successfully. Use /api/v1/tasks/{task_id}/status to check progress.",
-            "endpoints": {
-                "check_status": f"/api/v1/tasks/{task_id}/status",
-                "get_result": f"/api/v1/tasks/{task_id}/result",
-            },
-        }
+        if isImportGuide:
+            # Create guide import task
+            task_id = await get_background_task_processor().create_guide_import_task(
+                docx_content=file_content,
+                filename=file.filename,
+                book_id=book_id,
+                create_embeddings=create_embeddings,
+            )
+
+            return {
+                "success": True,
+                "task_id": task_id,
+                "book_id": book_id,
+                "filename": file.filename,
+                "status": "processing",
+                "import_type": "guide",
+                "message": "Guide import task created successfully. Use /api/v1/tasks/{task_id}/status to check progress.",
+                "endpoints": {
+                    "check_status": f"/api/v1/tasks/{task_id}/status",
+                    "get_result": f"/api/v1/tasks/{task_id}/result",
+                },
+            }
+        else:
+            # Create textbook analysis task
+            task_id = await get_background_task_processor().create_quick_analysis_task(
+                pdf_content=file_content,
+                filename=file.filename,
+                book_id=book_id,
+                create_embeddings=create_embeddings,
+                lesson_id=lesson_id,
+            )
+
+            return {
+                "success": True,
+                "task_id": task_id,
+                "book_id": book_id,
+                "filename": file.filename,
+                "status": "processing",
+                "import_type": "textbook",
+                "lesson_id": lesson_id,
+                "message": "Quick textbook analysis task created successfully. Use /api/v1/tasks/{task_id}/status to check progress.",
+                "endpoints": {
+                    "check_status": f"/api/v1/tasks/{task_id}/status",
+                    "get_result": f"/api/v1/tasks/{task_id}/result",
+                },
+            }
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error creating quick analysis task: {e}")
+        logger.error(f"Error creating {'guide import' if isImportGuide else 'textbook analysis'} task: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
@@ -98,245 +170,20 @@ async def get_all_textbook() -> Dict[str, Any]:
         GET /api/v1/pdf/getAllTextBook
     """
     try:
-        from app.services.qdrant_service import get_qdrant_service
         qdrant_service = get_qdrant_service()
+
+        # Đảm bảo service được khởi tạo
         qdrant_service._ensure_service_initialized()
-        from qdrant_client import models as qdrant_models
 
-        # Lấy danh sách từ Qdrant collections
-        textbooks = []
+        result = await qdrant_service.get_all_textbooks()
 
-        if qdrant_service.qdrant_client:
-            collections = qdrant_service.qdrant_client.get_collections().collections
+        if not result.get("success"):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to get textbooks: {result.get('error', 'Unknown error')}"
+            )
 
-            for collection in collections:
-                if collection.name.startswith("textbook_"):
-                    book_id = collection.name.replace("textbook_", "")
-
-                    # Tìm metadata point để lấy original_book_structure
-                    try:
-                        search_result = qdrant_service.qdrant_client.scroll(
-                            collection_name=collection.name,
-                            scroll_filter=qdrant_models.Filter(
-                                must=[
-                                    qdrant_models.FieldCondition(
-                                        key="type",
-                                        match=qdrant_models.MatchValue(
-                                            value="metadata"
-                                        ),
-                                    )
-                                ]
-                            ),
-                            limit=1,
-                            with_payload=True,
-                        )
-
-                        if search_result[0]:  # Có metadata point
-                            metadata_point = search_result[0][0]
-                            payload = metadata_point.payload or {}
-
-                            # Lấy original_book_structure nếu có
-                            original_structure = payload.get("original_book_structure")
-
-                            if original_structure:
-                                # Trả về format đầy đủ như /process-textbook
-                                textbook_data = {
-                                    "success": True,
-                                    "book_id": book_id,
-                                    "filename": f"{book_id}.pdf",
-                                    "book_structure": original_structure,
-                                    "statistics": {
-                                        "total_pages": payload.get(
-                                            "book_total_pages", 0
-                                        ),
-                                        "total_chapters": len(
-                                            original_structure.get("chapters", [])
-                                        ),
-                                        "total_lessons": sum(
-                                            len(ch.get("lessons", []))
-                                            for ch in original_structure.get(
-                                                "chapters", []
-                                            )
-                                        ),
-                                    },
-                                    "processing_info": {
-                                        "ocr_applied": True,
-                                        "llm_analysis": True,
-                                        "processing_method": "retrieved_from_qdrant",
-                                        "processed_at": payload.get("processed_at"),
-                                    },
-                                    "embeddings_created": True,
-                                    "embeddings_info": {
-                                        "collection_name": collection.name,
-                                        "vector_count": getattr(
-                                            collection, "vectors_count", 0
-                                        ),
-                                        "vector_dimension": 384,
-                                    },
-                                    "message": "Textbook retrieved successfully from Qdrant vector database",
-                                }
-                                textbooks.append(textbook_data)
-                            else:
-                                # Fallback: Tạo structure từ chunks nếu không có original_structure
-                                logger.info(
-                                    f"Creating structure from chunks for {book_id}"
-                                )
-
-                                # Lấy tất cả chunks để tái tạo structure
-                                all_chunks = qdrant_service.qdrant_client.scroll(
-                                    collection_name=collection.name,
-                                    limit=1000,
-                                    with_payload=True,
-                                )
-
-                                if all_chunks[0]:
-                                    chapters = {}
-                                    book_info = {
-                                        "title": payload.get("book_title", "Unknown"),
-                                        "subject": payload.get(
-                                            "book_subject", "Unknown"
-                                        ),
-                                        "grade": payload.get("book_grade", "Unknown"),
-                                        "total_pages": payload.get(
-                                            "book_total_pages", 0
-                                        ),
-                                    }
-
-                                    # Tái tạo structure từ chunks
-                                    for point in all_chunks[0]:
-                                        chunk_payload = point.payload or {}
-                                        if chunk_payload.get("type") in [
-                                            "title",
-                                            "content",
-                                        ]:
-                                            chapter_id = chunk_payload.get("chapter_id")
-                                            lesson_id = chunk_payload.get("lesson_id")
-
-                                            if (
-                                                chapter_id
-                                                and chapter_id not in chapters
-                                            ):
-                                                chapters[chapter_id] = {
-                                                    "chapter_id": chapter_id,
-                                                    "chapter_title": chunk_payload.get(
-                                                        "chapter_title", "Unknown"
-                                                    ),
-                                                    "start_page": chunk_payload.get(
-                                                        "chapter_start_page"
-                                                    ),
-                                                    "end_page": chunk_payload.get(
-                                                        "chapter_end_page"
-                                                    ),
-                                                    "lessons": [],
-                                                }
-
-                                            if lesson_id:
-                                                # Kiểm tra lesson đã tồn tại chưa
-                                                existing_lesson = next(
-                                                    (
-                                                        l
-                                                        for l in chapters[chapter_id][
-                                                            "lessons"
-                                                        ]
-                                                        if l["lesson_id"] == lesson_id
-                                                    ),
-                                                    None,
-                                                )
-
-                                                if not existing_lesson:
-                                                    chapters[chapter_id][
-                                                        "lessons"
-                                                    ].append(
-                                                        {
-                                                            "lesson_id": lesson_id,
-                                                            "lesson_title": chunk_payload.get(
-                                                                "lesson_title",
-                                                                "Unknown",
-                                                            ),
-                                                            "start_page": chunk_payload.get(
-                                                                "lesson_start_page"
-                                                            ),
-                                                            "end_page": chunk_payload.get(
-                                                                "lesson_end_page"
-                                                            ),
-                                                            "content": {
-                                                                "text": "Content available via lesson endpoint",
-                                                                "images": chunk_payload.get(
-                                                                    "lesson_images", []
-                                                                ),
-                                                                "pages": chunk_payload.get(
-                                                                    "lesson_pages", []
-                                                                ),
-                                                                "total_pages": chunk_payload.get(
-                                                                    "lesson_total_pages",
-                                                                    0,
-                                                                ),
-                                                                "has_images": chunk_payload.get(
-                                                                    "lesson_has_images",
-                                                                    False,
-                                                                ),
-                                                            },
-                                                        }
-                                                    )
-
-                                    # Tạo book_structure
-                                    book_structure = {
-                                        "book_info": book_info,
-                                        "chapters": list(chapters.values()),
-                                    }
-
-                                    textbook_data = {
-                                        "success": True,
-                                        "book_id": book_id,
-                                        "filename": f"{book_id}.pdf",
-                                        "book_structure": book_structure,
-                                        "statistics": {
-                                            "total_pages": book_info.get(
-                                                "total_pages", 0
-                                            ),
-                                            "total_chapters": len(chapters),
-                                            "total_lessons": sum(
-                                                len(ch["lessons"])
-                                                for ch in chapters.values()
-                                            ),
-                                        },
-                                        "processing_info": {
-                                            "ocr_applied": True,
-                                            "llm_analysis": True,
-                                            "processing_method": "reconstructed_from_chunks",
-                                            "processed_at": payload.get("processed_at"),
-                                        },
-                                        "embeddings_created": True,
-                                        "embeddings_info": {
-                                            "collection_name": collection.name,
-                                            "vector_count": getattr(
-                                                collection, "vectors_count", 0
-                                            ),
-                                            "vector_dimension": 384,
-                                        },
-                                        "message": "Textbook structure reconstructed from vector chunks",
-                                    }
-                                    textbooks.append(textbook_data)
-
-                    except Exception as e:
-                        logger.warning(f"Error processing textbook {book_id}: {e}")
-                        # Thêm basic info nếu có lỗi
-                        textbooks.append(
-                            {
-                                "success": False,
-                                "book_id": book_id,
-                                "error": str(e),
-                                "collection_name": collection.name,
-                                "status": "error",
-                            }
-                        )
-
-        return {
-            "success": True,
-            "total_textbooks": len(textbooks),
-            "textbooks": textbooks,
-            "message": f"Retrieved {len(textbooks)} textbooks successfully",
-        }
+        return result
 
     except Exception as e:
         logger.error(f"Error in getAllTextBook: {e}")
@@ -347,116 +194,60 @@ async def get_all_textbook() -> Dict[str, Any]:
 
 @router.get("/search", response_model=Dict[str, Any])
 async def search_all_textbooks(
-    query: str, limit: int = Query(10, ge=1, le=50)
+    query: str,
+    limit: int = Query(10, ge=1, le=50),
+    book_id: Optional[str] = Query(None, description="Filter by specific book ID"),
+    lesson_id: Optional[str] = Query(None, description="Filter by specific lesson ID")
 ) -> Dict[str, Any]:
     """
-    Tìm kiếm trong TẤT CẢ sách giáo khoa (Global Search)
+    Tìm kiếm trong TẤT CẢ sách giáo khoa (Global Search) với metadata filtering
 
-    Endpoint này cho phép người dùng tìm kiếm mà không cần biết book_id cụ thể.
-    Hệ thống sẽ tìm kiếm trong tất cả sách đã được xử lý.
+    Endpoint này cho phép người dùng tìm kiếm với các filter metadata:
+    - Tìm kiếm toàn bộ (không có filter)
+    - Tìm kiếm trong sách cụ thể (book_id)
+    - Tìm kiếm trong bài học cụ thể (lesson_id)
 
     Args:
         query: Câu truy vấn tìm kiếm (từ khóa, câu hỏi, chủ đề)
         limit: Số lượng kết quả tối đa (1-50, mặc định 10)
+        book_id: ID sách cụ thể để filter (tùy chọn)
+        lesson_id: ID bài học cụ thể để filter (tùy chọn)
 
     Returns:
-        Dict chứa kết quả tìm kiếm từ tất cả sách
+        Dict chứa kết quả tìm kiếm với metadata đầy đủ bao gồm book_id, lesson_id
 
     Examples:
         - /api/v1/pdf/search?query=hóa học là gì
-        - /api/v1/pdf/search?query=định nghĩa nguyên tử&limit=5
-        - /api/v1/pdf/search?query=bài tập về liên kết hóa học
+        - /api/v1/pdf/search?query=nguyên tử&book_id=hoa12
+        - /api/v1/pdf/search?query=định nghĩa&lesson_id=hoa12_bai1&limit=5
     """
     try:
-        from app.services.qdrant_service import get_qdrant_service
         qdrant_service = get_qdrant_service()
-        qdrant_service._ensure_service_initialized()
 
-        logger.info(
-            f"Global search query: '{query}' with limit: {limit}"
-        )  # Implement global search logic here since the method was removed
-        # Get all collections starting with "textbook_"
-        try:
-            if not qdrant_service.qdrant_client:
-                raise HTTPException(
-                    status_code=500, detail="Qdrant service not available"
-                )
+        logger.info(f"Global search query: '{query}' with limit: {limit}, book_id: {book_id}, lesson_id: {lesson_id}")
 
-            collections = qdrant_service.qdrant_client.get_collections().collections
-            textbook_collections = [
-                c.name for c in collections if c.name.startswith("textbook_")
-            ]
+        # Tạo semantic filters từ parameters
+        semantic_filters = {}
+        if book_id:
+            semantic_filters["book_id"] = book_id
+        if lesson_id:
+            semantic_filters["lesson_id"] = lesson_id
 
-            if not textbook_collections:
-                return {
-                    "success": True,
-                    "query": query,
-                    "results": [],
-                    "total_collections_searched": 0,
-                    "message": "No textbooks have been processed yet. Please upload and process textbooks first.",
-                }
+        # Sử dụng global_search từ unified collection với filters
+        search_result = await qdrant_service.global_search(
+            query=query,
+            limit=limit,
+            book_id=semantic_filters.get("book_id") if semantic_filters else None,
+            lesson_id=semantic_filters.get("lesson_id") if semantic_filters else None
+        )
 
-            # Search each textbook collection
-            all_results = []
-            for collection_name in textbook_collections:
-                book_id = collection_name.replace("textbook_", "")
-                book_search_result = await qdrant_service.search_textbook(
-                    book_id=book_id, query=query, limit=limit
-                )
-
-                if book_search_result.get("success") and book_search_result.get(
-                    "results"
-                ):
-                    for result in book_search_result["results"]:
-                        result["book_id"] = book_id
-                        result["collection_name"] = collection_name
-                        all_results.append(result)
-
-            # Sort by score and limit results
-            all_results.sort(key=lambda x: x.get("score", 0), reverse=True)
-            top_results = all_results[:limit]
-
-            search_result = {
-                "success": True,
-                "query": query,
-                "results": top_results,
-                "total_collections_searched": len(textbook_collections),
-                "message": f"Found {len(top_results)} results from {len(textbook_collections)} textbooks",
-            }
-
-        except Exception as e:
-            logger.error(f"Error in global search implementation: {e}")
+        if not search_result.get("success"):
             raise HTTPException(
                 status_code=500,
-                detail=f"Search failed: {str(e)}",
+                detail=f"Search failed: {search_result.get('error', 'Unknown error')}",
             )
 
-        if not search_result.get("success", False):
-            error_msg = search_result.get("error", "Unknown error")
-            if "No textbooks found" in error_msg:
-                return {
-                    "success": True,
-                    "query": query,
-                    "results": [],
-                    "total_collections_searched": 0,
-                    "message": "No textbooks have been processed yet. Please upload and process textbooks first.",
-                }
-            else:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Search failed: {error_msg}",
-                )
-
-        return {
-            "success": True,
-            "query": query,
-            "results": search_result.get("results", []),
-            "total_collections_searched": search_result.get(
-                "total_collections_searched", 0
-            ),
-            "collections_searched": search_result.get("collections_searched", []),
-            "message": search_result.get("message", "Search completed"),
-        }
+        return search_result
 
     except HTTPException:
         raise
@@ -465,6 +256,172 @@ async def search_all_textbooks(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
+
+
+@router.get("/textbook/{book_id}/info", response_model=Dict[str, Any])
+async def get_textbook_info(book_id: str) -> Dict[str, Any]:
+    """
+    Lấy thông tin chi tiết về textbook theo book_id với metadata đầy đủ
+
+    Args:
+        book_id: ID của textbook cần lấy thông tin
+
+    Returns:
+        Dict chứa thông tin chi tiết về textbook bao gồm:
+        - Metadata cơ bản (title, chapters, lessons)
+        - Danh sách lessons với lesson_id
+        - Thống kê về content
+
+    Examples:
+        GET /api/v1/pdf/textbook/hoa12/info
+    """
+    try:
+        qdrant_service = get_qdrant_service()
+        result = await qdrant_service.get_textbook_info_by_book_id(book_id)
+
+        if not result.get("success"):
+            if "not found" in result.get("error", "").lower():
+                raise HTTPException(
+                    status_code=404,
+                    detail=result.get("error")
+                )
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=result.get("error", "Failed to get textbook info")
+                )
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting textbook info: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/textbook/{book_id}/lessons", response_model=Dict[str, Any])
+async def get_textbook_lessons(book_id: str) -> Dict[str, Any]:
+    """
+    Lấy danh sách tất cả lessons trong textbook theo book_id
+
+    Args:
+        book_id: ID của textbook
+
+    Returns:
+        Dict chứa danh sách lessons với lesson_id và metadata
+
+    Examples:
+        GET /api/v1/pdf/textbook/hoa12/lessons
+    """
+    try:
+        qdrant_service = get_qdrant_service()
+        result = await qdrant_service.get_textbook_lessons_by_book_id(book_id)
+
+        if not result.get("success"):
+            if "not found" in result.get("error", "").lower():
+                raise HTTPException(
+                    status_code=404,
+                    detail=result.get("error")
+                )
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=result.get("error", "Failed to get textbook lessons")
+                )
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting textbook lessons: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/lesson/{lesson_id}/check", response_model=Dict[str, Any])
+async def check_lesson_id_exists(lesson_id: str) -> Dict[str, Any]:
+    """
+    Kiểm tra lesson_id đã tồn tại chưa
+
+    Args:
+        lesson_id: ID của lesson cần kiểm tra
+
+    Returns:
+        Dict chứa thông tin về lesson_id existence
+
+    Examples:
+        GET /api/v1/pdf/lesson/hoa12_bai1/check
+
+        Response nếu tồn tại:
+        {
+            "success": true,
+            "exists": true,
+            "lesson_id": "hoa12_bai1",
+            "existing_book_id": "hoa12",
+            "message": "Lesson ID 'hoa12_bai1' already exists in book 'hoa12'"
+        }
+
+        Response nếu chưa tồn tại:
+        {
+            "success": true,
+            "exists": false,
+            "lesson_id": "hoa12_bai1",
+            "message": "Lesson ID 'hoa12_bai1' is available"
+        }
+    """
+    try:
+        qdrant_service = get_qdrant_service()
+        result = await qdrant_service.check_lesson_id_exists(lesson_id)
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error checking lesson_id {lesson_id}: {e}")
+        return {
+            "success": False,
+            "exists": False,
+            "error": f"Failed to check lesson_id: {str(e)}",
+            "lesson_id": lesson_id
+        }
+
+@router.get("/lesson/{lesson_id}/info", response_model=Dict[str, Any])
+async def get_lesson_info(lesson_id: str) -> Dict[str, Any]:
+    """
+    Lấy thông tin chi tiết về lesson theo lesson_id
+
+    Args:
+        lesson_id: ID của lesson
+
+    Returns:
+        Dict chứa thông tin chi tiết về lesson và metadata
+
+    Examples:
+        GET /api/v1/pdf/lesson/hoa12_bai1/info
+    """
+    try:
+        qdrant_service = get_qdrant_service()
+        result = await qdrant_service.get_lesson_info_by_lesson_id(lesson_id)
+
+        if not result.get("success"):
+            if "not found" in result.get("error", "").lower():
+                raise HTTPException(
+                    status_code=404,
+                    detail=result.get("error")
+                )
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=result.get("error", "Failed to get lesson info")
+                )
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting lesson info: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @router.get("/health")
@@ -511,162 +468,31 @@ async def health_check():
             "vector_dimension": vector_dimension,
             "qdrant_status": "connected" if qdrant_available else "disconnected",
             "available_endpoints": [
-                "/import",  # Quick textbook analysis
+                "/import",  # Quick textbook analysis & Guide import
                 "/textbooks",  # Get all textbooks
-                "/textbook/{lesson_id}",  # Get textbook by lesson ID
-                "/search",  # Global content search
-                "/search-semantic",  # Semantic search with filters
-                "/rag-query",  # RAG endpoint with LLM
-                "/test-semantic-analysis",  # Test semantic analysis
+                "/textbook/{book_id}/info",  # Get textbook info with metadata
+                "/textbook/{book_id}/lessons",  # Get lessons list by book_id
+                "/lesson/{lesson_id}/info",  # Get lesson info with metadata
+                "/lesson/{lesson_id}/check",  # Check lesson_id existence
+                "/search",  # Global content search with book_id/lesson_id filters
                 "/textbook",  # DELETE: Flexible textbook deletion
                 "/health",
             ],
             "usage_flow": {
-                "1": "Upload PDF: POST /import",
-                "2": "List textbooks: GET /textbooks",
-                "3": "Get textbook by lesson: GET /textbook/{lesson_id}",
-                "4": "Global search: GET /search?query=your_query",
-                "5": "Semantic search: GET /search-semantic?query=your_query&semantic_tags=definition,example",
-                "6": "RAG Query (Recommended): POST /rag-query?query=your_question&lesson_id=lesson123",  # Best for Q&A
-                "7": "Delete textbook: DELETE /textbook?textbook_id=your_id OR DELETE /textbook?lesson_id=your_lesson_id"
+                "1a": "Upload PDF (Textbook): POST /import (with isImportGuide=false)",
+                "1b": "Upload DOCX (Guide): POST /import (with isImportGuide=true)",
+                "2": "Check lesson_id: GET /lesson/{lesson_id}/check",
+                "3": "List textbooks: GET /textbooks",
+                "4": "Get textbook info: GET /textbook/{book_id}/info",
+                "5": "Get lessons list: GET /textbook/{book_id}/lessons",
+                "6": "Get lesson info: GET /lesson/{lesson_id}/info",
+                "7": "Global search: GET /search?query=your_query&book_id=book123&lesson_id=lesson456",
+                "8": "Delete textbook: DELETE /textbook?textbook_id=your_id OR DELETE /textbook?lesson_id=your_lesson_id"
             },
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return {"status": "unhealthy", "error": str(e)}
-
-
-@router.post("/rag-query", response_model=Dict[str, Any])
-async def rag_query(
-    query: str = Query(..., description="Câu hỏi của người dùng"),
-    book_id: Optional[str] = Query(None, description="ID sách cụ thể (tùy chọn)"),
-    lesson_id: Optional[str] = Query(None, description="ID bài học cụ thể (tùy chọn)"),
-    limit: int = Query(5, description="Số lượng kết quả tìm kiếm tối đa"),
-    semantic_tags: Optional[str] = Query(None, description="Lọc theo semantic tags"),
-    temperature: float = Query(0.3, description="Temperature cho LLM response"),
-    max_tokens: int = Query(2000, description="Số token tối đa cho response")
-) -> Dict[str, Any]:
-    """
-    RAG endpoint kết hợp semantic search và LLM để trả lời câu hỏi người dùng
-
-    Workflow:
-    1. Nhận câu hỏi từ người dùng
-    2. Sử dụng semantic search để tìm nội dung liên quan (có thể filter theo book_id hoặc lesson_id)
-    3. Gửi context + câu hỏi cho LLM để tạo câu trả lời
-    4. Làm sạch text và trả về câu trả lời kèm sources
-
-    Examples:
-        POST /api/v1/pdf/rag-query?query=Nguyên tử là gì?
-        POST /api/v1/pdf/rag-query?query=Nguyên tử là gì?&lesson_id=lesson123
-        POST /api/v1/pdf/rag-query?query=Nguyên tử là gì?&book_id=book456&semantic_tags=definition
-    """
-    try:
-        # Sử dụng RAG service để xử lý toàn bộ workflow
-        from app.services.rag_service import rag_service
-
-        result = await rag_service.process_rag_query(
-            query=query,
-            book_id=book_id,
-            lesson_id=lesson_id,
-            limit=limit,
-            semantic_tags=semantic_tags,
-            temperature=temperature,
-            max_tokens=max_tokens
-        )
-
-        if not result.get("success"):
-            raise HTTPException(status_code=500, detail=result.get("error"))
-
-        return result
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"RAG query failed: {e}")
-        raise HTTPException(status_code=500, detail=f"RAG query failed: {str(e)}")
-
-
-@router.get("/search-semantic", response_model=Dict[str, Any])
-async def search_with_semantic_filters(
-    query: str = Query(..., description="Câu truy vấn tìm kiếm"),
-    book_id: Optional[str] = Query(None, description="ID sách (nếu không có sẽ tìm trong tất cả sách)"),
-    semantic_tags: Optional[str] = Query(None, description="Các semantic tags cần filter, phân cách bằng dấu phẩy (VD: definition,example)"),
-    difficulty: Optional[str] = Query(None, description="Mức độ khó: basic, intermediate, advanced"),
-    has_examples: Optional[bool] = Query(None, description="Lọc nội dung có ví dụ"),
-    has_formulas: Optional[bool] = Query(None, description="Lọc nội dung có công thức"),
-    min_confidence: Optional[float] = Query(0.0, ge=0.0, le=1.0, description="Confidence tối thiểu cho semantic tags"),
-    limit: int = Query(10, ge=1, le=50, description="Số lượng kết quả tối đa")
-) -> Dict[str, Any]:
-    """
-    Tìm kiếm với semantic filters nâng cao
-
-    Args:
-        query: Câu truy vấn tìm kiếm
-        book_id: ID sách cụ thể (optional)
-        semantic_tags: Danh sách semantic tags để filter
-        difficulty: Mức độ khó
-        has_examples: Có ví dụ hay không
-        has_formulas: Có công thức hay không
-        min_confidence: Confidence tối thiểu
-        limit: Số lượng kết quả
-
-    Returns:
-        Dict chứa kết quả tìm kiếm với semantic metadata
-
-    Examples:
-        - /api/v1/pdf/search-semantic?query=nguyên tử&semantic_tags=definition,theory&difficulty=basic
-        - /api/v1/pdf/search-semantic?query=bài tập&has_examples=true&min_confidence=0.7
-    """
-    try:
-        # Sử dụng RAG service để xử lý semantic search
-        from app.services.rag_service import rag_service
-
-        result = await rag_service.search_with_semantic_filters(
-            query=query,
-            book_id=book_id,
-            semantic_tags=semantic_tags,
-            difficulty=difficulty,
-            has_examples=has_examples,
-            has_formulas=has_formulas,
-            min_confidence=min_confidence,
-            limit=limit
-        )
-
-        if not result.get("success"):
-            raise HTTPException(status_code=500, detail=result.get("error"))
-
-        return result
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in semantic search: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Semantic search failed: {str(e)}"
-        )
-
-
-@router.get("/textbook/{lesson_id}", response_model=Dict[str, Any])
-async def get_textbook_by_lesson_id(lesson_id: str) -> Dict[str, Any]:
-    """
-    Lấy nội dung lesson theo lesson_id
-
-    Args:
-        lesson_id: ID của lesson cần lấy
-
-    Returns:
-        Dict chứa lesson_content và book_id
-    """
-    from app.services.textbook_retrieval_service import textbook_retrieval_service
-
-    result = await textbook_retrieval_service.get_lesson_content(lesson_id)
-
-    return {
-        "book_id": result["book_id"],
-        "lesson_content": result["lesson_content"]
-    }
-
 
 
 @router.delete("/textbook", response_model=Dict[str, Any])
@@ -693,7 +519,8 @@ async def delete_textbook_flexible(
         DELETE /api/v1/pdf/textbook?lesson_id=lesson_01_01
     """
     try:
-        from app.services.qdrant_service import qdrant_service
+        from app.services.qdrant_service import get_qdrant_service
+        qdrant_service = get_qdrant_service()
 
         # Validation: phải có ít nhất một trong hai parameters
         if not textbook_id and not lesson_id:
@@ -715,11 +542,11 @@ async def delete_textbook_flexible(
                 detail="Qdrant service is not available"
             )
 
-        # Xóa bằng textbook_id
+        # Xóa bằng textbook_id (book_id)
         if textbook_id:
-            logger.info(f"Deleting textbook by ID: {textbook_id}")
-            result = await qdrant_service.delete_textbook_by_id(textbook_id)
-            operation = "delete_by_textbook_id"
+            logger.info(f"Deleting textbook by book_id: {textbook_id}")
+            result = await qdrant_service.delete_textbook_by_book_id(textbook_id)
+            operation = "delete_by_book_id"
             identifier = textbook_id
 
         # Xóa bằng lesson_id

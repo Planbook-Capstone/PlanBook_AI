@@ -13,7 +13,7 @@ from app.models.exam_import_models import (
     ExamImportError,
     ImportedExamData
 )
-from app.services.exam_import_service import exam_import_service
+from app.services.exam_import_service import get_exam_import_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -100,7 +100,8 @@ async def import_exam_from_docx(
         # 3. Import và xử lý file
         logger.info("Processing DOCX file...")
         try:
-            result = await exam_import_service.import_exam_from_docx_content(
+            import_service = get_exam_import_service()
+            result = await import_service.import_exam_from_docx_content(
                 file_content=file_content,
                 filename=file.filename
             )
@@ -245,7 +246,8 @@ Câu 1: 1
 """
         
         # Gọi service để phân tích
-        result = await exam_import_service._analyze_exam_with_llm(
+        import_service = get_exam_import_service()
+        result = await import_service._analyze_exam_with_llm(
             exam_text=sample_exam_text,
             filename="test_exam.docx"
         )

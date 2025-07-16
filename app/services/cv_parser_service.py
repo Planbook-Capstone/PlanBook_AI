@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
-from app.services.llm_service import llm_service
+from app.services.llm_service import get_llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ class CVParserService:
     """Service để parse CV text thành structured data"""
 
     def __init__(self):
-        pass
+        self.llm_service = get_llm_service()
 
     async def parse_cv_to_structured_data(self, cv_text: str) -> Dict[str, Any]:
         """
@@ -82,7 +82,7 @@ class CVParserService:
             Dict chứa structured CV data
         """
         try:
-            if not llm_service.is_available():
+            if not self.llm_service.is_available():
                 logger.warning("LLM service not available, using basic parsing")
                 return await self._basic_parse(cv_text)
 
@@ -170,8 +170,10 @@ JSON Output:
 """
 
         try:
-            response = llm_service.model.generate_content(prompt)
-            json_text = response.text.strip()
+            response = await self.llm_service._generate_content(prompt)
+            if not response.get("success"):
+                raise Exception(f"LLM generation failed: {response.get('error')}")
+            json_text = response.get("text", "").strip()
 
             # Clean JSON text - cải thiện việc xử lý
             if json_text.startswith("```json"):

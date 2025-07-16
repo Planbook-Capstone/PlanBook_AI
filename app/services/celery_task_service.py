@@ -8,7 +8,7 @@ import time
 from typing import Dict, Any, Optional, List
 from celery.exceptions import WorkerLostError, Retry
 from app.core.celery_app import celery_app
-from app.services.mongodb_task_service import mongodb_task_service, TaskType
+from app.services.mongodb_task_service import get_mongodb_task_service, TaskType
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class CeleryTaskService:
         try:
             # Tạo task trong MongoDB
             if not task_id:
-                task_id = await mongodb_task_service.create_task(
+                task_id = await get_mongodb_task_service().create_task(
                     task_type=TaskType(task_type), task_data=task_data
                 )
 
@@ -64,7 +64,7 @@ class CeleryTaskService:
         except Exception as e:
             logger.error(f"Error creating and dispatching task: {e}")
             if task_id:
-                await mongodb_task_service.mark_task_failed(task_id, str(e))
+                await get_mongodb_task_service().mark_task_failed(task_id, str(e))
             raise
 
     def _get_celery_task_name(self, task_type: str) -> Optional[str]:
@@ -79,13 +79,12 @@ class CeleryTaskService:
         """
         task_mapping = {
             "quick_analysis": "app.tasks.pdf_tasks.process_pdf_quick_analysis",
-            "process_textbook": "app.tasks.pdf_tasks.process_pdf_textbook",
-            "process_textbook_auto": "app.tasks.pdf_tasks.process_pdf_textbook_auto",
             "process_cv": "app.tasks.cv_tasks.process_cv_task",
             "create_embeddings": "app.tasks.embeddings_tasks.create_embeddings_task",
             "update_embeddings": "app.tasks.embeddings_tasks.update_embeddings_task",
             "lesson_plan_content_generation": "app.tasks.lesson_plan_tasks.process_lesson_plan_content_generation",
             "smart_exam_generation": "app.tasks.smart_exam_tasks.process_smart_exam_generation",
+            "guide_import": "app.tasks.guide_tasks.process_guide_import",
         }
 
         return task_mapping.get(task_type)
@@ -109,6 +108,7 @@ class CeleryTaskService:
             "update_embeddings": "embeddings_queue",
             "lesson_plan_content_generation": "default",
             "smart_exam_generation": "default",
+            "guide_import": "default",
         }
 
         return queue_mapping.get(task_type, "default")
@@ -123,7 +123,7 @@ class CeleryTaskService:
         Returns:
             Dict: Thông tin task hoặc None nếu không tìm thấy
         """
-        return await mongodb_task_service.get_task_status(task_id)
+        return await get_mongodb_task_service().get_task_status(task_id)
 
     async def get_task_result(self, task_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -135,7 +135,7 @@ class CeleryTaskService:
         Returns:
             Dict: Kết quả task hoặc None nếu không tìm thấy
         """
-        task = await mongodb_task_service.get_task_status(task_id)
+        task = await get_mongodb_task_service().get_task_status(task_id)
         if task and task.get("status") == "completed":
             return task.get("result")
         return None
@@ -175,7 +175,7 @@ class CeleryTaskService:
         """
         try:
             # Cập nhật status trong MongoDB
-            await mongodb_task_service.mark_task_failed(
+            await get_mongodb_task_service().mark_task_failed(
                 task_id, "Task cancelled by user"
             )
 
@@ -191,11 +191,12 @@ class CeleryTaskService:
         """Kiểm tra task_type có hợp lệ không"""
         valid_types = {
             "quick_analysis",
-            "process_textbook",
-            "process_textbook_auto",
             "process_cv",
             "create_embeddings",
-            "update_embeddings"
+            "update_embeddings",
+            "lesson_plan_content_generation",
+            "smart_exam_generation",
+            "guide_import"
         }
         return task_type in valid_types
 

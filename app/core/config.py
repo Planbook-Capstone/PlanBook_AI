@@ -45,12 +45,12 @@ class Settings(BaseSettings):
     CELERY_TIMEZONE: str = "Asia/Ho_Chi_Minh"
     CELERY_ENABLE_UTC: bool = True
 
-    # RAG Settings - Using multilingual model with good Vietnamese support
+    # RAG Settings - Optimized for Vietnamese and performance
     EMBEDDING_MODEL: str = os.getenv(
-        "EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+        "EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     )
-    MAX_CHUNK_SIZE: int = int(os.getenv("MAX_CHUNK_SIZE", "1000"))  # Increase for better model
-    CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "200"))     # Increase overlap
+    MAX_CHUNK_SIZE: int = int(os.getenv("MAX_CHUNK_SIZE", "1500"))  # Word-based chunking
+    CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "100"))     # Reduced overlap
     TOP_K_DOCUMENTS: int = int(os.getenv("TOP_K_DOCUMENTS", "5"))
 
     # Qdrant Settings
@@ -116,7 +116,11 @@ class Settings(BaseSettings):
                 print("✅ Using Gemini API")
 
             if not self.SECRET_KEY or self.SECRET_KEY == "your_secret_key_here":
-                print("⚠️ Warning: SECRET_KEY not set or using default")
+                # Tự động tạo SECRET_KEY nếu không có
+                import secrets
+                self.SECRET_KEY = secrets.token_urlsafe(32)
+                print("⚠️ Warning: SECRET_KEY not set, generated temporary key for this session")
+                print("💡 Tip: Set SECRET_KEY environment variable for production")
 
 
 settings = Settings()

@@ -4,7 +4,7 @@ Semantic Analysis Service - Sử dụng LLM để phân tích semantic với mul
 import logging
 import json
 from typing import Dict, List, Any, Optional
-from app.services.llm_service import llm_service
+from app.services.llm_service import get_llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +16,7 @@ class SemanticAnalysisService:
     """
     
     def __init__(self):
+        self.llm_service = get_llm_service()
         self.semantic_categories = [
             "definition",      # Định nghĩa, khái niệm
             "example",         # Ví dụ, minh họa
@@ -46,15 +47,15 @@ class SemanticAnalysisService:
                 return self._get_default_result()
             
             # Kiểm tra LLM service
-            if not llm_service.is_available():
+            if not self.llm_service.is_available():
                 logger.warning("LLM service not available, using fallback analysis")
                 return self._fallback_analysis(content)
-            
+
             # Tạo prompt cho LLM
             prompt = self._create_analysis_prompt(content)
-            
+
             # Gọi LLM
-            result = await llm_service.generate_content(
+            result = await self.llm_service.generate_content(
                 prompt=prompt,
                 temperature=0.1,
                 max_tokens=1000
@@ -225,34 +226,14 @@ Chỉ trả về JSON, không có text khác.
         }
 
 
-# Lazy loading global instance để tránh khởi tạo ngay khi import
-_semantic_analysis_service_instance = None
-
+# Factory function để tạo SemanticAnalysisService instance
 def get_semantic_analysis_service() -> SemanticAnalysisService:
     """
-    Lấy singleton instance của SemanticAnalysisService
-    Lazy initialization
+    Tạo SemanticAnalysisService instance mới
 
     Returns:
-        SemanticAnalysisService: Service instance
+        SemanticAnalysisService: Fresh instance
     """
-    global _semantic_analysis_service_instance
-    if _semantic_analysis_service_instance is None:
-        _semantic_analysis_service_instance = SemanticAnalysisService()
-    return _semantic_analysis_service_instance
+    return SemanticAnalysisService()
 
-# Backward compatibility - deprecated, sử dụng get_semantic_analysis_service() thay thế
-# Lazy loading để tránh khởi tạo ngay khi import
-def _get_semantic_analysis_service_lazy():
-    """Lazy loading cho backward compatibility"""
-    return get_semantic_analysis_service()
 
-# Tạo proxy object để lazy loading
-class _SemanticAnalysisServiceProxy:
-    def __getattr__(self, name):
-        return getattr(_get_semantic_analysis_service_lazy(), name)
-
-    def __call__(self, *args, **kwargs):
-        return _get_semantic_analysis_service_lazy()(*args, **kwargs)
-
-semantic_analysis_service = _SemanticAnalysisServiceProxy()

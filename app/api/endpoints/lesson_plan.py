@@ -7,12 +7,12 @@ from datetime import datetime
 import json
 import os
 
-from app.services.lesson_plan_framework_service import lesson_plan_framework_service
+from app.services.lesson_plan_framework_service import get_lesson_plan_framework_service
 from app.services.llm_service import LLMService
 from app.services.docx_export_service import docx_export_service
 from app.services.docx_upload_service import docx_upload_service
 from app.models.online_document_models import OnlineDocumentResponse
-from app.services.lesson_plan_content_service import lesson_plan_content_service
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -325,11 +325,11 @@ class LessonPlanRequest(BaseModel):
 class LessonPlanGenerateRequest(BaseModel):
     framework_id: str  # ID của khung giáo án mẫu
     user_config: List[Dict[str, Any]]  # JSON cấu hình từ người dùng
-    lesson_id: str  # ID của bài học để lấy thông tin
+    lesson_id: Any # ID của bài học để lấy thông tin
 
 
 class LessonPlanResponse(BaseModel):
-    lesson_plan_id: str
+    lesson_plan_id: Any
     content: dict
     framework_used: str
     created_at: str
@@ -352,7 +352,8 @@ async def upload_lesson_plan_framework(
             )
 
         # Process framework file using service
-        result = await lesson_plan_framework_service.process_framework_file(
+        framework_service = get_lesson_plan_framework_service()
+        result = await framework_service.process_framework_file(
             framework_name, framework_file
         )
 
@@ -490,7 +491,8 @@ async def get_available_frameworks():
     """
     try:
         logger.info("Getting all frameworks...")
-        frameworks = await lesson_plan_framework_service.get_all_frameworks()
+        framework_service = get_lesson_plan_framework_service()
+        frameworks = await framework_service.get_all_frameworks()
         logger.info(f"Found {len(frameworks)} frameworks")
         return {"frameworks": frameworks}
     except Exception as e:
@@ -506,7 +508,8 @@ async def get_framework_by_id(framework_id: str):
     Lấy thông tin chi tiết của một framework
     """
     try:
-        framework = await lesson_plan_framework_service.get_framework_by_id(
+        framework_service = get_lesson_plan_framework_service()
+        framework = await framework_service.get_framework_by_id(
             framework_id
         )
         if not framework:
@@ -524,7 +527,8 @@ async def delete_framework(framework_id: str):
     Xóa một framework
     """
     try:
-        success = await lesson_plan_framework_service.delete_framework(framework_id)
+        framework_service = get_lesson_plan_framework_service()
+        success = await framework_service.delete_framework(framework_id)
         if not success:
             raise HTTPException(status_code=404, detail="Không tìm thấy framework")
         return {"message": "Framework đã được xóa thành công"}
@@ -540,8 +544,9 @@ async def seed_sample_frameworks():
     Tạo dữ liệu mẫu cho frameworks (dev only)
     """
     try:
-        await lesson_plan_framework_service._ensure_initialized()
-        
+        framework_service = get_lesson_plan_framework_service()
+        await framework_service._ensure_initialized()
+
         # Sample frameworks data (không cần framework_id)
         sample_frameworks = [
             {
@@ -579,14 +584,14 @@ async def seed_sample_frameworks():
             }
         ]
           # Insert sample data
-        if lesson_plan_framework_service.frameworks_collection is not None:
+        if framework_service.frameworks_collection is not None:
             for framework in sample_frameworks:
                 # Check if already exists by name
-                existing = await lesson_plan_framework_service.frameworks_collection.find_one(
+                existing = await framework_service.frameworks_collection.find_one(
                     {"name": framework["name"], "status": "active"}
                 )
                 if not existing:
-                    await lesson_plan_framework_service.frameworks_collection.insert_one(framework)
+                    await framework_service.frameworks_collection.insert_one(framework)
                     
         return {
             "message": "Sample frameworks seeded successfully",
@@ -661,7 +666,8 @@ async def export_lesson_plan_by_id_to_docx(lesson_plan_id: str):
 # Pydantic models for lesson plan content generation
 class LessonPlanContentRequest(BaseModel):
     lesson_plan_json: Dict[str, Any]
-    lesson_id: Optional[str] = None
+    lesson_id: Optional[Any] = None
+    user_id: Optional[str] = None
 
 
 class LessonPlanContentResponse(BaseModel):
@@ -693,12 +699,14 @@ async def generate_lesson_plan_content(request: LessonPlanContentRequest):
             )
 
         # Import background_task_processor
-        from app.services.background_task_processor import background_task_processor
+        from app.services.background_task_processor import get_background_task_processor
 
         # Tạo task bất đồng bộ
+        background_task_processor = get_background_task_processor()
         task_id = await background_task_processor.create_lesson_plan_content_task(
             lesson_plan_json=request.lesson_plan_json,
-            lesson_id=request.lesson_id
+            lesson_id=request.lesson_id,
+            user_id=request.user_id
         )
 
         return {

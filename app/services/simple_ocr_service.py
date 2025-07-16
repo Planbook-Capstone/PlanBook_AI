@@ -43,26 +43,10 @@ logger = logging.getLogger(__name__)
 class SimpleOCRService:
     """
     Service OCR đơn giản cho PDF
-    Singleton pattern với Lazy Initialization
     """
 
-    _instance = None
-    _lock = threading.Lock()
-
-    def __new__(cls):
-        """Singleton pattern implementation với thread-safe"""
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super(SimpleOCRService, cls).__new__(cls)
-                    cls._instance._initialized = False
-        return cls._instance
-
     def __init__(self):
-        """Lazy initialization - chỉ khởi tạo một lần"""
-        if self._initialized:
-            return
-
+        """Initialize OCR service"""
         self.executor = ThreadPoolExecutor(max_workers=2)
         self.easyocr_reader = None
         self.tesseract_config = '--oem 3 --psm 6 -l vie+eng'
@@ -70,8 +54,6 @@ class SimpleOCRService:
 
         # EasyOCR sẽ được khởi tạo lazy khi cần thiết
         self._easyocr_initialized = False
-
-        self._initialized = True
 
     def _ensure_easyocr_initialized(self):
         """Ensure EasyOCR is initialized"""
@@ -381,35 +363,12 @@ class SimpleOCRService:
             logger.error(f"Failed to get supported languages: {e}")
             return ['english']  # Fallback
 
-# Hàm để lấy singleton instance
+# Factory function để tạo SimpleOCRService instance
 def get_simple_ocr_service() -> SimpleOCRService:
     """
-    Lấy singleton instance của SimpleOCRService
-    Thread-safe lazy initialization
+    Tạo SimpleOCRService instance mới
 
     Returns:
-        SimpleOCRService: Singleton instance
+        SimpleOCRService: Fresh instance
     """
     return SimpleOCRService()
-
-
-# Backward compatibility - deprecated, sử dụng get_simple_ocr_service() thay thế
-# Lazy loading để tránh khởi tạo ngay khi import
-_simple_ocr_service_instance = None
-
-def _get_simple_ocr_service_lazy():
-    """Lazy loading cho backward compatibility"""
-    global _simple_ocr_service_instance
-    if _simple_ocr_service_instance is None:
-        _simple_ocr_service_instance = get_simple_ocr_service()
-    return _simple_ocr_service_instance
-
-# Tạo proxy object để lazy loading
-class _SimpleOCRServiceProxy:
-    def __getattr__(self, name):
-        return getattr(_get_simple_ocr_service_lazy(), name)
-
-    def __call__(self, *args, **kwargs):
-        return _get_simple_ocr_service_lazy()(*args, **kwargs)
-
-simple_ocr_service = _SimpleOCRServiceProxy()
