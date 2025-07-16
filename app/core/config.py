@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     # OpenRouter Configuration
     OPENROUTER_BASE_URL: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
     OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "google/gemini-2.0-flash-001")
+
     OPENROUTER_SITE_URL: Optional[str] = os.getenv("OPENROUTER_SITE_URL")
     OPENROUTER_SITE_NAME: Optional[str] = os.getenv("OPENROUTER_SITE_NAME")
 

@@ -13,6 +13,7 @@ from app.api.endpoints import (
     exam_import,
     kafka_endpoints,
     llm_endpoints,
+    slide_generation,
     auth_endpoints,
     protected_demo,
     rag_endpoints,
@@ -66,6 +67,7 @@ api_router.include_router(
     llm_endpoints.router, prefix="/llm", tags=["LLM Services"]
 )
 api_router.include_router(
+    slide_generation.router, prefix="/slides", tags=["Slide Generation"]
     auth_endpoints.router, prefix="/auth", tags=["Authentication"]
 )
 api_router.include_router(
@@ -76,7 +78,6 @@ api_router.include_router(
 )
 # Add API router to app
 app.include_router(api_router, prefix=settings.API_PREFIX)
-
 
 @app.get("/")
 async def root():
