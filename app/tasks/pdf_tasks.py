@@ -137,9 +137,46 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
         enhanced_textbook_service = get_enhanced_textbook_service()
         qdrant_service = get_qdrant_service()
 
+        # BƯỚC KIỂM TRA LESSON_ID TRƯỚC KHI XỬ LÝ
+        if lesson_id:
+            logger.info(f"🔍 Checking if lesson_id '{lesson_id}' already exists...")
+            await get_mongodb_task_service().update_task_progress(
+                task_id, 10, f"Checking lesson_id '{lesson_id}' existence..."
+            )
+
+            lesson_check = await qdrant_service.check_lesson_id_exists(lesson_id)
+
+            if not lesson_check.get("success"):
+                error_msg = f"Failed to check lesson_id: {lesson_check.get('error')}"
+                logger.error(f"❌ {error_msg}")
+                raise Exception(error_msg)
+
+            if lesson_check.get("exists"):
+                existing_book_id = lesson_check.get("existing_book_id", "unknown")
+                error_msg = f"Lesson ID '{lesson_id}' already exists in book '{existing_book_id}'. Please use a different lesson_id or delete the existing lesson first."
+                logger.error(f"❌ {error_msg}")
+
+                # Trả về lỗi conflict với thông tin chi tiết
+                conflict_result = {
+                    "success": False,
+                    "error": error_msg,
+                    "lesson_id": lesson_id,
+                    "existing_book_id": existing_book_id,
+                    "conflict": True,
+                    "message": "Lesson ID conflict detected"
+                }
+
+                # Mark task as failed với thông tin conflict
+                await get_mongodb_task_service().mark_task_failed(task_id, error_msg)
+                return conflict_result
+
+            logger.info(f"✅ Lesson ID '{lesson_id}' is available for use")
+        else:
+            logger.info("ℹ️ No lesson_id provided, skipping lesson_id validation")
+
         # Process textbook
         await get_mongodb_task_service().update_task_progress(
-            task_id, 30, "Processing textbook content..."
+            task_id, 40, "Processing textbook content..."
         )
 
         book_metadata = {
@@ -172,7 +209,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
             logger.info(f"   - book_id: {book_id}")
             logger.info(f"   - lesson_id: {lesson_id} (type: {type(lesson_id)})")
             logger.info(f"   - content type: {type(book_content)}")
-
+            
             embeddings_result = await qdrant_service.process_textbook(
                 book_id=book_id,
                 content=book_content,  # Sử dụng parameter content thống nhất

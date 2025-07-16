@@ -221,26 +221,6 @@ class QdrantService:
                 "error": "Qdrant client or embedding model not initialized",
             }
 
-        # ✅ Kiểm tra lesson_id trùng lặp trước khi xử lý
-        if lesson_id:
-            lesson_check = await self.check_lesson_id_exists(lesson_id)
-
-            if not lesson_check["success"]:
-                return {
-                    "success": False,
-                    "error": f"Failed to check lesson_id: {lesson_check.get('error')}",
-                    "lesson_id": lesson_id
-                }
-
-            if lesson_check["exists"]:
-                return {
-                    "success": False,
-                    "error": f"Lesson ID '{lesson_id}' already exists in book '{lesson_check['existing_book_id']}'. Please use a different lesson_id or delete the existing lesson first.",
-                    "lesson_id": lesson_id,
-                    "existing_book_id": lesson_check["existing_book_id"],
-                    "conflict": True
-                }
-
         try:
             # Xác định collection name dựa trên content_type và book_id
             if content_type == "guide":
