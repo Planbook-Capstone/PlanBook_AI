@@ -162,7 +162,111 @@ Hãy trả về CV với LAYOUT ĐẸP, không dài 1 hàng, format chuyên nghi
                 "error": str(e),
                 "formatted_text": raw_text
             }
-    
+
+    async def format_guide_text(self, raw_text: str) -> Dict[str, Any]:
+        """
+        Cấu trúc lại text hướng dẫn thành format tối ưu cho chunking và RAG
+
+        Args:
+            raw_text: Text thô từ DOCX guide
+
+        Returns:
+            Dict chứa text đã được cấu trúc lại
+        """
+        self._ensure_service_initialized()
+        try:
+            if not self.is_available():
+                return {
+                    "success": False,
+                    "error": "LLM service not available. Please set API keys.",
+                    "formatted_text": raw_text
+                }
+
+            prompt = f"""
+Bạn là chuyên gia về tài liệu hướng dẫn sử dụng hệ thống và Smart Chunking. Hãy cấu trúc lại tài liệu hướng dẫn hệ thống sau để tối ưu cho tìm kiếm và hỗ trợ người dùng.
+
+LOẠI TÀI LIỆU: Hướng dẫn sử dụng hệ thống/phần mềm
+- Thường chứa: hướng dẫn đăng nhập, sử dụng chức năng, troubleshooting, FAQ
+- Mục đích: Hỗ trợ người dùng tìm kiếm thông tin nhanh chóng
+- Token limit: 300-400 tokens per chunk để tối ưu tìm kiếm
+
+CẤU TRÚC TỐI ƯU CHO HƯỚNG DẪN HỆ THỐNG:
+
+1. **GIỚI THIỆU VÀ KHÁI NIỆM (Definition-style):**
+   - "[Tên hệ thống] là...", "Chức năng [X] được sử dụng để..."
+   - Giải thích ngắn gọn về hệ thống/tính năng
+   - Mỗi khái niệm trong 1 đoạn riêng (150-250 từ)
+
+2. **HƯỚNG DẪN THỰC HIỆN (Step-by-step):**
+   - "Cách [thực hiện X]:", "Để [làm Y], hãy thực hiện:"
+   - "Bước 1:", "Bước 2:" cho quy trình có thứ tự
+   - "Hãy làm theo các bước sau:" cho hướng dẫn chi tiết
+   - Mỗi quy trình hoàn chỉnh trong 1 chunk
+
+3. **VÍ DỤ THỰC TẾ (Example-style):**
+   - "Ví dụ:", "Trường hợp cụ thể:", "Minh họa:"
+   - Tình huống thực tế + cách xử lý
+   - Screenshots hoặc mô tả giao diện nếu có
+
+4. **BẢNG THAM KHẢO (Reference tables):**
+   - "Danh sách chức năng:", "Bảng phím tắt:", "Các lỗi thường gặp:"
+   - Format markdown table cho dễ đọc
+   - Mỗi bảng trong 1 chunk riêng
+
+5. **FAQ VÀ TROUBLESHOOTING:**
+   - "Câu hỏi thường gặp:", "Xử lý lỗi:", "Khắc phục sự cố:"
+   - Mỗi Q&A hoặc vấn đề trong 1 đoạn riêng
+   - Bao gồm cả vấn đề + giải pháp
+
+6. **NGUYÊN TẮC SEMANTIC COMPLETENESS:**
+   - Mỗi chunk phải đứng độc lập, không cần tham chiếu
+   - Bao gồm đủ context để người dùng hiểu và thực hiện
+   - Tránh "như đã đề cập", "xem phần trên"
+   - Lặp lại thông tin quan trọng khi cần
+
+7. **FORMAT CHUẨN CHO HƯỚNG DẪN:**
+   - # ## ### cho phân cấp chức năng
+   - **Bold** cho tên chức năng, menu, button
+   - `Code` cho đường dẫn, URL, tên file, lệnh
+   - > Blockquote cho lưu ý quan trọng, cảnh báo
+   - - Bullet points cho danh sách tùy chọn
+   - 1. Numbered list cho các bước thực hiện theo thứ tự
+
+8. **TỐI ƯU CHO TÌM KIẾM:**
+   - Sử dụng từ khóa mà người dùng thường tìm kiếm
+   - Bao gồm các cách gọi khác nhau của cùng 1 chức năng
+   - Đặt thông tin quan trọng ở đầu mỗi đoạn
+
+NỘI DUNG HƯỚNG DẪN HỆ THỐNG:
+{raw_text}
+
+Hãy trả về tài liệu hướng dẫn đã được cấu trúc tối ưu cho hỗ trợ người dùng:
+"""
+
+            result = await self._generate_content(prompt)
+
+            if result["success"]:
+                return {
+                    "success": True,
+                    "formatted_text": result["text"],
+                    "original_length": len(raw_text),
+                    "formatted_length": len(result["text"])
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": result["error"],
+                    "formatted_text": raw_text
+                }
+
+        except Exception as e:
+            logger.error(f"Error formatting guide text: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "formatted_text": raw_text
+            }
+
     async def format_document_text(self, raw_text: str, document_type: str = "general") -> Dict[str, Any]:
         """
         Cấu trúc lại text tài liệu thành format đẹp
@@ -190,6 +294,10 @@ Hãy trả về CV với LAYOUT ĐẸP, không dài 1 hàng, format chuyên nghi
             # Xử lý exam questions
             if document_type.lower() == "exam_questions":
                 return await self.generate_exam_questions(raw_text)
+
+            # Xử lý guide documents
+            if document_type.lower() == "guide":
+                return await self.format_guide_text(raw_text)
 
             # Nếu là general nhưng có vẻ như CV, format như CV
             if document_type.lower() == "general" and self._is_cv_content(raw_text):
