@@ -196,24 +196,28 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
 
             supabase_service = get_supabase_storage_service()
             if supabase_service.is_available():
-                upload_result = await supabase_service.upload_pdf_file(
+                # Xác định file type từ filename
+                file_type = "docx" if filename.lower().endswith(".docx") else "pdf"
+
+                upload_result = await supabase_service.upload_document_file(
                     file_content=file_content,
                     book_id=book_id,
                     lesson_id=lesson_id,
-                    original_filename=filename
+                    original_filename=filename,
+                    file_type=file_type
                 )
 
                 if upload_result.get("success"):
                     file_url = upload_result.get("file_url")
                     uploaded_at = upload_result.get("uploaded_at")
-                    logger.info(f"✅ PDF uploaded to Supabase: {file_url}")
+                    logger.info(f"✅ {file_type.upper()} uploaded to Supabase: {file_url}")
                     logger.info(f"✅ Upload time: {uploaded_at}")
                 else:
-                    logger.warning(f"Failed to upload PDF to Supabase: {upload_result.get('error')}")
+                    logger.warning(f"Failed to upload {file_type.upper()} to Supabase: {upload_result.get('error')}")
             else:
-                logger.warning("Supabase service not available, skipping PDF upload")
+                logger.warning("Supabase service not available, skipping document upload")
         except Exception as e:
-            logger.warning(f"Error uploading PDF to Supabase: {e}")
+            logger.warning(f"Error uploading document to Supabase: {e}")
 
         # Auto create embeddings
         await get_mongodb_task_service().update_task_progress(

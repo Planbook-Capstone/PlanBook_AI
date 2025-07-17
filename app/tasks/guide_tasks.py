@@ -49,7 +49,8 @@ async def process_guide_import_task(task_id: str) -> Dict[str, Any]:
     Luồng xử lý:
     1. Trích xuất text từ DOCX
     2. LLM formatting để cấu trúc lại nội dung
-    3. Smart chunking và tạo embeddings
+    3. Upload DOCX file lên Supabase Storage
+    4. Smart chunking và tạo embeddings
 
     Lưu ý: Báo lỗi thay vì fallback khi có lỗi xảy ra
     """
@@ -107,17 +108,59 @@ async def process_guide_import_task(task_id: str) -> Dict[str, Any]:
         formatted_text = format_result["formatted_text"]
         await task_service.update_task_progress(task_id, 50, "Content formatting completed")
 
-        # Bước 3: Tạo embeddings với smart chunking nếu được yêu cầu
+        # Bước 3: Upload DOCX file lên Supabase Storage
+        await task_service.update_task_progress(task_id, 50, "Uploading DOCX to Supabase Storage...")
+
+        file_url = None
+        uploaded_at = None
+        try:
+            from app.services.supabase_storage_service import get_supabase_storage_service
+
+            supabase_service = get_supabase_storage_service()
+            if supabase_service.is_available():
+                upload_result = await supabase_service.upload_document_file(
+                    file_content=file_content,
+                    book_id=book_id,
+                    lesson_id=f"guide_{filename.replace('.docx', '')}",
+                    original_filename=filename,
+                    file_type="docx"
+                )
+
+                if upload_result.get("success"):
+                    file_url = upload_result.get("file_url")
+                    uploaded_at = upload_result.get("uploaded_at")
+                    logger.info(f"✅ DOCX uploaded to Supabase: {file_url}")
+                    logger.info(f"✅ Upload time: {uploaded_at}")
+                    logger.info(f"🔍 Full upload result: {upload_result}")
+                else:
+                    logger.error(f"❌ Failed to upload DOCX to Supabase: {upload_result.get('error')}")
+                    logger.error(f"🔍 Full upload result: {upload_result}")
+            else:
+                logger.warning("Supabase service not available, skipping DOCX upload")
+        except Exception as e:
+            logger.warning(f"Error uploading DOCX to Supabase: {e}")
+
+        # Bước 4: Tạo embeddings với smart chunking nếu được yêu cầu
         embeddings_result = None
         if create_embeddings:
-            await task_service.update_task_progress(task_id, 60, "Creating embeddings with smart chunking...")
+            await task_service.update_task_progress(task_id, 70, "Creating embeddings with smart chunking...")
 
-            # Sử dụng process_textbook với formatted content
+            # Log metadata trước khi tạo embeddings
+            logger.info(f"🔍 Creating embeddings with metadata:")
+            logger.info(f"   - book_id: {book_id}")
+            logger.info(f"   - lesson_id: guide_{filename}")
+            logger.info(f"   - content_type: guide")
+            logger.info(f"   - file_url: {file_url}")
+            logger.info(f"   - uploaded_at: {uploaded_at}")
+
+            # Sử dụng process_textbook với formatted content và metadata từ Supabase
             embeddings_result = await qdrant_service.process_textbook(
                 book_id=book_id,
                 content=formatted_text,  # Sử dụng formatted text thay vì raw text
                 lesson_id=f"guide_{filename}",
-                content_type="guide"
+                content_type="guide",
+                file_url=file_url,  # Truyền URL của file DOCX từ Supabase
+                uploaded_at=uploaded_at  # Truyền thời gian upload
             )
 
             if not embeddings_result.get("success"):
@@ -126,7 +169,7 @@ async def process_guide_import_task(task_id: str) -> Dict[str, Any]:
                 logger.error(error_msg)
                 raise Exception(error_msg)
 
-            await task_service.update_task_progress(task_id, 80, "Embeddings created successfully")
+            await task_service.update_task_progress(task_id, 85, "Embeddings created successfully")
 
         # Tạo kết quả cuối cùng
         result = {
@@ -144,15 +187,21 @@ async def process_guide_import_task(task_id: str) -> Dict[str, Any]:
                 "original_length": len(extracted_text),
                 "formatted_length": len(formatted_text),
             },
+            "file_storage": {
+                "uploaded_to_supabase": file_url is not None,
+                "file_url": file_url,
+                "uploaded_at": uploaded_at,
+            },
             "embeddings_created": embeddings_result.get("success", False) if embeddings_result else False,
             "embeddings_info": {
                 "collection_name": embeddings_result.get("collection_name") if embeddings_result else None,
                 "vector_count": embeddings_result.get("total_chunks", 0) if embeddings_result else 0,
                 "vector_dimension": embeddings_result.get("vector_dimension") if embeddings_result else None,
             },
-            "message": "Guide imported successfully with LLM formatting and smart chunking, ready for RAG search"
+            "message": "Guide imported successfully with LLM formatting, smart chunking, and uploaded to Supabase storage, ready for RAG search"
         }
 
+        await task_service.update_task_progress(task_id, 100, "Guide import completed successfully")
         await task_service.mark_task_completed(task_id, result)
         return result
 

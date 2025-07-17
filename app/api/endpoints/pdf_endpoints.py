@@ -153,32 +153,36 @@ async def quick_textbook_analysis(
 
 
 @router.get("/lessons", response_model=Dict[str, Any])
-async def get_all_lessons() -> Dict[str, Any]:
+async def get_all_lessons(book_id: Optional[str] = None) -> Dict[str, Any]:
     """
-    Lấy tất cả bài học từ Qdrant
+    Lấy tất cả bài học textbook từ Qdrant
 
-    Endpoint này trả về danh sách tất cả bài học đã được import vào hệ thống với các thông tin:
+    Endpoint này trả về danh sách bài học textbook đã được import vào hệ thống với các thông tin:
     - bookId: ID của sách
     - lessonId: ID của bài học
     - fileUrl: URL của file PDF trên Supabase Storage
     - uploaded_at: Thời gian upload file lên Supabase (ưu tiên)
     - processed_at: Thời gian xử lý (fallback)
-    - content_type: Loại nội dung (textbook/guide)
+    - content_type: Loại nội dung (textbook)
     - total_chunks: Số lượng chunks được tạo
 
+    Args:
+        book_id: Optional - Filter theo book ID cụ thể
+
     Returns:
-        Dict chứa danh sách tất cả bài học và thông tin tổng quan
+        Dict chứa danh sách bài học textbook và thông tin tổng quan
 
     Examples:
         curl -X GET "http://localhost:8000/api/v1/pdf/lessons"
+        curl -X GET "http://localhost:8000/api/v1/pdf/lessons?book_id=hoa12"
     """
     try:
         from app.services.qdrant_service import get_qdrant_service
 
         qdrant_service = get_qdrant_service()
 
-        logger.info("Getting all lessons from Qdrant...")
-        result = await qdrant_service.get_all_lessons()
+        logger.info(f"Getting textbook lessons from Qdrant" + (f" for book_id={book_id}" if book_id else "..."))
+        result = await qdrant_service.get_lessons_by_type(content_type="textbook", book_id=book_id)
 
         if not result.get("success"):
             raise HTTPException(
@@ -186,22 +190,83 @@ async def get_all_lessons() -> Dict[str, Any]:
                 detail=f"Failed to retrieve lessons: {result.get('error', 'Unknown error')}"
             )
 
-        logger.info(f"Successfully retrieved {result.get('total_lessons', 0)} lessons")
+        logger.info(f"Successfully retrieved {result.get('total_lessons', 0)} textbook lessons" + (f" for book_id={book_id}" if book_id else ""))
 
         return {
             "success": True,
             "data": {
                 "lessons": result.get("lessons", []),
                 "total_lessons": result.get("total_lessons", 0),
-                "collections_processed": result.get("collections_processed", 0)
+                "collections_processed": result.get("collections_processed", 0),
+                "content_type": "textbook",
+                "book_id": book_id
             },
-            "message": f"Retrieved {result.get('total_lessons', 0)} lessons successfully"
+            "message": f"Retrieved {result.get('total_lessons', 0)} textbook lessons successfully" + (f" for book_id={book_id}" if book_id else "")
         }
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error in get_all_lessons: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.get("/guides", response_model=Dict[str, Any])
+async def get_all_guides(book_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Lấy tất cả guide từ Qdrant
+
+    Endpoint này trả về danh sách guide đã được import vào hệ thống với các thông tin:
+    - bookId: ID của sách
+    - lessonId: ID của bài học
+    - fileUrl: URL của file DOCX trên Supabase Storage
+    - uploaded_at: Thời gian upload file lên Supabase (ưu tiên)
+    - processed_at: Thời gian xử lý (fallback)
+    - content_type: Loại nội dung (guide)
+    - total_chunks: Số lượng chunks được tạo
+
+    Args:
+        book_id: Optional - Filter theo book ID cụ thể
+
+    Returns:
+        Dict chứa danh sách guide và thông tin tổng quan
+
+    Examples:
+        curl -X GET "http://localhost:8000/api/v1/pdf/guides"
+        curl -X GET "http://localhost:8000/api/v1/pdf/guides?book_id=guide_hoa12"
+    """
+    try:
+        from app.services.qdrant_service import get_qdrant_service
+
+        qdrant_service = get_qdrant_service()
+
+        logger.info(f"Getting guide lessons from Qdrant" + (f" for book_id={book_id}" if book_id else "..."))
+        result = await qdrant_service.get_lessons_by_type(content_type="guide", book_id=book_id)
+
+        if not result.get("success"):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to retrieve guides: {result.get('error', 'Unknown error')}"
+            )
+
+        logger.info(f"Successfully retrieved {result.get('total_lessons', 0)} guides" + (f" for book_id={book_id}" if book_id else ""))
+
+        return {
+            "success": True,
+            "data": {
+                "guides": result.get("lessons", []),  # Đổi tên từ lessons thành guides
+                "total_guides": result.get("total_lessons", 0),
+                "collections_processed": result.get("collections_processed", 0),
+                "content_type": "guide",
+                "book_id": book_id
+            },
+            "message": f"Retrieved {result.get('total_lessons', 0)} guides successfully" + (f" for book_id={book_id}" if book_id else "")
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_all_guides: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
@@ -556,28 +621,59 @@ async def delete_textbook_content(
     lesson_id: Optional[str] = Query(None, description="Lesson ID to delete specific lesson")
 ) -> Dict[str, Any]:
     """
-    Xóa nội dung textbook - Clean và đơn giản
+    Xóa nội dung textbook/guide - Xóa cả trên Qdrant và Supabase
 
-    - book_id only: Xóa toàn bộ collection của book
-    - book_id + lesson_id: Xóa lesson cụ thể trong collection của book
+    - book_id only: Xóa toàn bộ collection của book và tất cả files liên quan trên Supabase
+    - book_id + lesson_id: Xóa lesson cụ thể trong collection của book và file tương ứng trên Supabase
 
     Args:
         book_id: ID của book (bắt buộc)
         lesson_id: ID của lesson cần xóa (optional - nếu có thì xóa lesson, không có thì xóa book)
 
     Returns:
-        Dict chứa kết quả xóa
+        Dict chứa kết quả xóa từ cả Qdrant và Supabase
 
     Examples:
-        DELETE /api/v1/pdf?book_id=hoa12                           # Xóa toàn bộ sách Hóa 12
-        DELETE /api/v1/pdf?book_id=hoa12&lesson_id=hoa12_bai1      # Xóa bài 1 trong sách Hóa 12
+        DELETE /api/v1/pdf?book_id=hoa12                           # Xóa toàn bộ sách Hóa 12 và files
+        DELETE /api/v1/pdf?book_id=hoa12&lesson_id=hoa12_bai1      # Xóa bài 1 trong sách Hóa 12 và file
+        DELETE /api/v1/pdf?book_id=guide_hoa12                     # Xóa toàn bộ guide Hóa 12 và files
     """
     try:
         qdrant_service = get_qdrant_service()
 
+        # Bước 1: Lấy danh sách file URLs cần xóa từ Supabase trước khi xóa khỏi Qdrant
+        logger.info(f"Getting file URLs for deletion: book_id={book_id}, lesson_id={lesson_id}")
+        file_urls = await qdrant_service.get_file_urls_for_deletion(book_id, lesson_id)
+
+        # Bước 2: Xóa files từ Supabase
+        supabase_results = []
+        if file_urls:
+            try:
+                from app.services.supabase_storage_service import get_supabase_storage_service
+
+                supabase_service = get_supabase_storage_service()
+                if supabase_service.is_available():
+                    logger.info(f"Deleting {len(file_urls)} files from Supabase")
+                    for file_url in file_urls:
+                        delete_result = await supabase_service.delete_file_by_url(file_url)
+                        supabase_results.append({
+                            "file_url": file_url,
+                            "success": delete_result.get("success", False),
+                            "error": delete_result.get("error") if not delete_result.get("success") else None
+                        })
+                        if delete_result.get("success"):
+                            logger.info(f"✅ Deleted from Supabase: {file_url}")
+                        else:
+                            logger.warning(f"⚠️ Failed to delete from Supabase: {file_url} - {delete_result.get('error')}")
+                else:
+                    logger.warning("Supabase service not available, skipping file deletion")
+            except Exception as e:
+                logger.warning(f"Error deleting files from Supabase: {e}")
+
+        # Bước 3: Xóa từ Qdrant
         # Nếu có lesson_id: xóa lesson cụ thể trong book
         if lesson_id:
-            logger.info(f"Deleting lesson '{lesson_id}' from book '{book_id}'")
+            logger.info(f"Deleting lesson '{lesson_id}' from book '{book_id}' in Qdrant")
             result = await qdrant_service.delete_lesson_in_book_clean(book_id, lesson_id)
 
             return {
@@ -586,12 +682,14 @@ async def delete_textbook_content(
                 "book_id": book_id,
                 "lesson_id": lesson_id,
                 "message": f"Lesson '{lesson_id}' deleted successfully from book '{book_id}'",
-                "details": result
+                "qdrant_details": result,
+                "supabase_results": supabase_results,
+                "files_deleted": len([r for r in supabase_results if r["success"]])
             }
 
         # Nếu không có lesson_id: xóa toàn bộ book
         else:
-            logger.info(f"Deleting entire book: {book_id}")
+            logger.info(f"Deleting entire book: {book_id} from Qdrant")
             result = await qdrant_service.delete_book_clean(book_id)
 
             return {
@@ -599,7 +697,9 @@ async def delete_textbook_content(
                 "operation": "delete_book",
                 "book_id": book_id,
                 "message": f"Book '{book_id}' deleted successfully",
-                "details": result
+                "qdrant_details": result,
+                "supabase_results": supabase_results,
+                "files_deleted": len([r for r in supabase_results if r["success"]])
             }
 
     except ValueError as e:

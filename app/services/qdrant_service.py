@@ -397,11 +397,23 @@ class QdrantService:
             "chunk_overlap": settings.CHUNK_OVERLAP,
         }
 
+        # Debug logging cho file metadata
+        logger.info(f"🔍 Adding file metadata to Qdrant:")
+        logger.info(f"   - file_url: {file_url} (type: {type(file_url)})")
+        logger.info(f"   - uploaded_at: {uploaded_at} (type: {type(uploaded_at)})")
+
         # Thêm fileUrl và uploaded_at nếu có
         if file_url:
             metadata_payload["file_url"] = file_url
+            logger.info(f"✅ Added file_url to metadata: {file_url}")
+        else:
+            logger.warning("⚠️  file_url is None or empty, not adding to metadata")
+
         if uploaded_at:
             metadata_payload["uploaded_at"] = uploaded_at
+            logger.info(f"✅ Added uploaded_at to metadata: {uploaded_at}")
+        else:
+            logger.warning("⚠️  uploaded_at is None or empty, not adding to metadata")
 
         metadata_point = qdrant_models.PointStruct(
             id=str(uuid.uuid4()),
@@ -580,12 +592,20 @@ class QdrantService:
             logger.error(f"Error searching textbook: {e}")
             return {"success": False, "error": str(e)}
 
-    async def get_all_lessons(self) -> Dict[str, Any]:
+    async def get_lessons_by_type(
+        self,
+        content_type: str = "textbook",
+        book_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
-        Lấy tất cả bài học từ Qdrant với các field: bookId, lessonId, fileUrl, processed_at
+        Lấy bài học từ Qdrant theo loại content và book_id
+
+        Args:
+            content_type: Loại content ("textbook" hoặc "guide")
+            book_id: ID của sách (optional, để filter theo book cụ thể)
 
         Returns:
-            Dict chứa danh sách tất cả bài học
+            Dict chứa danh sách bài học
         """
         from qdrant_client.http import models as qdrant_models
 
@@ -602,14 +622,23 @@ class QdrantService:
             collections_response = self.qdrant_client.get_collections()
             all_collections = [col.name for col in collections_response.collections]
 
-            # Lọc chỉ lấy collections của textbook và guide
-            textbook_collections = [col for col in all_collections if col.startswith("textbook_") or col.startswith("guide_")]
+            # Lọc collections theo content_type
+            if content_type == "textbook":
+                target_collections = [col for col in all_collections if col.startswith("textbook_")]
+            elif content_type == "guide":
+                target_collections = [col for col in all_collections if col.startswith("guide_")]
+            else:
+                target_collections = [col for col in all_collections if col.startswith("textbook_") or col.startswith("guide_")]
 
-            logger.info(f"Found {len(textbook_collections)} textbook/guide collections")
+            # Nếu có book_id, lọc thêm theo book_id
+            if book_id:
+                target_collections = [col for col in target_collections if col.endswith(f"_{book_id}")]
+
+            logger.info(f"Found {len(target_collections)} {content_type} collections" + (f" for book_id={book_id}" if book_id else ""))
 
             lessons = []
 
-            for collection_name in textbook_collections:
+            for collection_name in target_collections:
                 try:
                     # Tìm kiếm tất cả metadata points trong collection
                     search_result = self.qdrant_client.scroll(
@@ -652,21 +681,117 @@ class QdrantService:
             # Sắp xếp theo uploaded_at (mới nhất trước), fallback processed_at
             lessons.sort(key=lambda x: x.get("uploaded_at", x.get("processed_at", "")), reverse=True)
 
-            logger.info(f"Retrieved {len(lessons)} lessons from Qdrant")
+            logger.info(f"Retrieved {len(lessons)} {content_type} lessons from Qdrant" + (f" for book_id={book_id}" if book_id else ""))
 
             return {
                 "success": True,
                 "lessons": lessons,
                 "total_lessons": len(lessons),
-                "collections_processed": len(textbook_collections)
+                "collections_processed": len(target_collections),
+                "content_type": content_type,
+                "book_id": book_id
             }
 
         except Exception as e:
-            logger.error(f"Error getting all lessons: {e}")
+            logger.error(f"Error getting {content_type} lessons: {e}")
             return {
                 "success": False,
                 "error": str(e)
             }
+
+    async def get_all_lessons(self) -> Dict[str, Any]:
+        """
+        Backward compatibility method - lấy tất cả textbook lessons
+        """
+        return await self.get_lessons_by_type(content_type="textbook")
+
+    async def get_all_guides(self) -> Dict[str, Any]:
+        """
+        Lấy tất cả guide lessons
+        """
+        return await self.get_lessons_by_type(content_type="guide")
+
+    async def get_file_urls_for_deletion(self, book_id: str, lesson_id: Optional[str] = None) -> list:
+        """
+        Lấy danh sách file URLs cần xóa từ Supabase trước khi xóa khỏi Qdrant
+
+        Args:
+            book_id: ID của book
+            lesson_id: ID của lesson (optional)
+
+        Returns:
+            List các file URLs cần xóa
+        """
+        from qdrant_client.http import models as qdrant_models
+
+        self._ensure_service_initialized()
+
+        if not self.qdrant_client:
+            return []
+
+        file_urls = []
+
+        try:
+            # Lấy danh sách collections
+            collections_response = self.qdrant_client.get_collections()
+            all_collections = [col.name for col in collections_response.collections]
+
+            # Tìm collections liên quan đến book_id
+            target_collections = []
+            for col in all_collections:
+                if col.endswith(f"_{book_id}"):
+                    target_collections.append(col)
+
+            # Tạo filter
+            filter_conditions = [
+                qdrant_models.FieldCondition(
+                    key="type",
+                    match=qdrant_models.MatchValue(value="metadata")
+                ),
+                qdrant_models.FieldCondition(
+                    key="book_id",
+                    match=qdrant_models.MatchValue(value=book_id)
+                )
+            ]
+
+            # Nếu có lesson_id, thêm filter
+            if lesson_id:
+                filter_conditions.append(
+                    qdrant_models.FieldCondition(
+                        key="lesson_id",
+                        match=qdrant_models.MatchValue(value=lesson_id)
+                    )
+                )
+
+            search_filter = qdrant_models.Filter(must=filter_conditions)
+
+            # Tìm kiếm trong các collections
+            for collection_name in target_collections:
+                try:
+                    scroll_result = self.qdrant_client.scroll(
+                        collection_name=collection_name,
+                        scroll_filter=search_filter,
+                        limit=1000,
+                        with_payload=True,
+                        with_vectors=False
+                    )
+
+                    points = scroll_result[0]
+                    for point in points:
+                        file_url = point.payload.get("file_url")
+                        if file_url and file_url not in file_urls:
+                            file_urls.append(file_url)
+
+                except Exception as e:
+                    logger.warning(f"Error searching collection {collection_name}: {e}")
+                    continue
+
+            logger.info(f"Found {len(file_urls)} file URLs for deletion: book_id={book_id}, lesson_id={lesson_id}")
+            return file_urls
+
+        except Exception as e:
+            logger.error(f"Error getting file URLs for deletion: {e}")
+            return []
 
     async def global_search(
         self, query: str, limit: int = 10, book_id: Optional[str] = None, lesson_id: Optional[str] = None
@@ -889,25 +1014,32 @@ class QdrantService:
         if not self.qdrant_client:
             raise RuntimeError("Qdrant client not initialized")
 
-        collection_name = f"textbook_{book_id}"
-
-        # Kiểm tra collection có tồn tại không
+        # Tìm tất cả collections liên quan đến book_id (cả textbook và guide)
         collections = self.qdrant_client.get_collections().collections
         existing_names = [c.name for c in collections]
 
-        if collection_name not in existing_names:
-            raise FileNotFoundError(f"Book '{book_id}' not found (collection '{collection_name}' does not exist)")
+        target_collections = []
+        for name in existing_names:
+            if name.endswith(f"_{book_id}"):
+                target_collections.append(name)
 
-        # Xóa collection
-        self.qdrant_client.delete_collection(collection_name=collection_name)
+        if not target_collections:
+            raise FileNotFoundError(f"Book '{book_id}' not found (no collections found for book_id)")
 
-        logger.info(f"✅ Deleted book '{book_id}' (collection: {collection_name})")
+        # Xóa tất cả collections liên quan
+        deleted_collections = []
+        for collection_name in target_collections:
+            self.qdrant_client.delete_collection(collection_name=collection_name)
+            deleted_collections.append(collection_name)
+            logger.info(f"✅ Deleted collection: {collection_name}")
+
+        logger.info(f"✅ Deleted book '{book_id}' ({len(deleted_collections)} collections)")
 
         return {
             "book_id": book_id,
-            "collection_name": collection_name,
+            "deleted_collections": deleted_collections,
             "operation": "book_deleted",
-            "message": f"Book '{book_id}' and all its lessons deleted successfully"
+            "message": f"Book '{book_id}' and all its lessons deleted successfully from {len(deleted_collections)} collections"
         }
 
     async def delete_lesson_clean(self, lesson_id: str) -> Dict[str, Any]:
@@ -1320,17 +1452,24 @@ class QdrantService:
         try:
             from qdrant_client.http import models as qdrant_models
 
-            # Sử dụng collection riêng cho textbook
-            collection_name = f"textbook_{book_id}"
+            # Kiểm tra cả textbook và guide collections
+            textbook_collection = f"textbook_{book_id}"
+            guide_collection = f"guide_{book_id}"
 
-            # Kiểm tra collection có tồn tại không
             collections = self.qdrant_client.get_collections().collections
             existing_names = [c.name for c in collections]
 
-            if collection_name not in existing_names:
+            # Ưu tiên textbook collection, fallback sang guide collection
+            if textbook_collection in existing_names:
+                collection_name = textbook_collection
+                content_type = "textbook"
+            elif guide_collection in existing_names:
+                collection_name = guide_collection
+                content_type = "guide"
+            else:
                 return {
                     "success": False,
-                    "error": f"Textbook collection {collection_name} not found",
+                    "error": f"No collection found for book_id '{book_id}'. Checked: {textbook_collection}, {guide_collection}",
                     "book_id": book_id
                 }
 
@@ -1402,12 +1541,15 @@ class QdrantService:
             return {
                 "success": True,
                 "book_id": book_id,
+                "content_type": content_type,  # Thêm thông tin loại content
                 "book_info": {
                     "book_id": book_id,
+                    "content_type": content_type,
                     "total_chunks": metadata_payload.get("total_chunks", total_chunks),
                     "total_lessons": len(unique_lessons),
                     "processed_at": metadata_payload.get("processed_at"),
                 },
+                "metadata": metadata_payload,  # Trả về toàn bộ metadata bao gồm file_url và uploaded_at
                 "statistics": {
                     "total_chunks": total_chunks,
                     "total_lessons": len(unique_lessons),
