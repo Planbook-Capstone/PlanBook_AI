@@ -56,22 +56,24 @@ class SupabaseStorageService:
         self._ensure_service_initialized()
         return self.supabase_client is not None
     
-    async def upload_pdf_file(
-        self, 
-        file_content: bytes, 
-        book_id: str, 
+    async def upload_document_file(
+        self,
+        file_content: bytes,
+        book_id: str,
         lesson_id: Optional[str] = None,
-        original_filename: Optional[str] = None
+        original_filename: Optional[str] = None,
+        file_type: str = "pdf"
     ) -> Dict[str, Any]:
         """
-        Upload file PDF lên Supabase Storage
-        
+        Upload file document (PDF hoặc DOCX) lên Supabase Storage
+
         Args:
-            file_content: Nội dung file PDF
+            file_content: Nội dung file
             book_id: ID của sách
             lesson_id: ID của bài học (optional)
             original_filename: Tên file gốc (optional)
-            
+            file_type: Loại file ("pdf" hoặc "docx")
+
         Returns:
             Dict chứa thông tin file đã upload và URL
         """
@@ -82,19 +84,27 @@ class SupabaseStorageService:
             }
         
         try:
+            # Xác định extension và content-type
+            if file_type.lower() == "docx":
+                extension = "docx"
+                content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            else:  # default to PDF
+                extension = "pdf"
+                content_type = "application/pdf"
+
             # Tạo tên file unique
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             file_id = str(uuid.uuid4())[:8]
-            
+
             if lesson_id:
-                filename = f"{book_id}_{lesson_id}_{timestamp}_{file_id}.pdf"
+                filename = f"{book_id}_{lesson_id}_{timestamp}_{file_id}.{extension}"
             else:
-                filename = f"{book_id}_{timestamp}_{file_id}.pdf"
+                filename = f"{book_id}_{timestamp}_{file_id}.{extension}"
             
             # Tạo đường dẫn file trong bucket theo cấu trúc thư mục
             file_path = f"{book_id}/{filename}"
             
-            logger.info(f"Uploading PDF to Supabase: {file_path}")
+            logger.info(f"Uploading {file_type.upper()} to Supabase: {file_path}")
             
             # Upload file lên Supabase Storage
             try:
@@ -102,7 +112,7 @@ class SupabaseStorageService:
                     path=file_path,
                     file=file_content,
                     file_options={
-                        "content-type": "application/pdf",
+                        "content-type": content_type,
                         "upsert": "true"  # Sửa từ True thành "true"
                     }
                 )
@@ -130,7 +140,7 @@ class SupabaseStorageService:
             # Lưu thời gian upload
             upload_time = datetime.now()
 
-            logger.info(f"Successfully uploaded PDF to Supabase: {file_url}")
+            logger.info(f"Successfully uploaded {file_type.upper()} to Supabase: {file_url}")
 
             return {
                 "success": True,
@@ -145,12 +155,104 @@ class SupabaseStorageService:
             }
             
         except Exception as e:
-            logger.error(f"Error uploading PDF to Supabase: {e}")
+            logger.error(f"Error uploading document to Supabase: {e}")
             return {
                 "success": False,
                 "error": f"Upload error: {str(e)}"
             }
+
+    async def upload_pdf_file(
+        self,
+        file_content: bytes,
+        book_id: str,
+        lesson_id: Optional[str] = None,
+        original_filename: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Backward compatibility method for PDF upload
+        """
+        return await self.upload_document_file(
+            file_content=file_content,
+            book_id=book_id,
+            lesson_id=lesson_id,
+            original_filename=original_filename,
+            file_type="pdf"
+        )
+
+    async def upload_docx_file(
+        self,
+        file_content: bytes,
+        book_id: str,
+        lesson_id: Optional[str] = None,
+        original_filename: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Upload DOCX file lên Supabase Storage
+        """
+        return await self.upload_document_file(
+            file_content=file_content,
+            book_id=book_id,
+            lesson_id=lesson_id,
+            original_filename=original_filename,
+            file_type="docx"
+        )
     
+    async def delete_file_by_url(self, file_url: str) -> Dict[str, Any]:
+        """
+        Xóa file từ Supabase Storage bằng URL
+
+        Args:
+            file_url: URL của file cần xóa
+
+        Returns:
+            Dict chứa kết quả xóa file
+        """
+        if not self.is_available():
+            return {
+                "success": False,
+                "error": "Supabase service not available"
+            }
+
+        try:
+            # Extract file path from URL
+            # URL format: https://project.supabase.co/storage/v1/object/public/bucket/path/to/file
+            if "/storage/v1/object/public/" in file_url:
+                # Split URL to get path after bucket name
+                url_parts = file_url.split("/storage/v1/object/public/")
+                if len(url_parts) > 1:
+                    # Remove bucket name from path
+                    path_with_bucket = url_parts[1]
+                    # Remove query parameters if any
+                    path_with_bucket = path_with_bucket.split('?')[0]
+                    # Remove bucket name (first part)
+                    path_parts = path_with_bucket.split('/', 1)
+                    if len(path_parts) > 1:
+                        file_path = path_parts[1]
+                    else:
+                        return {
+                            "success": False,
+                            "error": f"Invalid URL format: cannot extract file path from {file_url}"
+                        }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Invalid URL format: {file_url}"
+                    }
+            else:
+                return {
+                    "success": False,
+                    "error": f"Invalid Supabase URL format: {file_url}"
+                }
+
+            return await self.delete_pdf_file(file_path)
+
+        except Exception as e:
+            logger.error(f"Error deleting file by URL: {e}")
+            return {
+                "success": False,
+                "error": f"Delete error: {str(e)}"
+            }
+
     async def delete_pdf_file(self, file_path: str) -> Dict[str, Any]:
         """
         Xóa file PDF từ Supabase Storage
