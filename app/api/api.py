@@ -145,7 +145,7 @@ async def handle_incoming_message(data: dict):
         # Process message based on type
         if message_type == "lesson_plan_request":
             await handle_lesson_plan_request(data)
-        elif message_type == "Chấm điểm":
+        elif message_type == "Tạo giáo án":
             await handle_lesson_plan_content_generation_request(data)
         elif message_type == "exam_generation_request":
             await handle_exam_generation_request(data)
@@ -223,6 +223,7 @@ async def handle_lesson_plan_content_generation_request(data: dict):
         user_id = data.get("user_id", "")
         lesson_plan_json = data.get("lesson_plan_json", {})
         lesson_id = data.get("lesson_id", "")
+        book_id = data.get("bookID", "")  # Lấy bookID từ SpringBoot message
         tool_log_id = lesson_plan_json.get("tool_log_id","")
         if not user_id:
             print(f"[KAFKA] ❌ Missing user_id in lesson plan content generation request")
@@ -247,14 +248,16 @@ async def handle_lesson_plan_content_generation_request(data: dict):
         request_obj = LessonPlanContentRequest(
             lesson_plan_json=lesson_plan_json,
             lesson_id=lesson_id,
-            user_id=user_id
+            user_id=user_id,
+            bookID=book_id
         )
 
         # Create task using background task processor
         task_id = await get_background_task_processor().create_lesson_plan_content_task(
             lesson_plan_json=request_obj.lesson_plan_json,
             lesson_id=request_obj.lesson_id,
-            user_id=request_obj.user_id
+            user_id=request_obj.user_id,
+            book_id=request_obj.bookID
         )
 
         # Send initial response back via Kafka
