@@ -223,7 +223,7 @@ async def handle_lesson_plan_content_generation_request(data: dict):
         user_id = data.get("user_id", "")
         lesson_plan_json = data.get("lesson_plan_json", {})
         lesson_id = data.get("lesson_id", "")
-        book_id = data.get("bookID", "")  # Lấy bookID từ SpringBoot message
+        # book_id = data.get("book_id", "")  # Lấy bookID từ SpringBoot message
         tool_log_id = lesson_plan_json.get("tool_log_id","")
         if not user_id:
             print(f"[KAFKA] ❌ Missing user_id in lesson plan content generation request")
@@ -249,7 +249,7 @@ async def handle_lesson_plan_content_generation_request(data: dict):
             lesson_plan_json=lesson_plan_json,
             lesson_id=lesson_id,
             user_id=user_id,
-            bookID=book_id
+            # book_id=book_id
         )
 
         # Create task using background task processor
@@ -257,7 +257,7 @@ async def handle_lesson_plan_content_generation_request(data: dict):
             lesson_plan_json=request_obj.lesson_plan_json,
             lesson_id=request_obj.lesson_id,
             user_id=request_obj.user_id,
-            book_id=request_obj.bookID
+            # book_id=request_obj.book_id
         )
 
         # Send initial response back via Kafka
