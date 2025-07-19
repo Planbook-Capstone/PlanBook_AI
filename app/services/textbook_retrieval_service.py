@@ -22,12 +22,13 @@ class TextbookRetrievalService:
             self.qdrant_service = get_qdrant_service()
         return self.qdrant_service
     
-    async def _find_lesson_in_collections(self, lesson_id: str) -> Dict[str, Any]:
+    async def _find_lesson_in_collections(self, lesson_id: str, book_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Tìm lesson trong các textbook collections theo pattern textbook_bookId
 
         Args:
             lesson_id: ID của lesson cần tìm
+            book_id: ID của book cụ thể (optional). Nếu có thì chỉ tìm trong collection textbook_{book_id}
 
         Returns:
             Dict chứa thông tin lesson hoặc error
@@ -39,20 +40,42 @@ class TextbookRetrievalService:
             return {"success": False, "error": "Qdrant service not available"}
 
         try:
-            # Tìm trong các textbook collections theo pattern textbook_bookId
-            collections = qdrant_service.qdrant_client.get_collections().collections
-            for collection in collections:
-                # Chỉ tìm trong các collection có pattern textbook_
-                if collection.name.startswith("textbook_"):
-                    try:
-                        result = await self._search_in_collection(collection.name, lesson_id)
-                        if result["success"]:
-                            return result
-                    except Exception as e:
-                        logger.warning(f"Error searching in collection {collection.name}: {e}")
-                        continue
+            # Nếu có book_id cụ thể, chỉ tìm trong collection đó
+            if book_id:
+                collection_name = f"textbook_{book_id}"
+                try:
+                    # Kiểm tra collection có tồn tại không
+                    collections = qdrant_service.qdrant_client.get_collections().collections
+                    collection_exists = any(col.name == collection_name for col in collections)
 
-            return {"success": False, "error": f"Lesson {lesson_id} not found in any textbook collection"}
+                    if not collection_exists:
+                        return {"success": False, "error": f"Collection {collection_name} not found"}
+
+                    result = await self._search_in_collection(collection_name, lesson_id)
+                    if result["success"]:
+                        return result
+                    else:
+                        return {"success": False, "error": f"Lesson {lesson_id} not found in book {book_id}"}
+
+                except Exception as e:
+                    logger.error(f"Error searching in specific collection {collection_name}: {e}")
+                    return {"success": False, "error": str(e)}
+
+            # Nếu không có book_id, tìm trong tất cả textbook collections
+            else:
+                collections = qdrant_service.qdrant_client.get_collections().collections
+                for collection in collections:
+                    # Chỉ tìm trong các collection có pattern textbook_
+                    if collection.name.startswith("textbook_"):
+                        try:
+                            result = await self._search_in_collection(collection.name, lesson_id)
+                            if result["success"]:
+                                return result
+                        except Exception as e:
+                            logger.warning(f"Error searching in collection {collection.name}: {e}")
+                            continue
+
+                return {"success": False, "error": f"Lesson {lesson_id} not found in any textbook collection"}
 
         except Exception as e:
             logger.error(f"Error finding lesson {lesson_id}: {e}")
@@ -147,18 +170,19 @@ class TextbookRetrievalService:
             logger.error(f"Error processing search result: {e}")
             return {"success": False, "error": str(e)}
 
-    async def get_lesson_content(self, lesson_id: str) -> Dict[str, Any]:
+    async def get_lesson_content(self, lesson_id: str, book_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Lấy nội dung của một lesson
 
         Args:
             lesson_id: ID của lesson cần lấy
+            book_id: ID của book cụ thể (optional). Nếu có thì chỉ tìm trong collection textbook_{book_id}
 
         Returns:
             Dict chứa lesson content và metadata
         """
         try:
-            result = await self._find_lesson_in_collections(lesson_id)
+            result = await self._find_lesson_in_collections(lesson_id, book_id)
 
             if not result["success"]:
                 raise HTTPException(status_code=404, detail=result["error"])
@@ -179,12 +203,13 @@ class TextbookRetrievalService:
             logger.error(f"Error getting lesson content for {lesson_id}: {e}")
             raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-    async def get_multiple_lessons_content(self, lesson_ids: List[str]) -> Dict[str, Any]:
+    async def get_multiple_lessons_content(self, lesson_ids: List[str], book_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Lấy nội dung của nhiều lessons
 
         Args:
             lesson_ids: Danh sách ID của các lessons cần lấy
+            book_id: ID của book cụ thể (optional). Nếu có thì chỉ tìm trong collection textbook_{book_id}
 
         Returns:
             Dict chứa nội dung tất cả lessons
@@ -195,7 +220,7 @@ class TextbookRetrievalService:
 
             for lesson_id in lesson_ids:
                 try:
-                    result = await self._find_lesson_in_collections(lesson_id)
+                    result = await self._find_lesson_in_collections(lesson_id, book_id)
 
                     if result["success"]:
                         lessons_content[lesson_id] = {
@@ -229,19 +254,20 @@ class TextbookRetrievalService:
                 "errors": [str(e)]
             }
 
-    async def get_lesson_content_for_exam(self, lesson_id: str) -> Dict[str, Any]:
+    async def get_lesson_content_for_exam(self, lesson_id: str, book_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Lấy nội dung lesson tối ưu cho việc tạo đề thi
         Ưu tiên các chunks có concepts và semantic_tag phù hợp
 
         Args:
             lesson_id: ID của lesson cần lấy
+            book_id: ID của book cụ thể (optional). Nếu có thì chỉ tìm trong collection textbook_{book_id}
 
         Returns:
             Dict chứa lesson content được tối ưu cho exam generation
         """
         try:
-            result = await self._find_lesson_in_collections(lesson_id)
+            result = await self._find_lesson_in_collections(lesson_id, book_id)
 
             if not result["success"]:
                 return {"success": False, "error": result["error"]}
@@ -276,19 +302,20 @@ class TextbookRetrievalService:
             logger.error(f"Error getting lesson content for exam {lesson_id}: {e}")
             return {"success": False, "error": str(e)}
 
-    async def get_lesson_content_for_lesson_plan(self, lesson_id: str) -> Dict[str, Any]:
+    async def get_lesson_content_for_lesson_plan(self, lesson_id: str, book_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Lấy nội dung lesson tối ưu cho việc tạo giáo án
         Ưu tiên các chunks có cấu trúc và thông tin giảng dạy
 
         Args:
             lesson_id: ID của lesson cần lấy
+            book_id: ID của book cụ thể (optional). Nếu có thì chỉ tìm trong collection textbook_{book_id}
 
         Returns:
             Dict chứa lesson content được tối ưu cho lesson plan generation
         """
         try:
-            result = await self._find_lesson_in_collections(lesson_id)
+            result = await self._find_lesson_in_collections(lesson_id, book_id)
 
             if not result["success"]:
                 return {"success": False, "error": result["error"]}
@@ -323,12 +350,13 @@ class TextbookRetrievalService:
             logger.error(f"Error getting lesson content for lesson plan {lesson_id}: {e}")
             return {"success": False, "error": str(e)}
 
-    async def get_multiple_lessons_content_for_exam(self, lesson_ids: List[str]) -> Dict[str, Any]:
+    async def get_multiple_lessons_content_for_exam(self, lesson_ids: List[str], book_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Lấy nội dung nhiều lessons tối ưu cho việc tạo đề thi
 
         Args:
             lesson_ids: Danh sách ID của các lessons cần lấy
+            book_id: ID của book cụ thể (optional). Nếu có thì chỉ tìm trong collection textbook_{book_id}
 
         Returns:
             Dict chứa nội dung tất cả lessons được tối ưu cho exam generation
@@ -338,7 +366,7 @@ class TextbookRetrievalService:
             errors = []
 
             for lesson_id in lesson_ids:
-                result = await self.get_lesson_content_for_exam(lesson_id)
+                result = await self.get_lesson_content_for_exam(lesson_id, book_id)
 
                 if result["success"]:
                     lessons_content[lesson_id] = result

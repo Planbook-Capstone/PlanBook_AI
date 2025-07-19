@@ -182,6 +182,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
         lesson_plan_json = task_data.get("lesson_plan_json")
         lesson_id = task_data.get("lesson_id")
         user_id = task_data.get("user_id")
+        book_id = task_data.get("book_id")  # Lấy book_id từ task data
         tool_log_id = lesson_plan_json.get("tool_log_id")
         logger.info(f"tool_log_id : {tool_log_id}")
         print(f"DEBUG: lesson_plan_json type: {type(lesson_plan_json)}, lesson_id: {lesson_id}")
@@ -244,7 +245,8 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
 
         result = await lesson_plan_content_service.generate_lesson_plan_content(
             lesson_plan_json=lesson_plan_json,
-            lesson_id=lesson_id
+            lesson_id=lesson_id,
+            book_id=book_id
         )
         logger.info(f"Content generation completed for task {task_id}: success={result.get('success')}")
 
