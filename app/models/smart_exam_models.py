@@ -87,6 +87,7 @@ class SmartExamRequest(BaseModel):
     examCode: Optional[str] = Field(None, description="Mã đề thi (4 số, VD: 0335). Nếu không truyền sẽ tự động random")
     outputFormat: Literal["docx"] = Field("docx", description="Định dạng file xuất ra")
     outputLink: Literal["online"] = Field("online", description="Loại link trả về")
+    bookID: Optional[str] = Field(None, description="ID của sách giáo khoa (optional). Nếu có thì chỉ tìm lessons trong collection textbook_{bookID}")
     matrix: List[LessonMatrixModel] = Field(..., description="Ma trận đề thi theo bài học")
 
     @validator('matrix')
@@ -125,6 +126,7 @@ class SmartExamRequest(BaseModel):
                 "examCode": "0335",
                 "outputFormat": "docx",
                 "outputLink": "online",
+                "bookID": "hoa12",
                 "matrix": [
                     {
                         "lessonId": "hoa12_bai1",
