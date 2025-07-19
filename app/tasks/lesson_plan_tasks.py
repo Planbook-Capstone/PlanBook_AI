@@ -92,7 +92,7 @@ def process_lesson_plan_content_generation(self, task_id: str) -> Dict[str, Any]
         # Update Celery state
         self.update_state(
             state="PROGRESS",
-            meta={"progress": 0, "message": "Starting lesson plan content generation..."}
+            meta={"progress": 0, "message": "Đang bắt đầu tạo nội dung giáo án..."}
         )
         
         # Run async implementation
@@ -197,7 +197,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
 
         # Update progress: Starting analysis
         await mongodb_task_service.update_task_progress(
-            task_id, 10, "Analyzing lesson plan structure..."
+            task_id, 10, "Đang phân tích cấu trúc giáo án..."
         )
         # Send sync progress update to SpringBoot (with timeout protection)
         if user_id:
@@ -205,7 +205,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
             safe_kafka_call(
                 sync_kafka_progress_service.send_progress_update_sync,
                 tool_log_id=lesson_plan_json.get("tool_log_id"),task_id=task_id, user_id=user_id, progress=10,
-                message="Analyzing lesson plan structure...", status="processing",
+                message="Đang phân tích cấu trúc giáo án...", status="processing",
                 additional_data={"lesson_id": lesson_id} if lesson_id else None
             )
 
@@ -215,27 +215,27 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
 
         # Update progress: Structure analyzed
         await mongodb_task_service.update_task_progress(
-            task_id, 20, f"Found {total_nodes} nodes to process. Starting content generation..."
+            task_id, 20, f"Đã tìm thấy {total_nodes} node cần xử lý. Bắt đầu tạo nội dung..."
         )
         # Send sync progress update to SpringBoot
         if user_id:
             safe_kafka_call(
                 sync_kafka_progress_service.send_progress_update_sync,
                 tool_log_id=tool_log_id,task_id=task_id, user_id=user_id, progress=20,
-                message=f"Found {total_nodes} nodes to process. Starting content generation...",
+                message=f"Đã tìm thấy {total_nodes} node cần xử lý. Bắt đầu tạo nội dung...",
                 status="processing"
             )
 
         # Update progress: Starting content generation
         await mongodb_task_service.update_task_progress(
-            task_id, 50, "Generating lesson plan content with textbook reference..."
+            task_id, 50, "Đang tạo nội dung giáo án với tài liệu tham khảo từ sách giáo khoa..."
         )
         # Send sync progress update to SpringBoot
         if user_id:
             safe_kafka_call(
                 sync_kafka_progress_service.send_progress_update_sync,
                 tool_log_id=tool_log_id,task_id=task_id, user_id=user_id, progress=50,
-                message="Generating lesson plan content with textbook reference...",
+                message="Đang tạo nội dung giáo án với tài liệu tham khảo từ sách giáo khoa...",
                 status="processing"
             )
 
@@ -252,27 +252,27 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
 
         # Update progress: Content generation completed
         await mongodb_task_service.update_task_progress(
-            task_id, 90, "Content generation completed. Processing results..."
+            task_id, 90, "Đã hoàn thành tạo nội dung. Đang xử lý kết quả..."
         )
         # Send sync progress update to SpringBoot
         if user_id:
             safe_kafka_call(
                 sync_kafka_progress_service.send_progress_update_sync,
                 tool_log_id=tool_log_id,task_id=task_id, user_id=user_id, progress=90,
-                message="Content generation completed. Processing results...",
+                message="Đã hoàn thành tạo nội dung. Đang xử lý kết quả...",
                 status="processing"
             )
 
         # Update progress: Finalizing
         await mongodb_task_service.update_task_progress(
-            task_id, 95, "Finalizing lesson plan content..."
+            task_id, 95, "Đang hoàn thiện nội dung giáo án..."
         )
         # Send sync progress update to SpringBoot
         if user_id:
             safe_kafka_call(
                 sync_kafka_progress_service.send_progress_update_sync,
                 tool_log_id=tool_log_id,task_id=task_id, user_id=user_id, progress=95,
-                message="Finalizing lesson plan content...", status="processing"
+                message="Đang hoàn thiện nội dung giáo án...", status="processing"
             )
         
         # Prepare final result
