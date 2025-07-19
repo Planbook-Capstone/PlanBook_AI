@@ -108,7 +108,13 @@ def process_smart_exam_generation(task_id: str) -> Dict[str, Any]:
         # Bước 2: Lấy nội dung bài học
         progress_callback(20, "Đang tìm kiếm nội dung bài học từ cơ sở dữ liệu...")
         textbook_service = get_textbook_retrieval_service()
-        lesson_content = run_async_task(textbook_service.get_multiple_lessons_content_for_exam(lesson_ids))
+
+        # Lấy bookID từ request nếu có
+        book_id = getattr(exam_request, 'bookID', None)
+        if book_id:
+            progress_callback(22, f"Tìm kiếm trong sách: {book_id}")
+
+        lesson_content = run_async_task(textbook_service.get_multiple_lessons_content_for_exam(lesson_ids, book_id))
 
         if not lesson_content.get("success", False):
             error_result = create_error_result(task_id,
