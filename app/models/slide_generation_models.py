@@ -121,44 +121,83 @@ class SlideGenerationResponse(BaseModel):
 
 class SlideGenerationTaskRequest(BaseModel):
     """Request model cho Celery task slide generation"""
-    
+
     lesson_id: str = Field(
-        ..., 
+        ...,
         description="ID của bài học cần tạo slide"
     )
-    
+
     template_id: str = Field(
-        ..., 
+        ...,
         description="ID của Google Slides template"
     )
-    
+
     config_prompt: Optional[str] = Field(
         None,
         description="Prompt cấu hình tùy chỉnh cho LLM"
     )
-    
+
     presentation_title: Optional[str] = Field(
         None,
         description="Tiêu đề tùy chỉnh cho presentation"
     )
 
-    @validator('template_id')
-    def validate_template_id(cls, v):
-        """Validate template_id format"""
-        if not v or len(v.strip()) == 0:
-            raise ValueError('template_id cannot be empty')
-        
-        # Nếu là URL đầy đủ, extract ID
-        if 'docs.google.com/presentation/d/' in v:
-            try:
-                parts = v.split('/d/')
-                if len(parts) > 1:
-                    id_part = parts[1].split('/')[0]
-                    return id_part
-            except:
-                pass
-        
-        return v.strip()
+
+# Models cho JSON Template Processing
+class SlideElement(BaseModel):
+    """Model cho element trong slide"""
+
+    id: str = Field(..., description="ID của element")
+    type: str = Field(..., description="Loại element (text, image, etc.)")
+    x: int = Field(..., description="Vị trí X")
+    y: int = Field(..., description="Vị trí Y")
+    width: int = Field(..., description="Chiều rộng")
+    height: int = Field(..., description="Chiều cao")
+    text: str = Field(..., description="Nội dung text")
+    style: Dict[str, Any] = Field(..., description="Style của element")
+
+
+class SlideTemplate(BaseModel):
+    """Model cho slide template"""
+
+    id: str = Field(..., description="ID của slide")
+    title: str = Field(..., description="Tiêu đề slide")
+    elements: List[SlideElement] = Field(..., description="Danh sách elements")
+    isVisible: bool = Field(True, description="Slide có hiển thị không")
+    background: str = Field("#ffffff", description="Màu nền slide")
+
+
+class JsonTemplateRequest(BaseModel):
+    """Request model cho JSON template processing"""
+
+    lesson_id: str = Field(
+        ...,
+        description="ID của bài học cần tạo slide"
+    )
+
+    template: Dict[str, Any] = Field(
+        ...,
+        description="JSON template từ frontend"
+    )
+
+    config_prompt: Optional[str] = Field(
+        None,
+        description="Prompt cấu hình tùy chỉnh cho LLM"
+    )
+
+
+class JsonTemplateResponse(BaseModel):
+    """Response model cho JSON template processing"""
+
+    success: bool = Field(..., description="Trạng thái thành công")
+    lesson_id: Optional[str] = Field(None, description="ID bài học")
+    processed_template: Optional[Dict[str, Any]] = Field(None, description="Template đã xử lý")
+    slides_created: Optional[int] = Field(None, description="Số slide đã tạo")
+    error: Optional[str] = Field(None, description="Thông báo lỗi nếu có")
+    created_at: Optional[datetime] = Field(
+        default_factory=datetime.now,
+        description="Thời gian tạo"
+    )
 
 
 class SlideGenerationTaskResponse(BaseModel):

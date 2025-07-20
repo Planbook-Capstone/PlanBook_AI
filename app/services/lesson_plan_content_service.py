@@ -1122,7 +1122,7 @@ Trả về 1-2 câu ngắn gọn, cụ thể. Không có tiêu đề, không có
         """
         # Template cơ sở chung cho tất cả loại node
         base_template = """
-Bạn là một giáo viên trung học phổ thông Việt Nam giàu kinh nghiệm, chuyên soạn giáo án ngắn gọn và cụ thể.
+Bạn là một giáo viên trung học phổ thông Việt Nam giàu kinh nghiệm, chuyên soạn giáo án chi tiết, cụ thể và sát nội dung bài học.
 
 NHIỆM VỤ: {task_description}
 
@@ -1130,6 +1130,7 @@ THÔNG TIN NODE:
 - ID: {node_id}
 - Tiêu đề: "{node_title}"
 - Loại: {node_type_description}
+
 
 NGỮ CẢNH GIÁO ÁN:
 {context_info}
@@ -1145,7 +1146,7 @@ HƯỚNG DẪN SỬ DỤNG NỘI DUNG THAM KHẢO:
 - Tham khảo chunks có chunk_type="table" cho dữ liệu cụ thể
 
 YÊU CẦU QUAN TRỌNG:
-1. Nội dung PHẢI ngắn gọn, chỉ 2-3 câu (tối đa 100 từ)
+1. Nội dung chi tiết đúng ngữ cảnh phù hợp với môn học đặc biệt đúng phần của giáo án
 2. PHẢI dựa trên nội dung bài học tham khảo ở trên, không được tự sáng tác
 3. PHẢI cụ thể với bài học, không được nói chung chung
 4. Tránh hoàn toàn các cụm từ mở đầu như "Để bắt đầu", "Để giúp học sinh", "Chúng ta cần"
@@ -1154,6 +1155,10 @@ YÊU CẦU QUAN TRỌNG:
 7. Tập trung vào {content_target} cụ thể, không lan man
 8. Khi trích dẫn định nghĩa, bài tập, bảng - đảm bảo trích dẫn đầy đủ ngữ nghĩa
 {specific_requirements}
+9. Phải thực tế giống giáo án thực trong chương trình giảng dạy
+LƯU Ý QUAN TRỌNG:
+- Tuyệt đối bám theo nội dung bài học
+- Bám sát theo cấu trúc của khung giáo án, tạo ra đúng nội dung đúng với phần hiện tại
 
 ĐỊNH DẠNG ĐẦU RA:
 {output_format}
@@ -1162,18 +1167,18 @@ YÊU CẦU QUAN TRỌNG:
         # Cấu hình cụ thể cho từng loại node
         node_configs = {
             "PARAGRAPH": {
-                "task_description": "Viết nội dung ngắn gọn cho mục tiêu học tập này.",
+                "task_description": "Viết nội dung cho mục tiêu học tập này.",
                 "node_type_description": "Mục tiêu học tập (PARAGRAPH)",
                 "content_target": "mục tiêu này",
                 "specific_requirements": "",
-                "output_format": "Trả về 2-3 câu ngắn gọn, cụ thể. Không có tiêu đề, không có cụm từ mở đầu dài."
+                "output_format": "Trả về nội dung chi tiết, cụ thể phù hợp với bài học. Không có tiêu đề, không có cụm từ mở đầu dài."
             },
             "LIST_ITEM": {
-                "task_description": "Viết nội dung ngắn gọn cho mục liệt kê này.",
+                "task_description": "Viết nội dung cho mục liệt kê này. Nếu thiếu hãy bổ sung thêm các ý cần thiết",
                 "node_type_description": "Mục liệt kê (LIST_ITEM)",
                 "content_target": "mục liệt kê này",
                 "specific_requirements": "",
-                "output_format": "Trả về 1-2 câu ngắn gọn hoặc danh sách ngắn với dấu gạch đầu dòng (-). Không có tiêu đề."
+                "output_format": "Trả về danh sách nội dung với dấu gạch đầu dòng (-). Không có tiêu đề."
             },
             "SECTION": {
                 "task_description": "Viết nội dung tổng quan ngắn gọn cho phần này.",
