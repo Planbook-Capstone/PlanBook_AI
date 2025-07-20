@@ -121,7 +121,10 @@ class ExamImportService:
             # Sử dụng dữ liệu đã được clean
             exam_data = validation_result["cleaned_data"]
 
-            # 4. Validate và tạo response
+            # 5. Giữ ID như cũ (mỗi phần bắt đầu từ 1)
+            # exam_data = self._ensure_unique_question_ids(exam_data)  # Commented out
+
+            # 6. Validate và tạo response
             processing_time = time.time() - start_time
 
             # Tính toán statistics
@@ -340,7 +343,9 @@ NỘI DUNG ĐỀ THI:
 
 YÊU CẦU:
 1. Phân tích và trích xuất thông tin đề thi thành JSON với cấu trúc chính xác như mẫu
-2. Xác định môn học, lớp, thời gian làm bài, tên trường
+2. Xác định môn học, lớp, thời gian làm bài, tên trường:
+   - school: Tìm và trích xuất tên trường từ phần đầu đề thi (thường nằm dưới "BỘ GIÁO DỤC VÀ ĐÀO TẠO")
+   - Ví dụ: "TRƯỜNG THPT HONG THINH" → "TRƯỜNG THPT HONG THINH"
 3. Phân chia câu hỏi theo các phần có sẵn trong đề thi:
    - Phần I: Trắc nghiệm nhiều phương án lựa chọn (A, B, C, D) - nếu có
    - Phần II: Trắc nghiệm đúng/sai (a, b, c, d với true/false) - nếu có
@@ -354,7 +359,7 @@ YÊU CẦU:
   "subject": "Hóa học",
   "grade": 12,
   "duration_minutes": 90,
-  "school": "Trường THPT Hong Thinh",
+  "school": "TRƯỜNG THPT HONG THINH",
   "exam_code": "1234",
   "atomic_masses": "H = 1; C = 12; N = 14; O = 16",
   "parts": [
@@ -423,6 +428,8 @@ YÊU CẦU:
 LưU Ý QUAN TRỌNG VỀ CẤU TRÚC:
 - Chỉ trả về JSON hợp lệ, không thêm text giải thích
 - Đảm bảo tất cả câu hỏi và đáp án được trích xuất chính xác
+- QUAN TRỌNG: ID câu hỏi trong mỗi phần bắt đầu từ 1
+  * Ví dụ: Phần I có câu 1-6, Phần II có câu 1-6, Phần III có câu 1-6
 - QUAN TRỌNG: Mỗi loại câu hỏi có cấu trúc khác nhau:
 
   * PHẦN I (Trắc nghiệm nhiều lựa chọn): PHẢI có "options" và "answer"
@@ -458,6 +465,14 @@ LưU Ý QUAN TRỌNG VỀ CẤU TRÚC:
 - Không tạo ra câu hỏi giả cho các phần không có nội dung
 - Đảm bảo field "question" luôn là string không rỗng, không được null
 - Ví dụ: Nếu đề thi chỉ có "PHẦN I" với nội dung câu hỏi, chỉ tạo 1 part cho Phần I, bỏ qua Phần II và III dù có trong đáp án
+- QUAN TRỌNG: Giữ nguyên đáp án từ DOCX, KHÔNG được làm tròn, format hay thay đổi gì
+  * Ví dụ: Nếu đáp án là "1,66" thì giữ nguyên "1,66", không làm tròn thành "2"
+  * Nếu đáp án là "-1" thì giữ nguyên "-1"
+  * Nếu đáp án là "27" thì giữ nguyên "27"
+- QUAN TRỌNG: Trích xuất đúng tên trường từ phần đầu đề thi
+  * Tìm dòng chứa tên trường (thường nằm dưới "BỘ GIÁO DỤC VÀ ĐÀO TẠO")
+  * Ví dụ: "TRƯỜNG THPT ABC" → school: "TRƯỜNG THPT ABC"
+  * Nếu không tìm thấy, để school: null
 
 Hãy phân tích và trả về JSON:
 """
@@ -586,6 +601,7 @@ Hãy phân tích và trả về JSON:
         """
         try:
             logger.info("Starting exam data validation and cleaning...")
+            logger.info(f"Raw exam data from LLM: {json.dumps(exam_data, ensure_ascii=False, indent=2)}")
 
             result = {
                 "is_valid": True,
@@ -751,6 +767,9 @@ Hãy phân tích và trả về JSON:
             Dict chứa kết quả validation và dữ liệu đã clean
         """
         try:
+            logger.info(f"Cleaning question {question_index} in {part_name}")
+            logger.info(f"Question data: {json.dumps(question_data, ensure_ascii=False, indent=2)}")
+
             result = {
                 "is_valid": True,
                 "error": "",
@@ -772,11 +791,19 @@ Hãy phân tích và trả về JSON:
 
             cleaned_question = {
                 "id": int(question_data.get("id", question_index + 1)),
-                "question": str(question_text).strip()
+                "question": str(question_text)
             }
 
             # Clean theo loại phần
-            if "Phần I" in part_name or "PHẦN I" in part_name:
+            logger.info(f"Determining question type for part: '{part_name}'")
+
+            # Xác định loại câu hỏi dựa trên tên phần
+            part_name_upper = part_name.upper().strip()
+            logger.info(f"Part name after processing: '{part_name_upper}'")
+
+            # Sử dụng logic đơn giản để phân loại chính xác
+            if part_name_upper == "PHẦN I":
+                logger.info("Processing as MultipleChoice question (PHẦN I)")
                 # MultipleChoiceQuestion
                 if "options" not in question_data or "answer" not in question_data:
                     result["is_valid"] = False
@@ -790,14 +817,15 @@ Hãy phân tích và trả về JSON:
                     return result
 
                 cleaned_question["options"] = {
-                    "A": str(options.get("A", "")).strip(),
-                    "B": str(options.get("B", "")).strip(),
-                    "C": str(options.get("C", "")).strip(),
-                    "D": str(options.get("D", "")).strip()
+                    "A": options.get("A", ""),
+                    "B": options.get("B", ""),
+                    "C": options.get("C", ""),
+                    "D": options.get("D", "")
                 }
-                cleaned_question["answer"] = str(question_data.get("answer", "")).strip()
+                cleaned_question["answer"] = question_data.get("answer", "")
 
-            elif "Phần II" in part_name or "PHẦN II" in part_name:
+            elif part_name_upper == "PHẦN II":
+                logger.info("Processing as TrueFalse question (PHẦN II)")
                 # TrueFalseQuestion
                 if "statements" not in question_data:
                     result["is_valid"] = False
@@ -819,20 +847,21 @@ Hãy phân tích và trả về JSON:
                         return result
 
                     cleaned_statements[key] = {
-                        "text": str(stmt.get("text", "")).strip(),
-                        "answer": bool(stmt.get("answer", False))
+                        "text": stmt.get("text", ""),
+                        "answer": stmt.get("answer", False)
                     }
 
                 cleaned_question["statements"] = cleaned_statements
 
-            elif "Phần III" in part_name or "PHẦN III" in part_name:
+            elif part_name_upper == "PHẦN III":
+                logger.info("Processing as ShortAnswer question (PHẦN III)")
                 # ShortAnswerQuestion
                 if "answer" not in question_data:
                     result["is_valid"] = False
                     result["error"] = "ShortAnswer question missing 'answer'"
                     return result
 
-                cleaned_question["answer"] = str(question_data.get("answer", "")).strip()
+                cleaned_question["answer"] = question_data.get("answer", "")
 
             else:
                 result["is_valid"] = False
@@ -861,7 +890,8 @@ Hãy phân tích và trả về JSON:
         """
         try:
             parts = exam_data.get("parts", [])
-            
+            logger.info(f"Calculating statistics for {len(parts)} parts")
+
             total_questions = 0
             part_1_questions = 0
             part_2_questions = 0
@@ -869,15 +899,21 @@ Hãy phân tích và trả về JSON:
             
             for part in parts:
                 questions = part.get("questions", [])
-                part_name = part.get("part", "").lower()
-                
-                if "i" in part_name or "1" in part_name:
+                part_name = part.get("part", "").upper().strip()
+
+                # Sử dụng logic so sánh chính xác như trong _clean_question
+                if part_name == "PHẦN I":
                     part_1_questions = len(questions)
-                elif "ii" in part_name or "2" in part_name:
+                    logger.info(f"PHẦN I: {len(questions)} questions")
+                elif part_name == "PHẦN II":
                     part_2_questions = len(questions)
-                elif "iii" in part_name or "3" in part_name:
+                    logger.info(f"PHẦN II: {len(questions)} questions")
+                elif part_name == "PHẦN III":
                     part_3_questions = len(questions)
-                
+                    logger.info(f"PHẦN III: {len(questions)} questions")
+                else:
+                    logger.warning(f"Unknown part name for statistics: '{part_name}' with {len(questions)} questions")
+
                 total_questions += len(questions)
             
             has_atomic_masses = bool(exam_data.get("atomic_masses"))
