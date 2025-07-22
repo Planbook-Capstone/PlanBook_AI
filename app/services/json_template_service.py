@@ -36,29 +36,45 @@ class JsonTemplateService:
         config_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Xử lý JSON template với nội dung bài học
-        
+        Xử lý JSON template với workflow tối ưu hóa 3 bước:
+        1. Xây dựng khung slide
+        2. Chi tiết hóa từng slide
+        3. Gắn placeholder
+
         Args:
             lesson_id: ID của bài học
             template_json: JSON template từ frontend
             config_prompt: Prompt cấu hình tùy chỉnh
-            
+
         Returns:
             Dict chứa template đã được xử lý
         """
         try:
-            logger.info(f"🔄 Processing JSON template for lesson: {lesson_id}")
+            logger.info(f"🔄 Starting optimized workflow for lesson: {lesson_id}")
             logger.info(f"🔍 Template JSON type: {type(template_json)}")
             logger.info(f"🔍 Config prompt: {config_prompt}")
+
+            # Validation: Kiểm tra input rỗng hoặc thiếu dữ liệu quan trọng
+            if not lesson_id or not lesson_id.strip():
+                raise ValueError("lesson_id is empty or missing")
+
+            if not template_json or not isinstance(template_json, dict):
+                raise ValueError("template_json is empty or invalid")
+
+            if not template_json.get("slides") or len(template_json.get("slides", [])) == 0:
+                raise ValueError("template_json has no slides")
 
             # Bước 1: Lấy nội dung bài học
             lesson_content = await self._get_lesson_content(lesson_id)
             logger.info(f"🔍 Lesson content result type: {type(lesson_content)}")
-            logger.info(f"🔍 Lesson content keys: {list(lesson_content.keys()) if isinstance(lesson_content, dict) else 'Not a dict'}")
 
             if not lesson_content.get("success", False):
                 error_msg = lesson_content.get("error", "Unknown error in lesson content")
                 raise Exception(error_msg)
+
+            content_text = lesson_content.get("content", "")
+            if not content_text or not content_text.strip():
+                raise ValueError("lesson content is empty")
 
             # Bước 2: Phân tích template và detect placeholders
             try:
@@ -67,39 +83,41 @@ class JsonTemplateService:
             except Exception as e:
                 raise Exception(f"Failed to analyze template: {str(e)}")
 
-            # Bước 3: Sinh nội dung với LLM
-            presentation_content = await self._generate_presentation_content(
-                lesson_content.get("content", ""),
-                config_prompt
+            # Workflow tối ưu hóa 3 bước
+            result = await self._execute_optimized_workflow(
+                content_text,
+                config_prompt,
+                template_json,
+                analyzed_template
             )
-            logger.info(f"🔍 Presentation content result type: {type(presentation_content)}")
-            logger.info(f"🔍 Presentation content keys: {list(presentation_content.keys()) if isinstance(presentation_content, dict) else 'Not a dict'}")
 
-            if not presentation_content.get("success", False):
-                error_msg = presentation_content.get("error", "Unknown error in presentation content")
-                raise Exception(error_msg)
-
-            # Bước 4: Map nội dung vào template
-            try:
-                processed_template = await self._map_content_to_json_template(
-                    presentation_content.get("content", ""),
-                    template_json,
-                    analyzed_template
-                )
-            except Exception as e:
-                raise Exception(f"Failed to map content to template: {str(e)}")
+            # Format nội dung cho frontend (xuống dòng đẹp)
+            formatted_result = self._format_content_for_frontend(result)
 
             # Trả về kết quả với success flag
             return {
                 "success": True,
                 "lesson_id": lesson_id,
-                "processed_template": processed_template,
-                "slides_created": len(processed_template.get("slides", []))
+                "processed_template": formatted_result,
+                "slides_created": len(formatted_result.get("slides", []))
             }
 
+        except ValueError as ve:
+            logger.error(f"❌ Validation error: {ve}")
+            return {
+                "success": False,
+                "error": f"Input validation failed: {str(ve)}",
+                "lesson_id": lesson_id,
+                "processed_template": {
+                    "version": "1.0",
+                    "createdAt": datetime.now().isoformat(),
+                    "slideFormat": "16:9",
+                    "slides": []
+                },
+                "slides_created": 0
+            }
         except Exception as e:
             logger.error(f"❌ Error processing JSON template: {e}")
-            # Trả về lỗi với success flag
             return {
                 "success": False,
                 "error": f"Failed to process JSON template: {str(e)}",
@@ -150,6 +168,981 @@ class JsonTemplateService:
                 "success": False,
                 "error": f"Failed to get lesson content: {str(e)}"
             }
+
+    def _format_content_for_frontend(self, template_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Format nội dung cho frontend - chuyển \\n thành xuống dòng thật và thêm gạch đầu dòng
+        """
+        try:
+            logger.info("🎨 Formatting content for frontend...")
+
+            # Deep copy để không ảnh hưởng data gốc
+            formatted_data = copy.deepcopy(template_data)
+
+            slides = formatted_data.get("slides", [])
+            for slide in slides:
+                elements = slide.get("elements", [])
+                for element in elements:
+                    text = element.get("text", "")
+                    if text and isinstance(text, str):
+                        # Format text đẹp cho frontend
+                        formatted_text = self._format_text_content(text)
+                        element["text"] = formatted_text
+
+                        # Log để debug
+                        if "\\n" in text or len(text.split('\n')) > 1:
+                            logger.info(f"🎨 Formatted text in element {element.get('id', 'unknown')}:")
+                            logger.info(f"   Before: {text[:100]}...")
+                            logger.info(f"   After: {formatted_text[:100]}...")
+
+            logger.info(f"✅ Content formatting complete for {len(slides)} slides")
+            return formatted_data
+
+        except Exception as e:
+            logger.error(f"❌ Error formatting content for frontend: {e}")
+            # Trả về data gốc nếu format lỗi
+            return template_data
+
+    def _format_text_content(self, text: str) -> str:
+        """
+        Format text content với gạch đầu dòng cho TẤT CẢ các câu
+        """
+        try:
+            # Chuyển \\n thành xuống dòng thật
+            formatted_text = text.replace("\\n", "\n")
+
+            # Split thành các dòng
+            lines = formatted_text.split('\n')
+
+            # Nếu chỉ có 1 dòng, thêm gạch đầu dòng và trả về
+            if len(lines) <= 1:
+                line = formatted_text.strip()
+                if not line:
+                    return ""
+                # Kiểm tra xem đã có gạch đầu dòng chưa
+                if line.startswith('- ') or line.startswith('• ') or line.startswith('* '):
+                    return line
+                else:
+                    return f"- {line}"
+
+            # Format từng dòng - THÊM GẠCH ĐẦU DÒNG CHO TẤT CẢ
+            formatted_lines = []
+            for line in lines:
+                line = line.strip()
+                if not line:  # Bỏ qua dòng trống
+                    continue
+
+                # Kiểm tra xem dòng đã có gạch đầu dòng chưa
+                if line.startswith('- ') or line.startswith('• ') or line.startswith('* '):
+                    formatted_lines.append(line)
+                else:
+                    # Thêm gạch đầu dòng cho TẤT CẢ các dòng
+                    formatted_lines.append(f"- {line}")
+
+            # Ghép lại với xuống dòng
+            result = '\n'.join(formatted_lines)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ Error formatting text content: {e}")
+            # Trả về text gốc nếu lỗi
+            return text.replace("\\n", "\n")
+
+    async def _execute_optimized_workflow(
+        self,
+        lesson_content: str,
+        config_prompt: Optional[str],
+        template_json: Dict[str, Any],
+        analyzed_template: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Thực hiện workflow tối ưu hóa 3 bước:
+        1. Xây dựng khung slide
+        2. Chi tiết hóa từng slide
+        3. Gắn placeholder
+        """
+        try:
+            logger.info("🚀 Starting optimized 3-step workflow...")
+
+            # Bước 1: Xây dựng khung slide
+            logger.info("📋 Step 1: Generating slide framework...")
+            slide_framework = await self._generate_slide_framework(
+                lesson_content,
+                config_prompt
+            )
+
+            if not slide_framework.get("success", False):
+                raise Exception(f"Step 1 failed: {slide_framework.get('error', 'Unknown error')}")
+
+            framework_slides = slide_framework.get("slides", [])
+            logger.info(f"✅ Step 1 complete: Generated {len(framework_slides)} slide frameworks")
+            logger.info(f"---------slide: {framework_slides}")
+
+            # Bước 2 & 3: Chi tiết hóa từng slide, gắn placeholder và map ngay lập tức
+            final_template = {
+                "version": template_json.get("version", "1.0"),
+                "createdAt": datetime.now().isoformat(),
+                "slideFormat": template_json.get("slideFormat", "16:9"),
+                "slides": []
+            }
+
+            # Content index để track việc sử dụng content
+            all_parsed_data = {
+                "LessonName": [],
+                "LessonDescription": [],
+                "CreatedDate": [],
+                "TitleName": [],
+                "TitleContent": [],
+                "SubtitleName": [],
+                "SubtitleContent": [],
+                "ImageName": [],
+                "ImageContent": []
+            }
+
+            content_index = {
+                "LessonName": 0,
+                "LessonDescription": 0,
+                "CreatedDate": 0,
+                "TitleName": 0,
+                "TitleContent": 0,
+                "SubtitleName": 0,
+                "SubtitleContent": 0,
+                "ImageName": 0,
+                "ImageContent": 0
+            }
+
+            # Track used slides để tránh duplicate
+            used_slide_ids = set()
+            template_slides = analyzed_template.get("slides", [])
+
+            for i, framework_slide in enumerate(framework_slides):
+                slide_num = i + 1
+                logger.info(f"🔄 Processing slide {slide_num}/{len(framework_slides)}")
+
+                # Bước 2: Chi tiết hóa slide
+                detailed_slide = await self._detail_slide_content(
+                    framework_slide,
+                    lesson_content,
+                    config_prompt,
+                    slide_num
+                )
+
+                if not detailed_slide.get("success", False):
+                    logger.error(f"❌ Step 2 failed for slide {slide_num}: {detailed_slide.get('error', 'Unknown error')}")
+                    continue  # Skip slide này
+                logger.info(f"---------detailed_slide: {detailed_slide}")
+
+                # Bước 3: Gắn placeholder
+                slide_with_placeholders = await self._map_placeholders(
+                    detailed_slide.get("content", ""),
+                    slide_num
+                )
+
+                if not slide_with_placeholders.get("success", False):
+                    logger.error(f"❌ Step 3 failed for slide {slide_num}: {slide_with_placeholders.get('error', 'Unknown error')}")
+                    continue  # Skip slide này
+
+                slide_data = slide_with_placeholders.get("slide_data", {})
+                logger.info(f"✅ Slide {slide_num} content processed successfully")
+
+                # Bước 4: Map ngay lập tức vào template
+                mapped_slide = await self._map_single_slide_to_template(
+                    slide_data,
+                    template_slides,
+                    used_slide_ids,
+                    all_parsed_data,
+                    content_index,
+                    slide_num
+                )
+
+                if mapped_slide:
+                    final_template["slides"].append(mapped_slide)
+                    logger.info(f"✅ Slide {slide_num} mapped to template successfully")
+                else:
+                    logger.error(f"❌ Failed to map slide {slide_num} to template")
+                    continue
+
+            logger.info(f"🎉 Optimized workflow complete: {len(final_template.get('slides', []))} slides created")
+            return final_template
+
+        except Exception as e:
+            logger.error(f"❌ Error in optimized workflow: {e}")
+            raise
+
+    async def _map_single_slide_to_template(
+        self,
+        slide_data: Dict[str, Any],
+        template_slides: List[Dict[str, Any]],
+        used_slide_ids: set,
+        all_parsed_data: Dict[str, List[Dict[str, Any]]],
+        content_index: Dict[str, int],
+        slide_number: int
+    ) -> Dict[str, Any]:
+        """
+        Map một slide đơn lẻ vào template ngay lập tức
+        """
+        try:
+            logger.info(f"🔧 Mapping slide {slide_number} to template...")
+
+            # Lấy parsed data từ slide
+            parsed_data = slide_data.get("parsed_data", {})
+            placeholder_counts = slide_data.get("placeholder_counts", {})
+            required_placeholders = list(placeholder_counts.keys())
+
+            logger.info(f"🔍 Slide {slide_number} requirements:")
+            logger.info(f"   Required placeholders: {required_placeholders}")
+            logger.info(f"   Required counts: {placeholder_counts}")
+
+            # Thêm parsed data vào all_parsed_data
+            for placeholder_type, items in parsed_data.items():
+                all_parsed_data[placeholder_type].extend(items)
+
+            # Tìm template phù hợp CHÍNH XÁC
+            best_template = self._find_exact_matching_template(
+                required_placeholders,
+                placeholder_counts,
+                template_slides,
+                used_slide_ids
+            )
+
+            # Nếu không tìm thấy template chưa sử dụng, cho phép reuse template
+            if not best_template:
+                logger.info(f"🔄 No unused template found for slide {slide_number}, trying to reuse...")
+                best_template = self._find_exact_matching_template_with_reuse(
+                    required_placeholders,
+                    placeholder_counts,
+                    template_slides
+                )
+
+            if not best_template:
+                logger.error(f"❌ No matching template found for slide {slide_number}")
+                return None
+
+            template_id = best_template['slideId']
+            is_reused = template_id in used_slide_ids
+
+            if is_reused:
+                logger.info(f"✅ Found exact matching template (REUSED): {template_id}")
+            else:
+                logger.info(f"✅ Found exact matching template (NEW): {template_id}")
+
+            # Tạo processed slide từ template
+            processed_slide = await self._create_processed_slide_from_template(
+                best_template,
+                all_parsed_data,
+                content_index,
+                slide_number,
+                is_reused
+            )
+
+            if processed_slide:
+                # Chỉ thêm vào used_slide_ids nếu chưa được sử dụng
+                if not is_reused:
+                    used_slide_ids.add(template_id)
+                logger.info(f"✅ Successfully mapped slide {slide_number} ({'reused' if is_reused else 'new'})")
+                return processed_slide
+            else:
+                logger.error(f"❌ Failed to create processed slide {slide_number}")
+                return None
+
+        except Exception as e:
+            logger.error(f"❌ Error mapping slide {slide_number} to template: {e}")
+            return None
+
+    async def _generate_slide_framework(
+        self,
+        lesson_content: str,
+        config_prompt: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Bước 1: Xây dựng khung slide tổng quát
+        Input: lesson_content, default_prompt, config_prompt
+        Output: Khung slide tổng quát (mỗi slide thể hiện một chủ đề chính, ý định và kiến thức cần truyền đạt)
+        """
+        try:
+            logger.info("📋 Generating slide framework...")
+
+            # Tạo prompt cho việc xây dựng khung slide
+            framework_prompt = self._create_framework_prompt(lesson_content, config_prompt)
+
+            # Gọi LLM để tạo khung slide
+            llm_response = await self.llm_service.generate_content(
+                prompt=framework_prompt,
+                max_tokens=10000,
+                temperature=0.1
+            )
+
+            if not llm_response.get("success", False):
+                return {
+                    "success": False,
+                    "error": f"LLM framework generation failed: {llm_response.get('error', 'Unknown error')}"
+                }
+
+            framework_content = llm_response.get("text", "").strip()
+            logger.info(f"✅ Framework content generated: {len(framework_content)} characters")
+
+            # Parse framework content thành danh sách slides
+            slides = self._parse_framework_content(framework_content)
+
+            if not slides:
+                return {
+                    "success": False,
+                    "error": "No slides found in framework content"
+                }
+
+            logger.info(f"✅ Framework parsing complete: {len(slides)} slides")
+            return {
+                "success": True,
+                "slides": slides,
+                "raw_content": framework_content
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Error generating slide framework: {e}")
+            return {
+                "success": False,
+                "error": f"Failed to generate framework: {str(e)}"
+            }
+
+    def _create_framework_prompt(
+        self,
+        lesson_content: str,
+        config_prompt: Optional[str] = None
+    ) -> str:
+        """Tạo prompt cho việc xây dựng khung slide"""
+
+        default_config = config_prompt if config_prompt else """
+Bạn là chuyên gia thiết kế nội dung giáo dục. Hãy phân tích nội dung bài học và tạo khung slide logic, dễ theo dõi.
+"""
+
+        prompt = f"""
+{default_config}
+
+NHIỆM VỤ: Phân tích nội dung bài học và tạo KHUNG SLIDE tổng quát
+
+NỘI DUNG BÀI HỌC:
+{lesson_content}
+
+YÊU CẦU KHUNG SLIDE:
+1. Tách lesson_content thành các slide với mục đích và nội dung chính rõ ràng
+2. Đảm bảo khung slide có tính logic, hợp lý và dễ theo dõi
+3. Mỗi slide thể hiện một chủ đề chính, ý định và kiến thức cần truyền đạt
+4. Không cần chi tiết, chỉ cần khung tổng quát
+
+FORMAT OUTPUT:
+SLIDE 1: [Tiêu đề slide]
+Mục đích: [Mục đích của slide này]
+Nội dung chính: [Tóm tắt nội dung chính cần truyền đạt]
+---
+
+SLIDE 2: [Tiêu đề slide]
+Mục đích: [Mục đích của slide này]
+Nội dung chính: [Tóm tắt nội dung chính cần truyền đạt]
+---
+
+... (tiếp tục cho các slide khác)
+
+LƯU Ý:
+- Chỉ tạo khung tổng quát, không chi tiết hóa
+- Đảm bảo logic từ slide này sang slide khác
+- Mỗi slide có mục đích rõ ràng trong chuỗi kiến thức
+"""
+
+        return prompt
+
+    def _parse_framework_content(self, framework_content: str) -> List[Dict[str, Any]]:
+        """Parse framework content thành danh sách slides"""
+        try:
+            slides = []
+
+            # Split theo dấu --- để tách các slide
+            slide_blocks = framework_content.split('---')
+
+            for i, block in enumerate(slide_blocks):
+                block = block.strip()
+                if not block:
+                    continue
+
+                slide_data = {
+                    "slide_number": i + 1,
+                    "title": "",
+                    "purpose": "",
+                    "main_content": "",
+                    "raw_block": block
+                }
+
+                # Parse từng dòng trong block
+                lines = block.split('\n')
+
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    if line.startswith('SLIDE '):
+                        # Extract title từ "SLIDE 1: [Tiêu đề]"
+                        if ':' in line:
+                            slide_data["title"] = line.split(':', 1)[1].strip()
+                    elif line.startswith('Mục đích:'):
+                        slide_data["purpose"] = line.replace('Mục đích:', '').strip()
+                    elif line.startswith('Nội dung chính:'):
+                        slide_data["main_content"] = line.replace('Nội dung chính:', '').strip()
+
+                # Chỉ thêm slide nếu có đủ thông tin cơ bản
+                if slide_data["title"] or slide_data["purpose"] or slide_data["main_content"]:
+                    slides.append(slide_data)
+
+            logger.info(f"📋 Parsed {len(slides)} slides from framework")
+            return slides
+
+        except Exception as e:
+            logger.error(f"❌ Error parsing framework content: {e}")
+            return []
+
+    async def _detail_slide_content(
+        self,
+        framework_slide: Dict[str, Any],
+        lesson_content: str,
+        config_prompt: Optional[str],
+        slide_number: int,
+        max_retries: int = 3
+    ) -> Dict[str, Any]:
+        """
+        Bước 2: Chi tiết hóa nội dung cho từng slide cụ thể
+        Input: lesson_content, default_prompt, config_prompt, khung_slide
+        Output: Slide chi tiết với nội dung đầy đủ
+        """
+        try:
+            logger.info(f"📝 Detailing slide {slide_number}: {framework_slide.get('title', 'Untitled')}")
+
+            # Tạo prompt cho việc chi tiết hóa slide
+            detail_prompt = self._create_detail_prompt(
+                framework_slide,
+                lesson_content,
+                config_prompt,
+                slide_number
+            )
+
+            # Retry logic cho LLM
+            for attempt in range(max_retries):
+                logger.info(f"🔄 Attempt {attempt + 1}/{max_retries} for slide {slide_number}")
+
+                llm_response = await self.llm_service.generate_content(
+                    prompt=detail_prompt,
+                    max_tokens=15000,
+                    temperature=0.1
+                )
+
+                if llm_response.get("success", False):
+                    detailed_content = llm_response.get("text", "").strip()
+
+                    if detailed_content:
+                        logger.info(f"✅ Slide {slide_number} detailed successfully: {len(detailed_content)} characters")
+                        return {
+                            "success": True,
+                            "content": detailed_content,
+                            "slide_number": slide_number,
+                            "framework": framework_slide
+                        }
+                    else:
+                        logger.warning(f"⚠️ Empty content for slide {slide_number}, attempt {attempt + 1}")
+                else:
+                    logger.warning(f"⚠️ LLM failed for slide {slide_number}, attempt {attempt + 1}: {llm_response.get('error', 'Unknown error')}")
+
+            # Fallback: Trả về content gốc nếu không thể chi tiết hóa
+            logger.error(f"❌ Failed to detail slide {slide_number} after {max_retries} attempts")
+            fallback_content = f"""
+{framework_slide.get('title', 'Slide Content')}
+
+{framework_slide.get('purpose', '')}
+
+{framework_slide.get('main_content', '')}
+"""
+
+            return {
+                "success": True,
+                "content": fallback_content.strip(),
+                "slide_number": slide_number,
+                "framework": framework_slide,
+                "fallback_used": True
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Error detailing slide {slide_number}: {e}")
+            return {
+                "success": False,
+                "error": f"Failed to detail slide: {str(e)}",
+                "slide_number": slide_number
+            }
+
+    def _create_detail_prompt(
+        self,
+        framework_slide: Dict[str, Any],
+        lesson_content: str,
+        config_prompt: Optional[str],
+        slide_number: int
+    ) -> str:
+        """Tạo prompt cho việc chi tiết hóa slide"""
+
+        default_config = config_prompt if config_prompt else """
+Bạn là chuyên gia thiết kế nội dung slide giáo dục chuyên nghiệp. Hãy chi tiết hóa nội dung slide theo yêu cầu.
+"""
+
+        prompt = f"""
+{default_config}
+
+NHIỆM VỤ: Chi tiết hóa nội dung cho slide cụ thể
+
+THÔNG TIN SLIDE CẦN CHI TIẾT HÓA:
+- Số slide: {slide_number}
+- Tiêu đề: {framework_slide.get('title', 'Không có tiêu đề')}
+- Mục đích: {framework_slide.get('purpose', 'Không có mục đích')}
+- Nội dung chính: {framework_slide.get('main_content', 'Không có nội dung chính')}
+
+NỘI DUNG BÀI HỌC THAM KHẢO:
+{lesson_content}
+
+YÊU CẦU CHI TIẾT HÓA:
+1. Chi tiết hóa nội dung cho slide cụ thể dựa trên nội dung bài học và thông tin từ config_prompt
+2. Điều chỉnh thái độ, cách nói, độ khó sao cho phù hợp với đối tượng và bối cảnh thuyết trình
+3. Tạo nội dung đầy đủ, chi tiết, dễ hiểu
+4. Bao gồm định nghĩa, giải thích, ví dụ minh họa nếu cần
+5. Đảm bảo nội dung phù hợp với mục đích của slide
+
+🚨 TUYỆT ĐỐI TRÁNH:
+- KHÔNG sử dụng lời chào hỏi: "Chào mừng các em", "Xin chào", "Hôm nay chúng ta sẽ"
+- KHÔNG sử dụng lời kết thúc: "Hãy cùng nhau bắt đầu", "Chúc các em học tốt"
+- KHÔNG sử dụng ngôn ngữ nói chuyện: "Các em có biết không?", "Chúng ta hãy cùng tìm hiểu"
+- KHÔNG sử dụng câu mở đầu dài dòng không cần thiết
+- KHÔNG sử dụng emoji hoặc ký tự đặc biệt như **, *, •, -, etc.
+
+✅ NỘI DUNG SLIDE PHẢI:
+- Đi thẳng vào nội dung chính
+- Sử dụng ngôn ngữ khoa học, chính xác
+- Trình bày thông tin một cách súc tích, rõ ràng
+- Tập trung vào kiến thức cốt lõi
+- Sử dụng định nghĩa, công thức, ví dụ cụ thể
+
+FORMAT OUTPUT:
+Trả về nội dung chi tiết cho slide này dưới dạng text thuần túy, không format đặc biệt.
+Nội dung phải đầy đủ, chi tiết và phù hợp với mục đích của slide.
+
+VÍ DỤ ĐÚNG:
+"Nguyên tố hóa học là tập hợp các nguyên tử có cùng số proton trong hạt nhân. Số hiệu nguyên tử Z chính là số proton, xác định tính chất hóa học của nguyên tố. Ví dụ: Hydrogen có Z=1, Helium có Z=2. Các nguyên tố được sắp xếp trong bảng tuần hoàn theo thứ tự tăng dần của số hiệu nguyên tử."
+
+VÍ DỤ SAI:
+"Chào mừng các em đến với bài học mới! Hôm nay chúng ta sẽ cùng nhau khám phá nguyên tố hóa học. **Nguyên tố hóa học** là một khái niệm rất quan trọng..."
+
+LƯU Ý:
+- Chỉ tập trung vào slide này, không đề cập đến slide khác
+- Nội dung phải chi tiết và đầy đủ
+- Sử dụng ngôn ngữ khoa học chính xác
+- Có thể bao gồm ví dụ minh họa cụ thể
+"""
+
+        return prompt
+
+    async def _map_placeholders(
+        self,
+        detailed_content: str,
+        slide_number: int
+    ) -> Dict[str, Any]:
+        """
+        Bước 3: Gắn placeholder cho từng slide chi tiết
+        Input: slide_chi_tiet, default_prompt
+        Output: Slide với placeholder được gắn theo quy tắc hiện tại
+        """
+        try:
+            logger.info(f"🏷️ Mapping placeholders for slide {slide_number}")
+
+            # Tạo prompt cho việc gắn placeholder
+            placeholder_prompt = self._create_placeholder_prompt(detailed_content, slide_number)
+
+            # Gọi LLM để gắn placeholder
+            llm_response = await self.llm_service.generate_content(
+                prompt=placeholder_prompt,
+                max_tokens=20000,
+                temperature=0.1
+            )
+
+            if not llm_response.get("success", False):
+                return {
+                    "success": False,
+                    "error": f"LLM placeholder mapping failed: {llm_response.get('error', 'Unknown error')}"
+                }
+
+            placeholder_content = llm_response.get("text", "").strip()
+            logger.info(f"Placeholder content generated: {placeholder_content}")
+
+            if not placeholder_content:
+                return {
+                    "success": False,
+                    "error": "Empty placeholder content"
+                }
+
+            # Parse placeholder content để tạo slide data
+            slide_data = self._parse_placeholder_content(placeholder_content, slide_number)
+
+            # Validate và fix 1:1 mapping
+            validated_slide_data = self._validate_and_fix_mapping(slide_data, slide_number)
+
+            logger.info(f"✅ Placeholders mapped for slide {slide_number}")
+            logger.info(f"📋 Placeholder summary: {validated_slide_data}")
+
+            return {
+                "success": True,
+                "slide_data": validated_slide_data,
+                "raw_content": placeholder_content
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Error mapping placeholders for slide {slide_number}: {e}")
+            return {
+                "success": False,
+                "error": f"Failed to map placeholders: {str(e)}"
+            }
+
+    def _create_placeholder_prompt(self, detailed_content: str, slide_number: int) -> str:
+        """Tạo prompt cho việc gắn placeholder"""
+
+        prompt = f"""
+NHIỆM VỤ: Gắn placeholder cho slide chi tiết theo quy tắc 1:1 MAPPING NGHIÊM NGẶT
+
+SLIDE CHI TIẾT CẦN GẮN PLACEHOLDER:
+{detailed_content}
+
+🚨 QUY TẮC 1:1 MAPPING BẮT BUỘC - CỰC KỲ QUAN TRỌNG:
+1. MỖI TitleName CHỈ CÓ ĐÚNG 1 TitleContent duy nhất
+2. MỖI SubtitleName CHỈ CÓ ĐÚNG 1 SubtitleContent duy nhất
+3. TUYỆT ĐỐI KHÔNG tạo nhiều TitleContent riêng biệt cho 1 TitleName
+4. TUYỆT ĐỐI KHÔNG tạo nhiều SubtitleContent riêng biệt cho 1 SubtitleName
+5. Nếu có nhiều ý trong cùng 1 mục, hãy GỘP TẤT CẢ thành 1 khối duy nhất
+6. Sử dụng \\n để xuống dòng giữa các ý trong cùng 1 khối content
+
+PLACEHOLDER TYPES:
+- LessonName: Tên bài học (chỉ slide đầu tiên)
+- LessonDescription: Mô tả bài học (chỉ slide đầu tiên)
+- CreatedDate: Ngày tạo (chỉ slide đầu tiên)
+- TitleName: Tiêu đề chính của slide
+- TitleContent: Nội dung giải thích chi tiết cho TitleName (CHỈ 1 KHỐI)
+- SubtitleName: Tiêu đề các mục con
+- SubtitleContent: Nội dung chi tiết cho từng SubtitleName (CHỈ 1 KHỐI)
+- ImageName: Tên hình ảnh minh họa
+- ImageContent: Mô tả nội dung hình ảnh
+
+SLIDE HIỆN TẠI: {slide_number}
+
+🔥 VÍ DỤ SAI (TUYỆT ĐỐI KHÔNG LÀM):
+Cấu trúc nguyên tử #*(TitleName)*#
+Nguyên tử gồm hạt nhân và electron. #*(TitleContent)*#
+Hạt nhân ở trung tâm. #*(TitleContent)*#  ❌ SAI - Có 2 TitleContent riêng biệt
+Electron chuyển động xung quanh. #*(TitleContent)*#  ❌ SAI - Có 3 TitleContent riêng biệt
+
+✅ VÍ DỤ ĐÚNG (BẮT BUỘC LÀM THEO):
+Cấu trúc nguyên tử #*(TitleName)*#
+Nguyên tử gồm hạt nhân và electron.\\nHạt nhân ở trung tâm, chứa proton và neutron.\\nElectron chuyển động xung quanh hạt nhân trong các orbital.\\nLực tĩnh điện giữ electron gần hạt nhân. #*(TitleContent)*#
+
+✅ VÍ DỤ ĐÚNG VỚI SUBTITLE:
+Bài toán tính toán #*(SubtitleName)*#
+Gọi x là phần trăm số nguyên tử của ⁶³Cu và y là phần trăm số nguyên tử của ⁶⁵Cu.\\nTa có hệ phương trình: x + y = 100 (Tổng phần trăm là 100%).\\nVà (63x + 65y) / 100 = 63,54 (Công thức nguyên tử khối trung bình).\\nTừ (1), ta có y = 100 - x.\\nThay vào (2): (63x + 65(100 - x)) / 100 = 63,54.\\nGiải phương trình: 63x + 6500 - 65x = 6354, -2x = -146, x = 73.\\nVậy phần trăm số nguyên tử của ⁶³Cu là 73% và ⁶⁵Cu là 27%. #*(SubtitleContent)*#
+
+FORMAT OUTPUT:
+Trả về nội dung đã được gắn placeholder với \\n để xuống dòng:
+content #*(PlaceholderType)*#
+
+🔥 NHẮC NHỞ CUỐI CÙNG - CỰC KỲ QUAN TRỌNG:
+- CHỈ 1 TitleContent cho mỗi TitleName (KHÔNG BAO GIỜ NHIỀU HỠN 1)
+- CHỈ 1 SubtitleContent cho mỗi SubtitleName (KHÔNG BAO GIỜ NHIỀU HỠN 1)
+- Sử dụng \\n để xuống dòng trong cùng 1 khối content
+- TUYỆT ĐỐI TUÂN THỦ QUY TẮC 1:1 MAPPING
+- NẾU CÓ NHIỀU Ý TRONG CÙNG MỤC, HÃY GỘP TẤT CẢ THÀNH 1 KHỐI DUY NHẤT
+- KIỂM TRA LẠI TRƯỚC KHI TRẢ VỀ: Mỗi TitleName chỉ có 1 TitleContent, mỗi SubtitleName chỉ có 1 SubtitleContent
+
+🚨 VÍ DỤ CUỐI CÙNG - ĐÚNG 100%:
+Cấu trúc nguyên tử #*(TitleName)*#
+Nguyên tử gồm hạt nhân và electron.\\nHạt nhân ở trung tâm.\\nElectron chuyển động xung quanh. #*(TitleContent)*#
+Proton #*(SubtitleName)*#
+Proton mang điện dương.\\nCó khối lượng 1,67×10^-27 kg.\\nQuyết định nguyên tố hóa học. #*(SubtitleContent)*#
+Neutron #*(SubtitleName)*#
+Neutron không mang điện.\\nCó khối lượng gần bằng proton.\\nTạo thành đồng vị. #*(SubtitleContent)*#
+"""
+
+        return prompt
+
+    def _parse_placeholder_content(self, placeholder_content: str, slide_number: int) -> Dict[str, Any]:
+        """Parse placeholder content thành slide data"""
+        try:
+            # Parse content theo annotation format
+            parsed_data = {
+                "LessonName": [],
+                "LessonDescription": [],
+                "CreatedDate": [],
+                "TitleName": [],
+                "TitleContent": [],
+                "SubtitleName": [],
+                "SubtitleContent": [],
+                "ImageName": [],
+                "ImageContent": []
+            }
+
+            # Pattern để match: "content #*(PlaceholderType)*#"
+            valid_placeholders = '|'.join(parsed_data.keys())
+            pattern = rf'(.+?)\s*#\*\(({valid_placeholders})\)\*#'
+
+            matches = re.findall(pattern, placeholder_content, re.IGNORECASE | re.DOTALL)
+
+            for content, placeholder_type in matches:
+                clean_content = content.strip()
+                if clean_content:
+                    parsed_data[placeholder_type].append({
+                        "content": clean_content,
+                        "length": len(clean_content)
+                    })
+
+            # Tạo slide summary
+            placeholder_counts = {}
+            for placeholder_type, items in parsed_data.items():
+                if items:
+                    placeholder_counts[placeholder_type] = len(items)
+
+            slide_data = {
+                "slide_number": slide_number,
+                "parsed_data": parsed_data,
+                "placeholder_counts": placeholder_counts,
+                "raw_content": placeholder_content
+            }
+
+            logger.info(f"📋 Slide {slide_number} placeholder summary: {placeholder_counts}")
+            return slide_data
+
+        except Exception as e:
+            logger.error(f"❌ Error parsing placeholder content: {e}")
+            return {
+                "slide_number": slide_number,
+                "parsed_data": {},
+                "placeholder_counts": {},
+                "raw_content": placeholder_content,
+                "error": str(e)
+            }
+
+    def _validate_and_fix_mapping(self, slide_data: Dict[str, Any], slide_number: int) -> Dict[str, Any]:
+        """
+        Validate và fix 1:1 mapping violations
+        """
+        try:
+            logger.info(f"🔍 Validating 1:1 mapping for slide {slide_number}")
+
+            parsed_data = slide_data.get("parsed_data", {})
+            placeholder_counts = slide_data.get("placeholder_counts", {})
+
+            # Log original counts
+            logger.info(f"📋 Original placeholder counts: {placeholder_counts}")
+
+            violations_fixed = []
+
+            # Fix TitleName vs TitleContent mapping
+            title_name_count = placeholder_counts.get('TitleName', 0)
+            title_content_count = placeholder_counts.get('TitleContent', 0)
+
+            if title_name_count > 0 and title_content_count != title_name_count:
+                logger.warning(f"⚠️ TitleName={title_name_count} but TitleContent={title_content_count}")
+
+                if title_content_count > title_name_count:
+                    # Gộp multiple TitleContent thành 1
+                    title_contents = parsed_data.get('TitleContent', [])
+                    if len(title_contents) > 1:
+                        combined_content = "\\n".join([item['content'] for item in title_contents])
+                        parsed_data['TitleContent'] = [{
+                            "content": combined_content,
+                            "length": len(combined_content)
+                        }]
+                        placeholder_counts['TitleContent'] = 1
+                        violations_fixed.append(f"Combined {title_content_count} TitleContent into 1")
+                        logger.info(f"🔧 Fixed: Combined {title_content_count} TitleContent into 1")
+
+            # Fix SubtitleName vs SubtitleContent mapping
+            subtitle_name_count = placeholder_counts.get('SubtitleName', 0)
+            subtitle_content_count = placeholder_counts.get('SubtitleContent', 0)
+
+            if subtitle_name_count > 0 and subtitle_content_count != subtitle_name_count:
+                logger.warning(f"⚠️ SubtitleName={subtitle_name_count} but SubtitleContent={subtitle_content_count}")
+
+                if subtitle_content_count > subtitle_name_count:
+                    # Gộp SubtitleContent theo tỷ lệ
+                    subtitle_contents = parsed_data.get('SubtitleContent', [])
+                    subtitle_names = parsed_data.get('SubtitleName', [])
+
+                    if len(subtitle_contents) > len(subtitle_names) and len(subtitle_names) > 0:
+                        # Chia đều SubtitleContent cho SubtitleName
+                        contents_per_name = len(subtitle_contents) // len(subtitle_names)
+                        remainder = len(subtitle_contents) % len(subtitle_names)
+
+                        new_subtitle_contents = []
+                        content_index = 0
+
+                        for i in range(len(subtitle_names)):
+                            # Số content cho subtitle này
+                            num_contents = contents_per_name + (1 if i < remainder else 0)
+
+                            # Gộp contents
+                            contents_to_combine = subtitle_contents[content_index:content_index + num_contents]
+                            combined_content = "\\n".join([item['content'] for item in contents_to_combine])
+
+                            new_subtitle_contents.append({
+                                "content": combined_content,
+                                "length": len(combined_content)
+                            })
+
+                            content_index += num_contents
+
+                        parsed_data['SubtitleContent'] = new_subtitle_contents
+                        placeholder_counts['SubtitleContent'] = len(new_subtitle_contents)
+                        violations_fixed.append(f"Redistributed {subtitle_content_count} SubtitleContent to match {subtitle_name_count} SubtitleName")
+                        logger.info(f"🔧 Fixed: Redistributed SubtitleContent to match SubtitleName")
+
+            # Update slide data
+            slide_data["parsed_data"] = parsed_data
+            slide_data["placeholder_counts"] = placeholder_counts
+
+            # Log final counts
+            logger.info(f"📋 Final placeholder counts: {placeholder_counts}")
+
+            if violations_fixed:
+                logger.info(f"🔧 Violations fixed: {violations_fixed}")
+                slide_data["violations_fixed"] = violations_fixed
+            else:
+                logger.info(f"✅ No violations found for slide {slide_number}")
+
+            return slide_data
+
+        except Exception as e:
+            logger.error(f"❌ Error validating mapping for slide {slide_number}: {e}")
+            # Return original data if validation fails
+            return slide_data
+
+    async def _map_processed_slides_to_template(
+        self,
+        processed_slides: List[Dict[str, Any]],
+        template_json: Dict[str, Any],
+        analyzed_template: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Map processed slides vào template JSON"""
+        try:
+            logger.info(f"🔧 Mapping {len(processed_slides)} processed slides to template...")
+
+            # Create processed template copy
+            processed_template = {
+                "version": template_json.get("version", "1.0"),
+                "createdAt": datetime.now().isoformat(),
+                "slideFormat": template_json.get("slideFormat", "16:9"),
+                "slides": []
+            }
+
+            # Content index để track việc sử dụng content
+            content_index = {
+                "LessonName": 0,
+                "LessonDescription": 0,
+                "CreatedDate": 0,
+                "TitleName": 0,
+                "TitleContent": 0,
+                "SubtitleName": 0,
+                "SubtitleContent": 0,
+                "ImageName": 0,
+                "ImageContent": 0
+            }
+
+            # Gộp tất cả parsed data từ các slides
+            all_parsed_data = {
+                "LessonName": [],
+                "LessonDescription": [],
+                "CreatedDate": [],
+                "TitleName": [],
+                "TitleContent": [],
+                "SubtitleName": [],
+                "SubtitleContent": [],
+                "ImageName": [],
+                "ImageContent": []
+            }
+
+            for slide_data in processed_slides:
+                parsed_data = slide_data.get("parsed_data", {})
+                for placeholder_type, items in parsed_data.items():
+                    all_parsed_data[placeholder_type].extend(items)
+
+            logger.info(f"📋 Combined parsed data summary:")
+            for placeholder_type, items in all_parsed_data.items():
+                if items:
+                    logger.info(f"  {placeholder_type}: {len(items)} items")
+
+            # Track used slides để tránh duplicate
+            used_slide_ids = set()
+            template_slides = analyzed_template.get("slides", [])
+
+            # Process từng processed slide với intelligent template selection
+            for slide_data in processed_slides:
+                slide_num = slide_data.get("slide_number", 0)
+                placeholder_counts = slide_data.get("placeholder_counts", {})
+                required_placeholders = list(placeholder_counts.keys())
+
+                logger.info(f"🔍 Processing slide {slide_num}:")
+                logger.info(f"   Required placeholders: {required_placeholders}")
+                logger.info(f"   Required counts: {placeholder_counts}")
+
+                # Tìm template phù hợp CHÍNH XÁC
+                best_template = self._find_exact_matching_template(
+                    required_placeholders,
+                    placeholder_counts,
+                    template_slides,
+                    used_slide_ids
+                )
+
+                # Nếu không tìm thấy template chưa sử dụng, cho phép reuse template
+                if not best_template:
+                    logger.info(f"🔄 No unused template found, trying to reuse existing template...")
+                    best_template = self._find_exact_matching_template_with_reuse(
+                        required_placeholders,
+                        placeholder_counts,
+                        template_slides
+                    )
+
+                if best_template:
+                    template_id = best_template['slideId']
+                    is_reused = template_id in used_slide_ids
+
+                    if is_reused:
+                        logger.info(f"✅ Found exact matching template (REUSED): {template_id}")
+                    else:
+                        logger.info(f"✅ Found exact matching template (NEW): {template_id}")
+
+                    # Tạo processed slide từ template
+                    processed_slide = await self._create_processed_slide_from_template(
+                        best_template,
+                        all_parsed_data,
+                        content_index,
+                        slide_num,
+                        is_reused
+                    )
+
+                    if processed_slide:
+                        processed_template["slides"].append(processed_slide)
+                        # Chỉ thêm vào used_slide_ids nếu chưa được sử dụng
+                        if not is_reused:
+                            used_slide_ids.add(template_id)
+                        logger.info(f"✅ Successfully processed slide {slide_num} ({'reused' if is_reused else 'new'})")
+                    else:
+                        logger.error(f"❌ Failed to create processed slide {slide_num} - SKIPPING")
+                        continue
+                else:
+                    logger.error(f"❌ No exact matching template found for slide {slide_num} - SKIPPING")
+                    continue
+
+            logger.info(f"✅ Template mapping complete: {len(processed_template['slides'])} slides created")
+            return processed_template
+
+        except Exception as e:
+            logger.error(f"❌ Error mapping processed slides to template: {e}")
+            raise
     
     def _analyze_json_template(self, template_json: Dict[str, Any]) -> Dict[str, Any]:
         """Phân tích JSON template và detect placeholders (theo logic cũ)"""
@@ -235,311 +1228,8 @@ class JsonTemplateService:
             logger.error(f"❌ Error analyzing JSON template: {e}")
             raise
     
-    async def _generate_presentation_content(
-        self,
-        lesson_content: str,
-        config_prompt: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Sinh nội dung presentation với LLM"""
-        try:
-            logger.info("🤖 Generating presentation content with LLM...")
-
-            # Tạo prompt cho LLM
-            prompt = self._create_llm_prompt(lesson_content, config_prompt)
-            
-            # Gọi LLM
-            llm_response = await self.llm_service.generate_content(
-                prompt=prompt,
-                max_tokens=60000,
-                temperature=0.1
-            )
-            
-            if not llm_response.get("success", False):
-                return {
-                    "success": False,
-                    "error": f"LLM generation failed: {llm_response.get('error', 'Unknown error')}"
-                }
-
-            content = llm_response.get("text", "")  # LLMService trả về "text" chứ không phải "content"
-            logger.info(f"✅ LLM content generated: {len(content)} characters")
-
-            # Debug: Log first 500 chars of LLM content
-            logger.info(f"🔍 LLM content preview: {content[:500]}...")
-
-            # Debug: Log full LLM content for debugging
-            logger.info(f"🔍 FULL LLM CONTENT DEBUG:")
-            logger.info(f"Content length: {len(content)} characters")
-            logger.info(f"Content: {content}")
 
 
-            # Debug: Check for annotation patterns
-            annotation_pattern = r'#\*\([^)]+\)\*#'
-            annotation_matches = re.findall(annotation_pattern, content)
-            logger.info(f"🔍 Found {len(annotation_matches)} annotation patterns: {annotation_matches[:10]}")  # First 10
-
-            return {
-                "success": True,
-                "content": content
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Error generating presentation content: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to generate content: {str(e)}"
-            }
-    
-    def _create_llm_prompt(
-        self,
-        lesson_content: str,
-        config_prompt: Optional[str] = None
-    ) -> str:
-        """Tạo prompt cho LLM theo format của luồng cũ (chi tiết và chính xác)"""
-
-
-        # Cải thiện default config để tạo nội dung chi tiết hơn
-        default_config = """
-Bạn là chuyên gia thiết kế nội dung thuyết trình giáo dục chuyên nghiệp. Nhiệm vụ của bạn là phân tích sâu nội dung bài học và tạo ra bài thuyết trình chi tiết, đầy đủ và hấp dẫn.
-NGUYÊN TẮC THIẾT KẾ CHẤT LƯỢNG CAO:
-1. PHÂN TÍCH TOÀN DIỆN VÀ SÂU SẮC:
-   - Hiểu rõ từng khái niệm, định nghĩa, công thức trong bài học
-   - Xác định mối liên hệ giữa các khái niệm
-   - Phân tích ví dụ minh họa và ứng dụng thực tế
-   - Tìm ra các điểm quan trọng cần nhấn mạnh
-2. CẤU TRÚC LOGIC VÀ KHOA HỌC:
-   - Từ khái niệm cơ bản đến nâng cao
-   - Từ lý thuyết đến ứng dụng thực tế
-   - Mỗi slide có mục đích rõ ràng trong chuỗi kiến thức
-   - Đảm bảo tính liên kết giữa các slide
-3. NỘI DUNG PHONG PHÚ VÀ CHI TIẾT:
-   - Tạo ít nhất 10-12 slides với nội dung đầy đủ và sâu sắc
-   - Mỗi khái niệm được giải thích rõ ràng với ví dụ cụ thể
-   - Bổ sung thông tin mở rộng, ứng dụng thực tế
-   - Không bỏ sót bất kỳ thông tin quan trọng nào
-4. NGÔN NGỮ KHOA HỌC CHÍNH XÁC:
-   - Sử dụng thuật ngữ khoa học chính xác
-   - Ký hiệu hóa học, công thức toán học đúng chuẩn Unicode
-   - Giải thích thuật ngữ khó hiểu
-   - Ngôn ngữ rõ ràng, dễ hiểu nhưng vẫn chuyên nghiệp
-5. VÍ DỤ VÀ MINH HỌA PHONG PHÚ:
-   - Mỗi khái niệm có thể thêm 1 ví dụ nếu cần thiết
-   - Ví dụ từ đơn giản đến phức tạp
-   - Liên hệ với thực tế, đời sống
-   - Bài tập minh họa có lời giải chi tiết
-YÊU CẦU ANNOTATION CHÍNH XÁC:
-- PHẢI có annotation bằng #*(PlaceholderType)*# ngay sau mỗi nội dung
-- Placeholder types: LessonName, LessonDescription, CreatedDate, TitleName, TitleContent, SubtitleName, SubtitleContent, ImageName, ImageContent
-- Annotation phải chính xác 100% và nhất quán
-- BẮT BUỘC có slide summaries với số lượng rõ ràng để chọn template phù hợp
-"""
-
-        
-
-        prompt = f"""
-{default_config}
-CÁC LƯU Ý NGƯỜI TẠO (NẾU CÓ):
-{config_prompt}
-NỘI DUNG BÀI HỌC:
-{lesson_content}
-📚 HƯỚNG DẪN TẠO PRESENTATION CONTENT CHI TIẾT:
-
-1. PHÂN TÍCH BÀI HỌC SÂU SẮC:
-   - Đọc kỹ và hiểu rõ từng đoạn văn, khái niệm trong bài học
-   - Xác định chủ đề chính và tất cả các chủ đề phụ
-   - Phân loại thông tin: định nghĩa, công thức, ví dụ, ứng dụng
-   - Tìm ra mối liên hệ logic giữa các khái niệm
-   - Xác định độ khó và thứ tự trình bày hợp lý
-   - TUYỆT ĐỐI KHÔNG được bỏ sót bất kỳ thông tin quan trọng nào
-
-2. TẠO NỘI DUNG VỚI ANNOTATION CHÍNH XÁC:
-   - PHẢI có annotation #*(PlaceholderType)*# ngay sau mỗi nội dung
-   - Ví dụ: "Nguyên tố hóa học và cấu trúc nguyên tử #*(LessonName)*#"
-   - Ví dụ: "Bài học này giúp học sinh hiểu rõ về cấu trúc nguyên tử, các hạt cơ bản và tính chất của nguyên tố hóa học #*(LessonDescription)*#"
-   - Ví dụ: "Ngày thuyết trình: 18-07-2025 #*(CreatedDate)*#"
-3. HIỂU RÕ CẤU TRÚC PHÂN CẤP VÀ NHÓM NỘI DUNG CHI TIẾT:
-   📌 TitleName: Tiêu đề chính của slide (ngắn gọn, súc tích)
-      - Chỉ là tên chủ đề, không phải nội dung giải thích
-      - Ví dụ: "Cấu trúc nguyên tử", "Liên kết hóa học", "Phản ứng oxi hóa khử"
-   📝 TitleContent: Nội dung giải thích chi tiết cho TitleName
-      - Giải thích đầy đủ khái niệm, định nghĩa
-      - Bao gồm ví dụ minh họa cụ thể
-      - Có thể có nhiều đoạn văn nhưng gộp thành một khối
-   🔸 SubtitleName: Tiêu đề các mục con trong chủ đề chính
-      - Các khía cạnh nhỏ hơn của chủ đề chính
-      - Ví dụ: "Proton", "Neutron", "Electron" (trong chủ đề Cấu trúc nguyên tử)
-   📄 SubtitleContent: Nội dung chi tiết cho từng SubtitleName
-      - Giải thích cụ thể cho từng mục con
-      - Có ví dụ, công thức, ứng dụng
-      - QUAN TRỌNG: Mỗi SubtitleContent tương ứng với ĐÚNG MỘT SubtitleName (1:1 mapping)
-      - TUYỆT ĐỐI KHÔNG tạo nhiều SubtitleContent riêng biệt cho cùng 1 SubtitleName
-      - Gộp tất cả nội dung của 1 mục con thành 1 khối SubtitleContent duy nhất
-4. VÍ DỤ CHI TIẾT VỚI CẤU TRÚC PHÂN CẤP RÕ RÀNG VÀ NỘI DUNG PHONG PHÚ:
-SLIDE 1 - GIỚI THIỆU TỔNG QUAN:
-Nguyên tố hóa học và bảng tuần hoàn #*(LessonName)*#
-Bài học này giúp học sinh hiểu rõ về khái niệm nguyên tố hóa học, cấu trúc bảng tuần hoàn và mối liên hệ giữa vị trí của nguyên tố với tính chất hóa học. Học sinh sẽ nắm được cách phân loại nguyên tố và dự đoán tính chất dựa vào vị trí trong bảng. #*(LessonDescription)*#
-Ngày thuyết trình: 18-07-2025 #*(CreatedDate)*#
-=== SLIDE 1 SUMMARY ===
-Placeholders: 1xLessonName, 1xLessonDescription, 1xCreatedDate
-===========================
-SLIDE 2 - KHÁI NIỆM CƠ BẢN VỚI NỘI DUNG CHI TIẾT:
-Khái niệm nguyên tố hóa học #*(TitleName)*#
-Nguyên tố hóa học là tập hợp các nguyên tử có cùng số proton trong hạt nhân. Mỗi nguyên tố được xác định bởi số hiệu nguyên tử (Z) - chính là số proton trong hạt nhân. Hiện nay, có 118 nguyên tố đã được phát hiện, trong đó 94 nguyên tố tồn tại trong tự nhiên, còn lại là nguyên tố nhân tạo. Mỗi nguyên tố có ký hiệu hóa học riêng, thường là 1-2 chữ cái, ví dụ: H (hydro), He (heli), Li (lithi), Na (natri). Các nguyên tố cùng nhóm trong bảng tuần hoàn thường có tính chất hóa học tương tự nhau do có cấu hình electron hóa trị giống nhau. #*(TitleContent)*#
-=== SLIDE 2 SUMMARY ===
-Placeholders: 1xTitleName, 1xTitleContent
-===========================
-SLIDE 3 - CẤU TRÚC NGUYÊN TỬ CHI TIẾT:
-Cấu trúc nguyên tử #*(TitleName)*#
-Nguyên tử là đơn vị cấu tạo cơ bản của vật chất, gồm hạt nhân mang điện tích dương ở trung tâm và các electron mang điện tích âm chuyển động xung quanh. Hạt nhân chiếm phần lớn khối lượng nguyên tử nhưng thể tích rất nhỏ (khoảng 10^-14 m) so với kích thước nguyên tử (khoảng 10^-10 m). #*(TitleContent)*#
-Hạt nhân nguyên tử #*(SubtitleName)*#
-Hạt nhân nguyên tử được cấu tạo từ proton và neutron (gọi chung là nucleon). Proton mang điện tích dương (+1), có khối lượng khoảng 1,673 × 10^-27 kg. Neutron không mang điện, có khối lượng xấp xỉ proton. Lực hạt nhân mạnh giữ các nucleon lại với nhau, vượt qua lực đẩy tĩnh điện giữa các proton. Số proton trong hạt nhân xác định nguyên tố hóa học, còn số neutron có thể thay đổi tạo thành các đồng vị. #*(SubtitleContent)*#
-Electron và đám mây electron #*(SubtitleName)*#
-Electron là hạt mang điện tích âm (-1), có khối lượng rất nhỏ (khoảng 9,109 × 10^-31 kg), chỉ bằng 1/1836 khối lượng proton. Electron chuyển động xung quanh hạt nhân trong các orbital (đám mây electron) với xác suất xuất hiện khác nhau. Các orbital được sắp xếp thành các lớp (K, L, M, N...) và các phân lớp (s, p, d, f). Electron phân bố theo nguyên lý Pauli, quy tắc Hund và nguyên lý Aufbau. Cấu hình electron quyết định tính chất hóa học của nguyên tố. #*(SubtitleContent)*#
-=== SLIDE 3 SUMMARY ===
-Placeholders: 1xTitleName, 1xTitleContent, 2xSubtitleName, 2xSubtitleContent
-===========================
-SLIDE 4 - BẢNG TUẦN HOÀN VÀ XU HƯỚNG:
-Bảng tuần hoàn các nguyên tố hóa học #*(TitleName)*#
-Bảng tuần hoàn hiện đại #*(SubtitleName)*#
-Bảng tuần hoàn hiện đại gồm 7 chu kỳ (hàng ngang) và 18 nhóm (cột dọc). Các nguyên tố được sắp xếp theo thứ tự tăng dần của số hiệu nguyên tử. Chu kỳ tương ứng với số lớp electron, nhóm tương ứng với số electron hóa trị. Bảng được chia thành các khối: s, p, d, f tương ứng với phân lớp electron ngoài cùng đang được điền. Các nguyên tố trong cùng nhóm có tính chất hóa học tương tự do có cùng cấu hình electron hóa trị. #*(SubtitleContent)*#
-Xu hướng tính chất trong bảng tuần hoàn #*(SubtitleName)*#
-Tính kim loại giảm dần từ trái sang phải trong chu kỳ và tăng dần từ trên xuống dưới trong nhóm. Bán kính nguyên tử giảm dần từ trái sang phải trong chu kỳ và tăng dần từ trên xuống dưới trong nhóm. Năng lượng ion hóa tăng dần từ trái sang phải trong chu kỳ và giảm dần từ trên xuống dưới trong nhóm. Độ âm điện tăng dần từ trái sang phải trong chu kỳ và giảm dần từ trên xuống dưới trong nhóm. Các xu hướng này giúp dự đoán tính chất và phản ứng hóa học của các nguyên tố. #*(SubtitleContent)*#
-=== SLIDE 4 SUMMARY ===
-Placeholders: 1xTitleName, 2xSubtitleName, 2xSubtitleContent
-===========================
-... (tiếp tục với các slide khác tùy theo nội dung bài học)
-5. QUY TẮC ANNOTATION VÀ NHÓM NỘI DUNG - CỰC KỲ QUAN TRỌNG:
-
-🚨 QUY TẮC NHÓM NỘI DUNG BẮT BUỘC - CỰC KỲ QUAN TRỌNG:
-- TUYỆT ĐỐI KHÔNG tạo nhiều TitleContent riêng biệt trong 1 TitleName
-- TUYỆT ĐỐI KHÔNG tạo nhiều SubtitleContent riêng biệt cho cùng 1 SubtitleName
-- MỖI 1xTitleName CHỈ CÓ TỐI ĐA 1 TitleContent duy nhất (gộp tất cả nội dung lại)
-- MỖI SubtitleName CHỈ CÓ ĐÚNG 1 SubtitleContent tương ứng (1:1 mapping)
-
-🔥 VÍ DỤ SAI VỚI TITLECONTENT (TUYỆT ĐỐI KHÔNG LÀM):
-Cấu trúc nguyên tử #*(TitleName)*#
-Nguyên tử gồm hạt nhân và electron. #*(TitleContent)*#
-Hạt nhân ở trung tâm. #*(TitleContent)*#  ❌ SAI - Có 2 TitleContent riêng biệt
-Electron chuyển động xung quanh. #*(TitleContent)*#  ❌ SAI - Có 3 TitleContent riêng biệt
-
-🔥 VÍ DỤ SAI VỚI SUBTITLECONTENT (TUYỆT ĐỐI KHÔNG LÀM):
-Bài toán tính toán #*(SubtitleName)*#
-Gọi x là phần trăm số nguyên tử của ⁶³Cu. #*(SubtitleContent)*#
-Ta có hệ phương trình: x + y = 100. #*(SubtitleContent)*#  ❌ SAI - Có 2 SubtitleContent cho 1 SubtitleName
-Từ (1), ta có y = 100 - x. #*(SubtitleContent)*#  ❌ SAI - Có 3 SubtitleContent cho 1 SubtitleName
-
-✅ VÍ DỤ ĐÚNG VỚI TITLECONTENT (BẮT BUỘC LÀM THEO):
-Cấu trúc nguyên tử #*(TitleName)*#
-Nguyên tử gồm hạt nhân và electron. Hạt nhân ở trung tâm, chứa proton và neutron. Electron chuyển động xung quanh hạt nhân trong các orbital. Lực tĩnh điện giữ electron gần hạt nhân. #*(TitleContent)*#  ✅ ĐÚNG - Chỉ 1 TitleContent duy nhất
-
-✅ VÍ DỤ ĐÚNG VỚI SUBTITLECONTENT (BẮT BUỘC LÀM THEO):
-Bài toán tính toán #*(SubtitleName)*#
-Gọi x là phần trăm số nguyên tử của ⁶³Cu và y là phần trăm số nguyên tử của ⁶⁵Cu. Ta có hệ phương trình: x + y = 100 (Tổng phần trăm là 100%) và (63x + 65y) / 100 = 63,54 (Công thức nguyên tử khối trung bình). Từ (1), ta có y = 100 - x. Thay vào (2): (63x + 65(100 - x)) / 100 = 63,54. Giải phương trình: 63x + 6500 - 65x = 6354, -2x = -146, x = 73. Vậy phần trăm số nguyên tử của ⁶³Cu là 73% và ⁶⁵Cu là 27%. #*(SubtitleContent)*#  ✅ ĐÚNG - Chỉ 1 SubtitleContent cho 1 SubtitleName
-6. SLIDE SUMMARIES - ĐẾMCHÍNH XÁC:
-   Cuối mỗi slide, thêm slide summary với SỐ LƯỢNG CHÍNH XÁC:
-   === SLIDE [Số] SUMMARY ===
-   Placeholders: [Số lượng]x[PlaceholderType], [Số lượng]x[PlaceholderType], ...
-
-🚨 LƯU Ý QUAN TRỌNG KHI ĐẾM - QUY TẮC 1:1 MAPPING:
-- TitleContent: LUÔN LUÔN chỉ có 1 cho mỗi TitleName (1 TitleName = 1 TitleContent)
-- SubtitleContent: LUÔN LUÔN bằng số lượng SubtitleName (1 SubtitleName = 1 SubtitleContent)
-- Ví dụ đúng: 1xTitleName, 1xTitleContent, 2xSubtitleName, 2xSubtitleContent
-- Ví dụ sai: 1xTitleName, 3xTitleContent ❌ (không bao giờ có nhiều TitleContent)
-- Ví dụ sai: 1xSubtitleName, 5xSubtitleContent ❌ (không bao giờ có nhiều SubtitleContent cho 1 SubtitleName)
-   ===========================
-7. YÊU CẦU OUTPUT CHẤT LƯỢNG CAO:
-- Tạo nội dung thuyết trình TEXT THUẦN TÚY với annotation chính xác 100%
-- Nội dung chi tiết, đầy đủ, không bỏ sót thông tin quan trọng
-- Sử dụng ngôn ngữ khoa học chính xác, dễ hiểu
-- Có ví dụ minh họa cụ thể cho mỗi khái niệm
-- BẮT BUỘC có slide summaries chi tiết để chọn template phù hợp
-- Không tạo ra bảng, sơ đồ - chỉ sử dụng text mô tả
-- Đảm bảo tính logic và liên kết giữa các slide
-🔍 VÍ DỤ MINH HỌA CẤU TRÚC ĐÚNG VỚI NHÓM NỘI DUNG:
-
-SLIDE 1: (Slide này là bắt buộc và luôn có)
-Cấu hình electron #*(LessonName)*#
-Bài này cho chúng ta biết được cấu hình electron trong nguyên tử và phân tử #*(LessonDescription)*#
-Ngày thuyết trình: 18-07-2025 #*(CreatedDate)*#
-=== SLIDE 1 SUMMARY ===
-Placeholders: 1xLessonName, 1xLessonDescription, 1xCreatedDate
-===========================
-
-SLIDE 2: (Slide đơn giản với 1 TitleName và 1 TitleContent)
-Khái niệm cấu hình electron #*(TitleName)*#
-Cấu hình electron là cách sắp xếp các electron trong các orbital của nguyên tử. Cấu hình này quyết định tính chất hóa học của nguyên tố và khả năng tạo liên kết. Việc hiểu rõ cấu hình electron giúp dự đoán tính chất và hành vi của các nguyên tố trong phản ứng hóa học. Mỗi orbital có mức năng lượng và hình dạng khác nhau. Các electron sẽ lấp đầy các orbital theo thứ tự năng lượng tăng dần. #*(TitleContent)*#
-=== SLIDE 2 SUMMARY ===
-Placeholders: 1xTitleName, 1xTitleContent
-===========================
-
-SLIDE 3: (Slide với TitleName, TitleContent và các SubtitleName, SubtitleContent)
-Các quy tắc sắp xếp electron #*(TitleName)*#
-Các electron trong nguyên tử tuân theo một số quy tắc nhất định khi sắp xếp vào các orbital. Việc hiểu rõ các quy tắc này giúp chúng ta xác định cấu hình electron chính xác và dự đoán tính chất hóa học của nguyên tố. #*(TitleContent)*#
-Quy tắc Aufbau #*(SubtitleName)*#
-Electron điền vào orbital có mức năng lượng thấp trước, sau đó mới điền vào orbital có mức năng lượng cao hơn theo quy tắc Aufbau. Thứ tự năng lượng tăng dần của các orbital là: 1s < 2s < 2p < 3s < 3p < 4s < 3d < 4p < 5s < 4d < 5p < 6s < 4f < 5d < 6p < 7s < 5f. #*(SubtitleContent)*#
-Nguyên lý Pauli #*(SubtitleName)*#
-Mỗi orbital chứa tối đa 2 electron và chúng phải có spin ngược chiều nhau theo nguyên lý Pauli. Điều này có nghĩa là không có hai electron trong một nguyên tử có thể có cả bốn số lượng tử giống nhau. Nguyên lý này giải thích tại sao các electron không thể tập trung hết vào orbital năng lượng thấp nhất. #*(SubtitleContent)*#
-=== SLIDE 3 SUMMARY ===
-Placeholders: 1xTitleName, 1xTitleContent, 2xSubtitleName, 2xSubtitleContent
-===========================
-
-SLIDE 4: (Slide với ImageName và ImageContent)
-Hình ảnh minh họa: Sơ đồ cấu hình electron #*(ImageName)*#
-Sơ đồ thể hiện cách electron được sắp xếp trong các orbital 1s, 2s, 2p theo thứ tự năng lượng tăng dần. Các mũi tên hướng lên và xuống biểu thị electron với spin khác nhau. Mỗi ô vuông đại diện cho một orbital. Các orbital cùng phân lớp có cùng mức năng lượng. #*(ImageContent)*#
-=== SLIDE 4 SUMMARY ===
-Placeholders: 1xImageName, 1xImageContent
-===========================
-
-SLIDE 5: (Slide phức tạp với nhiều SubtitleName và SubtitleContent)
-Ứng dụng cấu hình electron #*(TitleName)*#
-Cấu hình electron có nhiều ứng dụng quan trọng trong hóa học, vật lý và khoa học vật liệu. Hiểu rõ cấu hình electron giúp chúng ta giải thích và dự đoán nhiều hiện tượng trong tự nhiên. #*(TitleContent)*#
-Dự đoán tính chất hóa học #*(SubtitleName)*#
-Cấu hình electron của lớp ngoài cùng (electron hóa trị) quyết định tính chất hóa học của nguyên tố. Các nguyên tố có cấu hình electron hóa trị giống nhau thường có tính chất hóa học tương tự. Ví dụ: Na và K đều có 1 electron ở lớp ngoài cùng nên đều là kim loại kiềm có tính khử mạnh. #*(SubtitleContent)*#
-Giải thích liên kết hóa học #*(SubtitleName)*#
-Cấu hình electron giúp giải thích cách các nguyên tử liên kết với nhau. Nguyên tử có xu hướng đạt được cấu hình electron bền vững (8 electron ở lớp ngoài cùng) thông qua việc nhận, cho hoặc chia sẻ electron, tạo thành liên kết ion hoặc liên kết cộng hóa trị. #*(SubtitleContent)*#
-Phát triển vật liệu mới #*(SubtitleName)*#
-Hiểu biết về cấu hình electron giúp các nhà khoa học thiết kế và phát triển vật liệu mới với tính chất đặc biệt như chất bán dẫn, siêu dẫn, vật liệu từ tính và vật liệu quang học. #*(SubtitleContent)*#
-=== SLIDE 5 SUMMARY ===
-Placeholders: 1xTitleName, 1xTitleContent, 3xSubtitleName, 3xSubtitleContent
-===========================
-8. QUY TẮC VIẾT CHI TIẾT VÀ CHÍNH XÁC:
-
-* ANNOTATION BẮT BUỘC:
-- LUÔN có annotation #*(PlaceholderType)*# ngay sau mỗi nội dung
-- Không được thiếu hoặc sai annotation
-- Kiểm tra kỹ trước khi hoàn thành
-
-* NỘI DUNG CHẤT LƯỢNG:
-- Nội dung đầy đủ, chi tiết, không bỏ sót kiến thức nào
-- Mỗi khái niệm có định nghĩa rõ ràng và ví dụ minh họa
-- Giải thích từ cơ bản đến nâng cao
-- Liên hệ với thực tế và ứng dụng
-
-* CẤU TRÚC PHÂN CẤP RÕ RÀNG VÀ QUY TẮC 1:1 MAPPING:
-- TitleName: CHỈ là tiêu đề chính
-- TitleContent: Nội dung giải thích chi tiết (CHỈ 1 khối cho mỗi TitleName)
-- SubtitleName: Tiêu đề mục con
-- SubtitleContent: Nội dung chi tiết mục con (CHỈ 1 khối cho mỗi SubtitleName)
-
-* SLIDE SUMMARIES CHÍNH XÁC:
-- Đếm chính xác số lượng từng placeholder type
-- Format: === SLIDE [Số] SUMMARY ===
-- Ví dụ: Placeholders: 1xTitleName, 2xSubtitleName, 2xSubtitleContent
-  * TitleContent: TẤT CẢ nội dung giải thích của mục lớn được gộp chung thành 1 khối
-  * SubtitleName: CHỈ là tiêu đề mục nhỏ bên trong mục lớn
-  * SubtitleContent: TẤT CẢ nội dung giải thích của từng mục nhỏ được gộp chung thành 1 khối
-- Ký hiệu khoa học chính xác: H₂O, CO₂, x², √x, π, α, β
-- Sử dụng ngày hiện tại cho CreatedDate
-
-🔥 NHẮC NHỞ CUỐI CÙNG - QUY TẮC QUAN TRỌNG NHẤT:
-*Không tạo ra bảng, sơ đồ - chỉ sử dụng text mô tả
-*TUYỆT ĐỐI TUÂN THỦ QUY TẮC 1:1 MAPPING:
-- Mỗi SubtitleName chỉ có ĐÚNG 1 SubtitleContent tương ứng
-- Nếu có nhiều câu/đoạn văn cho 1 mục con, hãy gộp tất cả thành 1 SubtitleContent duy nhất
-- Ví dụ: Thay vì tạo 5 SubtitleContent riêng biệt, hãy gộp thành 1 SubtitleContent dài
-- Điều này đảm bảo template matching chính xác và tránh lỗi mapping
-"""
-
-        return prompt
 
     def _detect_placeholder_type_from_text(self, text: str, placeholder_patterns: Dict[str, str]) -> Optional[tuple]:
         """
@@ -596,242 +1286,9 @@ Placeholders: 1xTitleName, 1xTitleContent, 3xSubtitleName, 3xSubtitleContent
             logger.warning(f"Error generating slide description: {e}")
             return "Slide không xác định"
 
-    async def _map_content_to_json_template(
-        self,
-        llm_content: str,
-        original_template: Dict[str, Any],
-        analyzed_template: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Map nội dung LLM vào JSON template theo logic của luồng cũ với intelligent slide selection"""
-        try:
-            logger.info("🔧 Mapping LLM content to JSON template with intelligent slide selection...")
-
-            # Parse LLM content với slide summaries
-            parsed_data = self._parse_llm_content(llm_content)
-            slide_summaries = parsed_data.get("_slide_summaries", [])
-
-            if not slide_summaries:
-                logger.error("❌ No slide summaries found in LLM content")
-                raise ValueError("No slide summaries found - cannot perform intelligent slide selection")
-
-            # Create processed template copy
-            processed_template = {
-                "version": original_template.get("version", "1.0"),
-                "createdAt": datetime.now().isoformat(),
-                "slideFormat": original_template.get("slideFormat", "16:9"),
-                "slides": []
-            }
-
-            # Content index để track việc sử dụng content (như luồng cũ)
-            content_index = {
-                "LessonName": 0,
-                "LessonDescription": 0,
-                "CreatedDate": 0,
-                "TitleName": 0,
-                "TitleContent": 0,
-                "SubtitleName": 0,
-                "SubtitleContent": 0,
-                "ImageName": 0,
-                "ImageContent": 0
-            }
-
-            # Track used slides để tránh duplicate
-            used_slide_ids = set()
-            template_slides = analyzed_template.get("slides", [])
-
-            logger.info(f"� Processing {len(slide_summaries)} slide summaries with intelligent matching...")
-
-            # Process từng slide summary với intelligent template selection
-            for i, summary in enumerate(slide_summaries):
-                slide_num = i + 1
-                required_placeholders = summary.get("placeholders", [])
-                required_counts = summary.get("placeholder_counts", {})
-
-                logger.info(f"🔍 Processing slide {slide_num}:")
-                logger.info(f"   Required placeholders: {required_placeholders}")
-                logger.info(f"   Required counts: {required_counts}")
 
 
 
-                # Tìm template phù hợp CHÍNH XÁC (không fallback)
-                # Đầu tiên thử tìm template chưa sử dụng
-                best_template = self._find_exact_matching_template(
-                    required_placeholders,
-                    required_counts,
-                    template_slides,
-                    used_slide_ids
-                )
-
-                # Nếu không tìm thấy template chưa sử dụng, cho phép reuse template
-                if not best_template:
-                    logger.info(f"🔄 No unused template found, trying to reuse existing template...")
-                    best_template = self._find_exact_matching_template_with_reuse(
-                        required_placeholders,
-                        required_counts,
-                        template_slides
-                    )
-
-                if best_template:
-                    template_id = best_template['slideId']
-                    is_reused = template_id in used_slide_ids
-
-                    if is_reused:
-                        logger.info(f"✅ Found exact matching template (REUSED): {template_id}")
-                    else:
-                        logger.info(f"✅ Found exact matching template (NEW): {template_id}")
-
-                    # Tạo processed slide từ template
-                    processed_slide = await self._create_processed_slide_from_template(
-                        best_template,
-                        parsed_data,
-                        content_index,
-                        slide_num,
-                        is_reused
-                    )
-
-                    if processed_slide:
-                        processed_template["slides"].append(processed_slide)
-                        # Chỉ thêm vào used_slide_ids nếu chưa được sử dụng
-                        if not is_reused:
-                            used_slide_ids.add(template_id)
-                        logger.info(f"✅ Successfully processed slide {slide_num} ({'reused' if is_reused else 'new'})")
-                    else:
-                        logger.error(f"❌ Failed to create processed slide {slide_num} - SKIPPING")
-                        # Không fallback - skip slide này
-                        continue
-                else:
-                    logger.error(f"❌ No exact matching template found for slide {slide_num} - SKIPPING")
-                    # Không fallback - skip slide này
-                    continue
-
-            logger.info(f"✅ Template processing complete: {len(processed_template['slides'])} slides created")
-            return processed_template
-
-        except Exception as e:
-            logger.error(f"❌ Error mapping content to template: {e}")
-            raise
-
-    def _parse_llm_content(self, llm_content: str) -> Dict[str, List[Dict[str, Any]]]:
-        """Parse nội dung từ LLM theo format của luồng cũ với slide summaries"""
-        try:
-            logger.info("📝 Parsing LLM content with slide summaries...")
-
-            parsed_data = {
-                "LessonName": [],
-                "LessonDescription": [],
-                "CreatedDate": [],
-                "TitleName": [],
-                "TitleContent": [],
-                "SubtitleName": [],
-                "SubtitleContent": [],
-                "ImageName": [],
-                "ImageContent": []
-            }
-
-            # Parse content theo annotation format - LLM sinh theo format: "content #*(PlaceholderType)*#"
-            valid_placeholders = '|'.join(parsed_data.keys())
-
-            # Tách content theo từng dòng và match từng dòng
-            lines = llm_content.split('\n')
-            matches = []
-
-            for line in lines:
-                # Pattern để match: "content #*(PlaceholderType)*#" trong một dòng
-                pattern = rf'(.+?)\s*#\*\(({valid_placeholders})\)\*#'
-                line_matches = re.findall(pattern, line, re.IGNORECASE)
-                matches.extend(line_matches)
-
-            logger.info(f"🔍 Found {len(matches)} annotation matches")
-            logger.info(f"🔍 Pattern used: {pattern}")
-            logger.info(f"🔍 Total lines processed: {len(lines)}")
-
-            # Debug: Log some sample lines to see format
-            logger.info(f"🔍 Sample lines with potential annotations:")
-            for i, line in enumerate(lines[:20]):  # First 20 lines
-                if '#*(' in line and ')*#' in line:
-                    logger.info(f"  Line {i+1}: {line}")
-
-            for content, placeholder_type in matches:
-                clean_content = content.strip()
-                if clean_content:
-                    parsed_data[placeholder_type].append({
-                        "content": clean_content,
-                        "length": len(clean_content)
-                    })
-                    logger.info(f"✅ Parsed {placeholder_type}: {clean_content}...")
-                else:
-                    logger.warning(f"❌ Empty content for {placeholder_type}")
-
-            # Debug: Log parsed data summary
-            logger.info(f"🔍 PARSED DATA SUMMARY:")
-            for placeholder_type, items in parsed_data.items():
-                if items:
-                    logger.info(f"  {placeholder_type}: {len(items)} items")
-                    for i, item in enumerate(items[:3]):  # First 3 items
-                        logger.info(f"    [{i+1}] {item['content']}...")
-                else:
-                    logger.info(f"  {placeholder_type}: 0 items")
-
-            # Parse slide summaries để hiểu cấu trúc (như luồng cũ)
-            slide_summaries = []
-            summary_pattern = r'=== SLIDE (\d+) SUMMARY ===\s*Placeholders:\s*([^=]+)'
-            summary_matches = re.findall(summary_pattern, llm_content, re.IGNORECASE)
-
-            # Debug: Log LLM content và summary matches
-            logger.info(f"🔍 LLM content length: {len(llm_content)} characters")
-            logger.info(f"🔍 Summary pattern: {summary_pattern}")
-            logger.info(f"🔍 Found {len(summary_matches)} summary matches")
-            if len(summary_matches) == 0:
-                logger.warning("❌ No slide summaries found! LLM content preview:")
-                logger.warning(f"First 1000 chars: {llm_content[:1000]}")
-                logger.warning(f"Last 1000 chars: {llm_content[-1000:]}")
-            else:
-                logger.info(f"✅ Summary matches: {summary_matches}")
-
-            for slide_num_str, placeholder_text in summary_matches:
-                slide_num = int(slide_num_str)
-                placeholders = []
-                placeholder_counts = {}
-
-                # Parse placeholder counts từ text như "1xLessonName, 2xTitleContent"
-                for item in placeholder_text.split(','):
-                    item = item.strip()
-                    if 'x' in item:
-                        # Format: "2xTitleName"
-                        count_str, placeholder_type = item.split('x', 1)
-                        try:
-                            count = int(count_str)
-                            placeholders.append(placeholder_type.strip())
-                            placeholder_counts[placeholder_type.strip()] = count
-                        except ValueError:
-                            # Fallback nếu không parse được số
-                            placeholders.append(item)
-                            placeholder_counts[item] = 1
-                    else:
-                        # Format cũ: "TitleName"
-                        placeholders.append(item)
-                        placeholder_counts[item] = 1
-
-                slide_summaries.append({
-                    "slide_number": slide_num,
-                    "placeholders": placeholders,
-                    "placeholder_counts": placeholder_counts
-                })
-
-            # Log parsed results
-            logger.info(f"📋 Parsed {len(slide_summaries)} slide summaries")
-            for placeholder_type, items in parsed_data.items():
-                if items:
-                    logger.info(f"📋 {placeholder_type}: {len(items)} items")
-
-            # Store slide summaries for mapping logic
-            parsed_data["_slide_summaries"] = slide_summaries
-
-            return parsed_data
-
-        except Exception as e:
-            logger.error(f"❌ Error parsing LLM content: {e}")
-            raise
 
     async def _handle_max_length_content(
         self,
