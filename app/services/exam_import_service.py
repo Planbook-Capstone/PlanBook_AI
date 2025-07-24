@@ -245,10 +245,10 @@ class ExamImportService:
                 validation_result["details"]["missing_parts"] = missing_parts
                 validation_result["details"]["found_parts"] = found_parts
 
-            # 2. Kiểm tra phần đáp án (không bắt buộc)
-            if "ĐÁP ÁN" not in normalized_text:
-                validation_result["warnings"].append("Không tìm thấy phần đáp án")
-                validation_result["details"]["missing_answer_section"] = True
+            # 2. Bỏ qua kiểm tra phần đáp án (không bắt buộc)
+            # if "ĐÁP ÁN" not in normalized_text:
+            #     validation_result["warnings"].append("Không tìm thấy phần đáp án")
+            #     validation_result["details"]["missing_answer_section"] = True
 
             logger.info(f"Exam format validation passed - Found parts: {found_parts}, Missing: {missing_parts}")
             return validation_result
@@ -563,7 +563,7 @@ Hãy phân tích và trả về JSON:
                     logger.error(f"Part {i} must be a dictionary")
                     return False
 
-                part_required = ["part", "title", "description", "questions"]
+                part_required = ["part", "title", "questions"]
                 for field in part_required:
                     if field not in part:
                         logger.error(f"Missing required field '{field}' in part {i}")
