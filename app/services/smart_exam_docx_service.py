@@ -1343,18 +1343,20 @@ class SmartExamDocxService:
     def _generate_filename(self, exam_request: Union[SmartExamRequest, Dict[str, Any]]) -> str:
         """Tạo tên file"""
         try:
-            subject = self._get_field(exam_request, "subject", "exam")
-            grade = self._get_field(exam_request, "grade", "")
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            # Làm sạch tên file
-            safe_subject = "".join(c for c in subject if c.isalnum() or c in (' ', '-', '_')).rstrip()
-            
-            return f"smart_exam_{safe_subject}_lop{grade}_{timestamp}.docx"
-            
+            exam_title = self._get_field(exam_request, "examTitle", "Bài kiểm tra")
+
+            # Làm sạch tên file (loại bỏ ký tự đặc biệt)
+            safe_title = "".join(c for c in exam_title if c.isalnum() or c in (' ', '-', '_')).rstrip()
+
+            # Nếu sau khi làm sạch mà rỗng thì dùng fallback
+            if not safe_title.strip():
+                safe_title = "Bai_kiem_tra"
+
+            return f"{safe_title}.docx"
+
         except Exception as e:
             logger.error(f"Error generating filename: {e}")
-            return f"smart_exam_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+            return f"Bai_kiem_tra.docx"
 
 
 # Singleton instance
