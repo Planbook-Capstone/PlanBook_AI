@@ -40,7 +40,6 @@ class PartModel(BaseModel):
 class LessonMatrixModel(BaseModel):
     """Model cho ma trận của một bài học"""
     lessonId: str = Field(..., description="ID của bài học")
-    totalQuestions: int = Field(..., ge=1, description="Tổng số câu hỏi cho bài học này")
     parts: List[PartModel] = Field(..., description="Phân bổ câu hỏi theo từng phần")
 
     @validator('parts')
@@ -64,17 +63,7 @@ class LessonMatrixModel(BaseModel):
 
         return v
 
-    @validator('totalQuestions')
-    def validate_total_questions_match_parts(cls, v, values):
-        if 'parts' in values:
-            total_from_parts = 0
-            for part in values['parts']:
-                part_total = part.objectives.Biết + part.objectives.Hiểu + part.objectives.Vận_dụng
-                total_from_parts += part_total
-            
-            if total_from_parts != v:
-                raise ValueError(f"Tổng số câu hỏi ({v}) không khớp với tổng từ các phần ({total_from_parts})")
-        return v
+
 
 
 class SmartExamRequest(BaseModel):
@@ -130,7 +119,6 @@ class SmartExamRequest(BaseModel):
                 "matrix": [
                     {
                         "lessonId": "hoa12_bai1",
-                        "totalQuestions": 7,
                         "parts": [
                             {
                                 "part": 1,
