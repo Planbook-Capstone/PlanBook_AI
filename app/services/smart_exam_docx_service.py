@@ -1170,7 +1170,7 @@ class SmartExamDocxService:
 
                 # Lấy đáp án đúng - thống nhất với cách lấy trong phần tạo câu hỏi
                 dap_an = question.get("answer", question.get("dap_an", {}))
-                correct_answer = dap_an.get("dung", dap_an.get("correct", "A"))
+                correct_answer = dap_an.get("correct_answer", dap_an.get("dung", "A"))
                 table.cell(1, i + 1).text = correct_answer
 
         except Exception as e:
@@ -1198,7 +1198,7 @@ class SmartExamDocxService:
                 table.cell(0, i + 1).text = str(i + 1)
 
                 dap_an = questions[i].get("answer", questions[i].get("dap_an", {}))
-                correct_answer = dap_an.get("dung", dap_an.get("correct", "A"))
+                correct_answer = dap_an.get("correct_answer", dap_an.get("dung", "A"))
                 table.cell(1, i + 1).text = correct_answer
 
             # Điền đáp án hàng 2 (nếu có)
@@ -1208,7 +1208,7 @@ class SmartExamDocxService:
                     table.cell(2, col_idx).text = str(i + 1)
 
                     dap_an = questions[i].get("answer", questions[i].get("dap_an", {}))
-                    correct_answer = dap_an.get("dung", dap_an.get("correct", "A"))
+                    correct_answer = dap_an.get("correct_answer", dap_an.get("dung", "A"))
                     table.cell(3, col_idx).text = correct_answer
 
         except Exception as e:
@@ -1241,7 +1241,7 @@ class SmartExamDocxService:
                     table.cell(0, i + 1).text = str(start_idx + i + 1)
 
                     dap_an = question.get("answer", question.get("dap_an", {}))
-                    correct_answer = dap_an.get("dung", dap_an.get("correct", "A"))
+                    correct_answer = dap_an.get("correct_answer", dap_an.get("dung", "A"))
                     table.cell(1, i + 1).text = correct_answer
 
                 # Thêm khoảng cách giữa các bảng

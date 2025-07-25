@@ -143,7 +143,13 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
         # Lấy lesson_ids và thống kê
         lesson_ids = [lesson.lessonId for lesson in exam_request.matrix]
         total_lessons = len(lesson_ids)
-        total_questions = sum(lesson.totalQuestions for lesson in exam_request.matrix)
+
+        # Tính tổng số câu hỏi từ parts
+        total_questions = 0
+        for lesson in exam_request.matrix:
+            for part in lesson.parts:
+                total_questions += part.objectives.Biết + part.objectives.Hiểu + part.objectives.Vận_dụng
+
         await progress_callback(15, f"Tìm thấy {total_lessons} bài học, tổng {total_questions} câu hỏi cần tạo")
 
         # Bước 2: Lấy nội dung bài học
