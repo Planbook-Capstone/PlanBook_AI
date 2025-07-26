@@ -47,6 +47,7 @@ class ExamMatrixRequest(BaseModel):
     mon_hoc: str = Field(..., description="Tên môn học")
     lop: int = Field(..., ge=1, le=12, description="Lớp học (1-12)")
     tong_so_cau: int = Field(..., ge=1, description="Tổng số câu hỏi trong đề thi")
+    bookID: Optional[str] = Field(None, description="ID của sách giáo khoa (optional). Nếu có thì chỉ tìm lessons trong collection textbook_{bookID}")
     cau_hinh_de: List[CauHinhDeModel] = Field(..., description="Cấu hình đề thi theo từng lesson")
 
     @validator('cau_hinh_de')

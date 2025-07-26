@@ -6,9 +6,11 @@ import logging
 import json
 import re
 import time
+import uuid
 from typing import Dict, Any, Optional
 from docx import Document
 import io
+from datetime import datetime
 
 from app.services.openrouter_service import get_openrouter_service
 from app.models.exam_import_models import (
@@ -51,12 +53,12 @@ class ExamImportService:
             extracted_text = self._extract_text_from_docx_bytes(file_content)
             
             if not extracted_text or len(extracted_text.strip()) < 100:
-                return ExamImportError(
-                    message="File extraction failed",
-                    error="Không thể trích xuất nội dung từ file DOCX hoặc nội dung quá ngắn",
-                    error_code="EXTRACTION_FAILED",
-                    details={"filename": filename, "extracted_length": len(extracted_text)}
-                ).model_dump()
+                return {
+                    "statusCode": 400,
+                    "message": "File extraction failed",
+                    "error": "Không thể trích xuất nội dung từ file DOCX hoặc nội dung quá ngắn",
+                    "details": {"filename": filename, "extracted_length": len(extracted_text)}
+                }
 
             logger.info(f"Extracted {len(extracted_text)} characters from DOCX")
 
@@ -65,15 +67,15 @@ class ExamImportService:
             format_validation = self._validate_exam_format(extracted_text)
 
             if not format_validation["is_valid"]:
-                return ExamImportError(
-                    message="Invalid exam format",
-                    error=f"Đề thi không đúng format chuẩn: {format_validation['error']}",
-                    error_code="INVALID_FORMAT",
-                    details={
+                return {
+                    "statusCode": 400,
+                    "message": "Invalid exam format",
+                    "error": f"Đề thi không đúng format chuẩn: {format_validation['error']}",
+                    "details": {
                         "filename": filename,
                         "validation_details": format_validation["details"]
                     }
-                ).model_dump()
+                }
 
             # Lưu thông tin warnings để trả về sau
             format_warnings = format_validation.get("warnings", [])
@@ -86,64 +88,58 @@ class ExamImportService:
             llm_result = await self._analyze_exam_with_llm(extracted_text, filename)
 
             if not llm_result.get("success", False):
-                return ExamImportError(
-                    message="LLM analysis failed",
-                    error=f"Không thể phân tích đề thi: {llm_result.get('error', 'Unknown error')}",
-                    error_code="LLM_ANALYSIS_FAILED",
-                    details={"filename": filename}
-                ).model_dump()
+                return {
+                    "statusCode": 500,
+                    "message": "LLM analysis failed",
+                    "error": f"Không thể phân tích đề thi: {llm_result.get('error', 'Unknown error')}",
+                    "details": {"filename": filename}
+                }
 
             # 3. Parse JSON response từ LLM
             exam_data = llm_result.get("data")
             if not exam_data:
-                return ExamImportError(
-                    message="No exam data returned",
-                    error="LLM không trả về dữ liệu đề thi",
-                    error_code="NO_EXAM_DATA",
-                    details={"filename": filename}
-                ).model_dump()
+                return {
+                    "statusCode": 500,
+                    "message": "No exam data returned",
+                    "error": "LLM không trả về dữ liệu đề thi",
+                    "details": {"filename": filename}
+                }
 
             # 4. Validate và clean dữ liệu từ LLM
             logger.info("Validating and cleaning LLM data...")
             validation_result = self._validate_and_clean_exam_data(exam_data)
 
             if not validation_result["is_valid"]:
-                return ExamImportError(
-                    message="Invalid exam data from LLM",
-                    error=f"Dữ liệu từ LLM không hợp lệ: {validation_result['error']}",
-                    error_code="INVALID_LLM_DATA",
-                    details={
+                return {
+                    "statusCode": 422,
+                    "message": "Invalid exam data from LLM",
+                    "error": f"Dữ liệu từ LLM không hợp lệ: {validation_result['error']}",
+                    "details": {
                         "filename": filename,
                         "validation_details": validation_result["details"]
                     }
-                ).model_dump()
+                }
 
             # Sử dụng dữ liệu đã được clean
             exam_data = validation_result["cleaned_data"]
 
-            # 4. Validate và tạo response
+            # 5. Chuyển đổi sang format FE mong muốn
+            fe_format_data = self._convert_to_fe_format(exam_data)
+
+            # 6. Validate và tạo response
             processing_time = time.time() - start_time
 
-            # Tính toán statistics
-            statistics = self._calculate_import_statistics(exam_data)
-
             # Tạo message với thông tin về các phần thiếu
-            success_message = "Đề thi đã được import thành công"
+            success_message = "Template updated successfully"
             if format_warnings:
                 success_message += f" (Lưu ý: {'; '.join(format_warnings)})"
 
-            # Tạo response với thông tin bổ sung
-            response_data = ExamImportResponse(
-                success=True,
-                message=success_message,
-                data=ImportedExamData(**exam_data),
-                processing_time=processing_time
-            ).model_dump()
-
-            # Thêm thông tin về warnings và missing parts
-            response_data["warnings"] = format_warnings
-            response_data["missing_parts"] = missing_parts
-            response_data["statistics"] = statistics.model_dump()
+            # Tạo response theo format FE mong muốn
+            response_data = {
+                "statusCode": 200,
+                "message": success_message,
+                "data": fe_format_data
+            }
 
             return response_data
 
@@ -151,16 +147,16 @@ class ExamImportService:
             logger.error(f"Error importing exam from DOCX: {e}")
             processing_time = time.time() - start_time
             
-            return ExamImportError(
-                message="Import failed",
-                error=f"Lỗi trong quá trình import: {str(e)}",
-                error_code="IMPORT_ERROR",
-                details={
+            return {
+                "statusCode": 500,
+                "message": "Import failed",
+                "error": f"Lỗi trong quá trình import: {str(e)}",
+                "details": {
                     "filename": filename,
                     "processing_time": processing_time,
                     "error_type": type(e).__name__
                 }
-            ).model_dump()
+            }
 
     def _extract_text_from_docx_bytes(self, file_content: bytes) -> str:
         """
@@ -249,10 +245,10 @@ class ExamImportService:
                 validation_result["details"]["missing_parts"] = missing_parts
                 validation_result["details"]["found_parts"] = found_parts
 
-            # 2. Kiểm tra phần đáp án (không bắt buộc)
-            if "ĐÁP ÁN" not in normalized_text:
-                validation_result["warnings"].append("Không tìm thấy phần đáp án")
-                validation_result["details"]["missing_answer_section"] = True
+            # 2. Bỏ qua kiểm tra phần đáp án (không bắt buộc)
+            # if "ĐÁP ÁN" not in normalized_text:
+            #     validation_result["warnings"].append("Không tìm thấy phần đáp án")
+            #     validation_result["details"]["missing_answer_section"] = True
 
             logger.info(f"Exam format validation passed - Found parts: {found_parts}, Missing: {missing_parts}")
             return validation_result
@@ -340,7 +336,9 @@ NỘI DUNG ĐỀ THI:
 
 YÊU CẦU:
 1. Phân tích và trích xuất thông tin đề thi thành JSON với cấu trúc chính xác như mẫu
-2. Xác định môn học, lớp, thời gian làm bài, tên trường
+2. Xác định môn học, lớp, thời gian làm bài, tên trường:
+   - school: Tìm và trích xuất tên trường từ phần đầu đề thi (thường nằm dưới "BỘ GIÁO DỤC VÀ ĐÀO TẠO")
+   - Ví dụ: "TRƯỜNG THPT HONG THINH" → "TRƯỜNG THPT HONG THINH"
 3. Phân chia câu hỏi theo các phần có sẵn trong đề thi:
    - Phần I: Trắc nghiệm nhiều phương án lựa chọn (A, B, C, D) - nếu có
    - Phần II: Trắc nghiệm đúng/sai (a, b, c, d với true/false) - nếu có
@@ -354,7 +352,7 @@ YÊU CẦU:
   "subject": "Hóa học",
   "grade": 12,
   "duration_minutes": 90,
-  "school": "Trường THPT Hong Thinh",
+  "school": "TRƯỜNG THPT HONG THINH",
   "exam_code": "1234",
   "atomic_masses": "H = 1; C = 12; N = 14; O = 16",
   "parts": [
@@ -423,6 +421,8 @@ YÊU CẦU:
 LưU Ý QUAN TRỌNG VỀ CẤU TRÚC:
 - Chỉ trả về JSON hợp lệ, không thêm text giải thích
 - Đảm bảo tất cả câu hỏi và đáp án được trích xuất chính xác
+- QUAN TRỌNG: ID câu hỏi trong mỗi phần bắt đầu từ 1
+  * Ví dụ: Phần I có câu 1-6, Phần II có câu 1-6, Phần III có câu 1-6
 - QUAN TRỌNG: Mỗi loại câu hỏi có cấu trúc khác nhau:
 
   * PHẦN I (Trắc nghiệm nhiều lựa chọn): PHẢI có "options" và "answer"
@@ -458,6 +458,14 @@ LưU Ý QUAN TRỌNG VỀ CẤU TRÚC:
 - Không tạo ra câu hỏi giả cho các phần không có nội dung
 - Đảm bảo field "question" luôn là string không rỗng, không được null
 - Ví dụ: Nếu đề thi chỉ có "PHẦN I" với nội dung câu hỏi, chỉ tạo 1 part cho Phần I, bỏ qua Phần II và III dù có trong đáp án
+- QUAN TRỌNG: Giữ nguyên đáp án từ DOCX, KHÔNG được làm tròn, format hay thay đổi gì
+  * Ví dụ: Nếu đáp án là "1,66" thì giữ nguyên "1,66", không làm tròn thành "2"
+  * Nếu đáp án là "-1" thì giữ nguyên "-1"
+  * Nếu đáp án là "27" thì giữ nguyên "27"
+- QUAN TRỌNG: Trích xuất đúng tên trường từ phần đầu đề thi
+  * Tìm dòng chứa tên trường (thường nằm dưới "BỘ GIÁO DỤC VÀ ĐÀO TẠO")
+  * Ví dụ: "TRƯỜNG THPT ABC" → school: "TRƯỜNG THPT ABC"
+  * Nếu không tìm thấy, để school: null
 
 Hãy phân tích và trả về JSON:
 """
@@ -555,7 +563,7 @@ Hãy phân tích và trả về JSON:
                     logger.error(f"Part {i} must be a dictionary")
                     return False
 
-                part_required = ["part", "title", "description", "questions"]
+                part_required = ["part", "title", "questions"]
                 for field in part_required:
                     if field not in part:
                         logger.error(f"Missing required field '{field}' in part {i}")
@@ -586,6 +594,7 @@ Hãy phân tích và trả về JSON:
         """
         try:
             logger.info("Starting exam data validation and cleaning...")
+            logger.info(f"Raw exam data from LLM: {json.dumps(exam_data, ensure_ascii=False, indent=2)}")
 
             result = {
                 "is_valid": True,
@@ -683,7 +692,7 @@ Hãy phân tích và trả về JSON:
             }
 
             # Validate basic part fields
-            required_part_fields = ["part", "title", "description", "questions"]
+            required_part_fields = ["part", "title", "questions"]
             for field in required_part_fields:
                 if field not in part_data:
                     result["is_valid"] = False
@@ -694,7 +703,7 @@ Hãy phân tích và trả về JSON:
             cleaned_part = {
                 "part": str(part_data.get("part", "")).strip(),
                 "title": str(part_data.get("title", "")).strip(),
-                "description": str(part_data.get("description", "")).strip(),
+                "description": str(part_data.get("description", "")).strip() if part_data.get("description") else "",
                 "questions": []
             }
 
@@ -751,6 +760,9 @@ Hãy phân tích và trả về JSON:
             Dict chứa kết quả validation và dữ liệu đã clean
         """
         try:
+            logger.info(f"Cleaning question {question_index} in {part_name}")
+            logger.info(f"Question data: {json.dumps(question_data, ensure_ascii=False, indent=2)}")
+
             result = {
                 "is_valid": True,
                 "error": "",
@@ -772,11 +784,19 @@ Hãy phân tích và trả về JSON:
 
             cleaned_question = {
                 "id": int(question_data.get("id", question_index + 1)),
-                "question": str(question_text).strip()
+                "question": str(question_text)
             }
 
             # Clean theo loại phần
-            if "Phần I" in part_name or "PHẦN I" in part_name:
+            logger.info(f"Determining question type for part: '{part_name}'")
+
+            # Xác định loại câu hỏi dựa trên tên phần
+            part_name_upper = part_name.upper().strip()
+            logger.info(f"Part name after processing: '{part_name_upper}'")
+
+            # Sử dụng logic đơn giản để phân loại chính xác
+            if part_name_upper == "PHẦN I":
+                logger.info("Processing as MultipleChoice question (PHẦN I)")
                 # MultipleChoiceQuestion
                 if "options" not in question_data or "answer" not in question_data:
                     result["is_valid"] = False
@@ -790,14 +810,15 @@ Hãy phân tích và trả về JSON:
                     return result
 
                 cleaned_question["options"] = {
-                    "A": str(options.get("A", "")).strip(),
-                    "B": str(options.get("B", "")).strip(),
-                    "C": str(options.get("C", "")).strip(),
-                    "D": str(options.get("D", "")).strip()
+                    "A": options.get("A", ""),
+                    "B": options.get("B", ""),
+                    "C": options.get("C", ""),
+                    "D": options.get("D", "")
                 }
-                cleaned_question["answer"] = str(question_data.get("answer", "")).strip()
+                cleaned_question["answer"] = question_data.get("answer", "")
 
-            elif "Phần II" in part_name or "PHẦN II" in part_name:
+            elif part_name_upper == "PHẦN II":
+                logger.info("Processing as TrueFalse question (PHẦN II)")
                 # TrueFalseQuestion
                 if "statements" not in question_data:
                     result["is_valid"] = False
@@ -819,20 +840,21 @@ Hãy phân tích và trả về JSON:
                         return result
 
                     cleaned_statements[key] = {
-                        "text": str(stmt.get("text", "")).strip(),
-                        "answer": bool(stmt.get("answer", False))
+                        "text": stmt.get("text", ""),
+                        "answer": stmt.get("answer", False)
                     }
 
                 cleaned_question["statements"] = cleaned_statements
 
-            elif "Phần III" in part_name or "PHẦN III" in part_name:
+            elif part_name_upper == "PHẦN III":
+                logger.info("Processing as ShortAnswer question (PHẦN III)")
                 # ShortAnswerQuestion
                 if "answer" not in question_data:
                     result["is_valid"] = False
                     result["error"] = "ShortAnswer question missing 'answer'"
                     return result
 
-                cleaned_question["answer"] = str(question_data.get("answer", "")).strip()
+                cleaned_question["answer"] = question_data.get("answer", "")
 
             else:
                 result["is_valid"] = False
@@ -861,7 +883,8 @@ Hãy phân tích và trả về JSON:
         """
         try:
             parts = exam_data.get("parts", [])
-            
+            logger.info(f"Calculating statistics for {len(parts)} parts")
+
             total_questions = 0
             part_1_questions = 0
             part_2_questions = 0
@@ -869,15 +892,21 @@ Hãy phân tích và trả về JSON:
             
             for part in parts:
                 questions = part.get("questions", [])
-                part_name = part.get("part", "").lower()
-                
-                if "i" in part_name or "1" in part_name:
+                part_name = part.get("part", "").upper().strip()
+
+                # Sử dụng logic so sánh chính xác như trong _clean_question
+                if part_name == "PHẦN I":
                     part_1_questions = len(questions)
-                elif "ii" in part_name or "2" in part_name:
+                    logger.info(f"PHẦN I: {len(questions)} questions")
+                elif part_name == "PHẦN II":
                     part_2_questions = len(questions)
-                elif "iii" in part_name or "3" in part_name:
+                    logger.info(f"PHẦN II: {len(questions)} questions")
+                elif part_name == "PHẦN III":
                     part_3_questions = len(questions)
-                
+                    logger.info(f"PHẦN III: {len(questions)} questions")
+                else:
+                    logger.warning(f"Unknown part name for statistics: '{part_name}' with {len(questions)} questions")
+
                 total_questions += len(questions)
             
             has_atomic_masses = bool(exam_data.get("atomic_masses"))
@@ -904,6 +933,105 @@ Hãy phân tích và trả về JSON:
                 has_atomic_masses=False,
                 processing_quality=0.0
             )
+
+    def _convert_to_fe_format(self, exam_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Chuyển đổi dữ liệu exam sang format mà FE mong muốn
+
+        Args:
+            exam_data: Dữ liệu exam đã được clean
+
+        Returns:
+            Dict theo format FE
+        """
+        try:
+            # Tạo UUID cho template
+
+            # Chuyển đổi parts sang format FE
+            fe_parts = []
+            grading_config = {}
+
+            for part in exam_data.get("parts", []):
+                part_name = part.get("part", "")
+                part_title = part.get("title", "")
+                questions = part.get("questions", [])
+
+                # Chuyển đổi questions với UUID và questionNumber
+                fe_questions = []
+                for idx, question in enumerate(questions):
+                    fe_question = {
+                        "id": str(uuid.uuid4()),
+                        "questionNumber": idx + 1,
+                        "question": question.get("question", "")
+                    }
+
+                    # Thêm fields tùy theo loại câu hỏi
+                    if "options" in question and "answer" in question:
+                        # Multiple choice
+                        fe_question["options"] = question["options"]
+                        fe_question["answer"] = question["answer"]
+                    elif "statements" in question:
+                        # True/False
+                        fe_question["statements"] = question["statements"]
+                    elif "answer" in question and "options" not in question:
+                        # Short answer
+                        fe_question["answer"] = question["answer"]
+
+                    fe_questions.append(fe_question)
+
+                fe_part = {
+                    "part": part_name,
+                    "title": part_title,
+                    "questions": fe_questions
+                }
+
+                fe_parts.append(fe_part)
+
+                # Tạo grading config (mặc định)
+                if part_name == "PHẦN I":
+                    grading_config[part_name] = 0.25
+                elif part_name == "PHẦN II":
+                    grading_config[part_name] = 1.0
+                elif part_name == "PHẦN III":
+                    grading_config[part_name] = 0.25
+                else:
+                    grading_config[part_name] = 0.5
+
+            # Tính tổng điểm
+            total_score = 10.0
+
+            # Tạo response theo format FE
+            fe_data = {
+                "name": f"Template {exam_data.get('subject', 'Chưa xác định')}",
+                "subject": exam_data.get("subject", "Chưa xác định"),
+                "grade": exam_data.get("grade", "Chưa xác định"),
+                "durationMinutes": exam_data.get("duration_minutes", 90),
+                "parts": fe_parts,
+                "totalScore": total_score,
+                "version": 1,
+                "createdAt": datetime.now().isoformat()
+            }
+
+            return fe_data
+
+        except Exception as e:
+            logger.error(f"Error converting to FE format: {e}")
+            # Trả về format cơ bản nếu có lỗi
+            return {
+                "id": str(uuid.uuid4()),
+                "name": "Template mới",
+                "subject": "Chưa xác định",
+                "grade": 12,
+                "durationMinutes": 90,
+                "createdBy": str(uuid.uuid4()),
+                "contentJson": {
+                    "parts": []
+                },
+                "gradingConfig": {},
+                "totalScore": 10.0,
+                "version": 1,
+                "createdAt": datetime.now().isoformat()
+            }
 
 
 # Factory function để tạo ExamImportService instance

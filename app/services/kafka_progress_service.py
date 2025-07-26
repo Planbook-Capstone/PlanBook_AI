@@ -98,7 +98,7 @@ class KafkaProgressService:
             task_id=task_id,
             user_id=user_id,
             progress=5,
-            message="Task started processing",
+            message="Tác vụ đã bắt đầu xử lý",
             status="processing",
             additional_data=additional_data
         )
@@ -123,7 +123,7 @@ class KafkaProgressService:
             task_id=task_id,
             user_id=user_id,
             progress=100,
-            message="Task completed successfully",
+            message="Tác vụ đã hoàn thành thành công",
             status="completed",
             additional_data=additional_data
         )
@@ -155,7 +155,7 @@ class KafkaProgressService:
             task_id=task_id,
             user_id=user_id,
             progress=0,
-            message=f"Task failed: {error}",
+            message=f"Tác vụ thất bại: {error}",
             status="failed",
             additional_data=additional_data
         )
@@ -200,10 +200,10 @@ class KafkaProgressService:
 
             if not is_success and error_msg:
                 progress_data["error"] = error_msg
-                progress_data["message"] = f"Task completed with error: {error_msg}"
+                progress_data["message"] = f"Tác vụ hoàn thành với lỗi: {error_msg}"
                 progress_data["status"] = "completed_with_error"
             else:
-                progress_data["message"] = "Task completed successfully"
+                progress_data["message"] = "Tác vụ đã hoàn thành thành công"
                 progress_data["status"] = "completed"
 
             # Tạo Kafka message
@@ -305,7 +305,8 @@ class SyncKafkaProgressService:
         self,
         task_id: str,
         user_id: str,
-        lesson_id: Optional[str] = None
+        lesson_id: Optional[str] = None,
+        tool_log_id: Optional[str] = None
     ) -> bool:
         """Gửi thông báo task bắt đầu (sync)"""
         additional_data = {}
@@ -313,10 +314,11 @@ class SyncKafkaProgressService:
             additional_data["lesson_id"] = lesson_id
 
         return self.send_progress_update_sync(
+            tool_log_id=tool_log_id or "",
             task_id=task_id,
             user_id=user_id,
             progress=5,
-            message="Task started processing",
+            message="Tác vụ đã bắt đầu xử lý",
             status="processing",
             additional_data=additional_data
         )
@@ -326,7 +328,8 @@ class SyncKafkaProgressService:
         task_id: str,
         user_id: str,
         result: Dict[str, Any],
-        lesson_id: Optional[str] = None
+        lesson_id: Optional[str] = None,
+        tool_log_id: Optional[str] = None
     ) -> bool:
         """Gửi thông báo task hoàn thành (sync)"""
         logger.info(f"📤 [SYNC] Sending task completion notification - Task: {task_id}, User: {user_id}, Success: {result.get('success', 'unknown')}")
@@ -338,10 +341,11 @@ class SyncKafkaProgressService:
             additional_data["lesson_id"] = lesson_id
 
         success = self.send_progress_update_sync(
+            tool_log_id=tool_log_id or "",
             task_id=task_id,
             user_id=user_id,
             progress=100,
-            message="Task completed successfully",
+            message="Tác vụ đã hoàn thành thành công",
             status="completed",
             additional_data=additional_data
         )
@@ -358,7 +362,8 @@ class SyncKafkaProgressService:
         task_id: str,
         user_id: str,
         error: str,
-        lesson_id: Optional[str] = None
+        lesson_id: Optional[str] = None,
+        tool_log_id: Optional[str] = None
     ) -> bool:
         """Gửi thông báo task thất bại (sync)"""
         logger.info(f"📤 [SYNC] Sending task failure notification - Task: {task_id}, User: {user_id}, Error: {error}")
@@ -370,10 +375,11 @@ class SyncKafkaProgressService:
             additional_data["lesson_id"] = lesson_id
 
         success = self.send_progress_update_sync(
+            tool_log_id=tool_log_id or "",
             task_id=task_id,
             user_id=user_id,
             progress=0,
-            message=f"Task failed: {error}",
+            message=f"Tác vụ thất bại: {error}",
             status="failed",
             additional_data=additional_data
         )
@@ -418,10 +424,10 @@ class SyncKafkaProgressService:
 
             if not is_success and error_msg:
                 progress_data["error"] = error_msg
-                progress_data["message"] = f"Task completed with error: {error_msg}"
+                progress_data["message"] = f"Tác vụ hoàn thành với lỗi: {error_msg}"
                 progress_data["status"] = "completed_with_error"
             else:
-                progress_data["message"] = "Task completed successfully"
+                progress_data["message"] = "Tác vụ đã hoàn thành thành công"
                 progress_data["status"] = "completed"
 
             # Tạo Kafka message

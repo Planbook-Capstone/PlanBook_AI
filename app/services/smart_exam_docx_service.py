@@ -1170,7 +1170,7 @@ class SmartExamDocxService:
 
                 # Lấy đáp án đúng - thống nhất với cách lấy trong phần tạo câu hỏi
                 dap_an = question.get("answer", question.get("dap_an", {}))
-                correct_answer = dap_an.get("dung", dap_an.get("correct", "A"))
+                correct_answer = dap_an.get("correct_answer", dap_an.get("dung", "A"))
                 table.cell(1, i + 1).text = correct_answer
 
         except Exception as e:
@@ -1198,7 +1198,7 @@ class SmartExamDocxService:
                 table.cell(0, i + 1).text = str(i + 1)
 
                 dap_an = questions[i].get("answer", questions[i].get("dap_an", {}))
-                correct_answer = dap_an.get("dung", dap_an.get("correct", "A"))
+                correct_answer = dap_an.get("correct_answer", dap_an.get("dung", "A"))
                 table.cell(1, i + 1).text = correct_answer
 
             # Điền đáp án hàng 2 (nếu có)
@@ -1208,7 +1208,7 @@ class SmartExamDocxService:
                     table.cell(2, col_idx).text = str(i + 1)
 
                     dap_an = questions[i].get("answer", questions[i].get("dap_an", {}))
-                    correct_answer = dap_an.get("dung", dap_an.get("correct", "A"))
+                    correct_answer = dap_an.get("correct_answer", dap_an.get("dung", "A"))
                     table.cell(3, col_idx).text = correct_answer
 
         except Exception as e:
@@ -1241,7 +1241,7 @@ class SmartExamDocxService:
                     table.cell(0, i + 1).text = str(start_idx + i + 1)
 
                     dap_an = question.get("answer", question.get("dap_an", {}))
-                    correct_answer = dap_an.get("dung", dap_an.get("correct", "A"))
+                    correct_answer = dap_an.get("correct_answer", dap_an.get("dung", "A"))
                     table.cell(1, i + 1).text = correct_answer
 
                 # Thêm khoảng cách giữa các bảng
@@ -1343,18 +1343,20 @@ class SmartExamDocxService:
     def _generate_filename(self, exam_request: Union[SmartExamRequest, Dict[str, Any]]) -> str:
         """Tạo tên file"""
         try:
-            subject = self._get_field(exam_request, "subject", "exam")
-            grade = self._get_field(exam_request, "grade", "")
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            # Làm sạch tên file
-            safe_subject = "".join(c for c in subject if c.isalnum() or c in (' ', '-', '_')).rstrip()
-            
-            return f"smart_exam_{safe_subject}_lop{grade}_{timestamp}.docx"
-            
+            exam_title = self._get_field(exam_request, "examTitle", "Bài kiểm tra")
+
+            # Làm sạch tên file (loại bỏ ký tự đặc biệt)
+            safe_title = "".join(c for c in exam_title if c.isalnum() or c in (' ', '-', '_')).rstrip()
+
+            # Nếu sau khi làm sạch mà rỗng thì dùng fallback
+            if not safe_title.strip():
+                safe_title = "Bai_kiem_tra"
+
+            return f"{safe_title}.docx"
+
         except Exception as e:
             logger.error(f"Error generating filename: {e}")
-            return f"smart_exam_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+            return f"Bai_kiem_tra.docx"
 
 
 # Singleton instance

@@ -132,7 +132,7 @@ class MongoDBTaskService:
         # Tạo initial progress step
         initial_progress_step = {
             "progress": 0,
-            "message": "Task created",
+            "message": "Tác vụ đã được tạo",
             "timestamp": time.time(),
             "datetime": datetime.now().isoformat()
         }
@@ -354,7 +354,7 @@ class MongoDBTaskService:
             # Tạo progress step cho processing
             progress_step = {
                 "progress": 5,
-                "message": "Task started processing",
+                "message": "Tác vụ đã bắt đầu xử lý",
                 "timestamp": time.time(),
                 "datetime": datetime.now().isoformat()
             }
@@ -367,7 +367,7 @@ class MongoDBTaskService:
                         "started_at": datetime.now(),
                         "updated_at": datetime.now(),
                         "progress": 5,
-                        "message": "Processing started"
+                        "message": "Đã bắt đầu xử lý"
                     },
                     "$push": {"progress_history": progress_step}
                 },
@@ -394,7 +394,7 @@ class MongoDBTaskService:
             # Tạo progress step cho completion
             progress_step = {
                 "progress": 100,
-                "message": "Task completed successfully",
+                "message": "Tác vụ đã hoàn thành thành công",
                 "timestamp": time.time(),
                 "datetime": datetime.now().isoformat()
             }
@@ -407,7 +407,7 @@ class MongoDBTaskService:
                         "completed_at": datetime.now(),
                         "updated_at": datetime.now(),
                         "progress": 100,
-                        "message": "Task completed successfully",
+                        "message": "Tác vụ đã hoàn thành thành công",
                         "result": result,
                     },
                     "$push": {"progress_history": progress_step}
@@ -435,7 +435,7 @@ class MongoDBTaskService:
             # Tạo progress step cho failure
             progress_step = {
                 "progress": -1,  # -1 để đánh dấu failed
-                "message": f"Task failed: {error}",
+                "message": f"Tác vụ thất bại: {error}",
                 "timestamp": time.time(),
                 "datetime": datetime.now().isoformat()
             }
@@ -447,7 +447,7 @@ class MongoDBTaskService:
                         "status": TaskStatus.FAILED.value,
                         "completed_at": datetime.now(),
                         "updated_at": datetime.now(),
-                        "message": f"Task failed: {error}",
+                        "message": f"Tác vụ thất bại: {error}",
                         "error": error,
                     },
                     "$push": {"progress_history": progress_step}

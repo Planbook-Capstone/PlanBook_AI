@@ -1,6 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Query
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 import logging
 from datetime import datetime
@@ -668,6 +668,7 @@ class LessonPlanContentRequest(BaseModel):
     lesson_plan_json: Dict[str, Any]
     lesson_id: Optional[Any] = None
     user_id: Optional[str] = None
+    book_id: Optional[str] = Field(None, description="ID của sách giáo khoa (optional). Nếu có thì chỉ tìm lesson content trong collection textbook_{book_id}")
 
 
 class LessonPlanContentResponse(BaseModel):
@@ -683,10 +684,19 @@ async def generate_lesson_plan_content(request: LessonPlanContentRequest):
     Sinh nội dung chi tiết cho giáo án từ cấu trúc JSON với Celery task
 
     Args:
-        request: Request chứa JSON giáo án và lesson_id (optional)
+        request: Request chứa JSON giáo án, lesson_id (optional), và book_id (optional)
 
     Returns:
         Dict chứa task_id để theo dõi tiến độ
+
+    Example:
+        POST /api/v1/lesson-plan/generate-lesson-plan-content
+        {
+            "lesson_plan_json": {...},
+            "lesson_id": "hoa12_bai1",
+            "book_id": "hoa12",
+            "user_id": "user123"
+        }
     """
     try:
         logger.info("Starting lesson plan content generation task...")
@@ -706,7 +716,8 @@ async def generate_lesson_plan_content(request: LessonPlanContentRequest):
         task_id = await background_task_processor.create_lesson_plan_content_task(
             lesson_plan_json=request.lesson_plan_json,
             lesson_id=request.lesson_id,
-            user_id=request.user_id
+            user_id=request.user_id,
+            book_id=request.book_id
         )
 
         return {

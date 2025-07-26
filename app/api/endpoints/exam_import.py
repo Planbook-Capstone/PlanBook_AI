@@ -106,27 +106,28 @@ async def import_exam_from_docx(
                 filename=file.filename
             )
             
-            logger.info(f"Import result: success={result.get('success', False)}")
-            
-            if not result.get("success", False):
+            logger.info(f"Import result: statusCode={result.get('statusCode', 500)}")
+
+            # Kiểm tra status code thay vì success field
+            if result.get("statusCode", 500) != 200:
                 # Trả về lỗi từ service
-                error_response = ExamImportError(**result)
                 return JSONResponse(
-                    status_code=422,
-                    content=error_response.model_dump()
+                    status_code=result.get("statusCode", 500),
+                    content=result
                 )
-            
+
             # 4. Thành công - trả về dữ liệu
             processing_time = time.time() - start_time
             logger.info(f"Import completed successfully in {processing_time:.2f}s")
-            
-            # Thêm thông tin bổ sung vào response
-            result["processing_time"] = processing_time
-            result["file_info"] = {
-                "filename": file.filename,
-                "file_size": file_size,
-                "content_type": file.content_type
-            }
+
+            # Thêm thông tin bổ sung vào response data
+            if "data" in result:
+                result["data"]["processing_time"] = processing_time
+                result["data"]["file_info"] = {
+                    "filename": file.filename,
+                    "file_size": file_size,
+                    "content_type": file.content_type
+                }
             
             if additional_instructions:
                 result["additional_instructions"] = additional_instructions

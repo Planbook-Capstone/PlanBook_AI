@@ -40,7 +40,6 @@ class PartModel(BaseModel):
 class LessonMatrixModel(BaseModel):
     """Model cho ma trận của một bài học"""
     lessonId: str = Field(..., description="ID của bài học")
-    totalQuestions: int = Field(..., ge=1, description="Tổng số câu hỏi cho bài học này")
     parts: List[PartModel] = Field(..., description="Phân bổ câu hỏi theo từng phần")
 
     @validator('parts')
@@ -64,17 +63,7 @@ class LessonMatrixModel(BaseModel):
 
         return v
 
-    @validator('totalQuestions')
-    def validate_total_questions_match_parts(cls, v, values):
-        if 'parts' in values:
-            total_from_parts = 0
-            for part in values['parts']:
-                part_total = part.objectives.Biết + part.objectives.Hiểu + part.objectives.Vận_dụng
-                total_from_parts += part_total
-            
-            if total_from_parts != v:
-                raise ValueError(f"Tổng số câu hỏi ({v}) không khớp với tổng từ các phần ({total_from_parts})")
-        return v
+
 
 
 class SmartExamRequest(BaseModel):
@@ -87,7 +76,9 @@ class SmartExamRequest(BaseModel):
     examCode: Optional[str] = Field(None, description="Mã đề thi (4 số, VD: 0335). Nếu không truyền sẽ tự động random")
     outputFormat: Literal["docx"] = Field("docx", description="Định dạng file xuất ra")
     outputLink: Literal["online"] = Field("online", description="Loại link trả về")
+    bookID: Optional[str] = Field(None, description="ID của sách giáo khoa (optional). Nếu có thì chỉ tìm lessons trong collection textbook_{bookID}")
     matrix: List[LessonMatrixModel] = Field(..., description="Ma trận đề thi theo bài học")
+    user_id: Optional[str] = Field(None, description="ID của user (dùng cho Kafka integration)")
 
     @validator('matrix')
     def validate_matrix_not_empty(cls, v):
@@ -125,10 +116,10 @@ class SmartExamRequest(BaseModel):
                 "examCode": "0335",
                 "outputFormat": "docx",
                 "outputLink": "online",
+                "bookID": "hoa12",
                 "matrix": [
                     {
                         "lessonId": "hoa12_bai1",
-                        "totalQuestions": 7,
                         "parts": [
                             {
                                 "part": 1,

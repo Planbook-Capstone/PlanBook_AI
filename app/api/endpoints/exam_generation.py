@@ -195,10 +195,12 @@ async def generate_exam_from_matrix(request: ExamMatrixRequest):
     Example:
         POST /api/v1/exam/generate-exam
         {
-            "lesson_id": "lesson_01_01",
+            "exam_id": "exam_001",
+            "ten_truong": "Trường THPT ABC",
             "mon_hoc": "Sinh học",
             "lop": 12,
             "tong_so_cau": 10,
+            "bookID": "sinh12",
             "cau_hinh_de": [...]
         }
 
@@ -220,8 +222,15 @@ async def generate_exam_from_matrix(request: ExamMatrixRequest):
         # 2. Tìm kiếm nội dung cho tất cả bài học
         logger.info("Searching for multiple lesson contents...")
         textbookService = get_textbook_retrieval_service()
+
+        # Lấy bookID từ request nếu có
+        book_id = getattr(request, 'bookID', None)
+        if book_id:
+            logger.info(f"Searching lessons in specific book: {book_id}")
+
         lesson_content = await textbookService.get_multiple_lessons_content_for_exam(
-            lesson_ids=lesson_ids
+            lesson_ids=lesson_ids,
+            book_id=book_id
         )
         print("LessonContent" ,lesson_content)
 
@@ -421,9 +430,10 @@ async def generate_smart_exam(request: SmartExamRequest):
 
     Endpoint này nhận ma trận đề thi và trả về task_id để theo dõi progress.
     Sử dụng Celery để xử lý bất đồng bộ với progress tracking bằng tiếng Việt.
+    Hỗ trợ Kafka integration khi có user_id.
 
     Args:
-        request: SmartExamRequest chứa thông tin trường, môn học, ma trận đề thi
+        request: SmartExamRequest chứa thông tin trường, môn học, ma trận đề thi, user_id (optional)
 
     Returns:
         Dict: {"task_id": "...", "message": "..."} để theo dõi qua /api/v1/tasks/{task_id}/status
@@ -439,7 +449,23 @@ async def generate_smart_exam(request: SmartExamRequest):
             "duration": 90,
             "outputFormat": "docx",
             "outputLink": "online",
-            "matrix": [...]
+            "bookID": "hoa12",
+            "user_id": "user123",
+            "matrix": [
+                {
+                    "lessonId": "hoa12_bai1",
+                    "parts": [
+                        {
+                            "partName": "Phần 1: Trắc nghiệm",
+                            "objectives": {
+                                "Biết": 2,
+                                "Hiểu": 2,
+                                "Vận_dụng": 1
+                            }
+                        }
+                    ]
+                }
+            ]
         }
 
         Response:
@@ -452,6 +478,8 @@ async def generate_smart_exam(request: SmartExamRequest):
     try:
         logger.info(f"=== SMART EXAM GENERATION START (ASYNC) ===")
         logger.info(f"Request: {request.school} - {request.subject} - Grade {request.grade}")
+        if request.user_id:
+            logger.info(f"User ID: {request.user_id} (Kafka integration enabled)")
 
         # 1. Validate request
         if not request.matrix:

@@ -36,17 +36,19 @@ class LessonPlanContentService:
         self.SECTION_TYPES = {"SECTION", "SUBSECTION"}
     
     async def generate_lesson_plan_content(
-        self, 
+        self,
         lesson_plan_json: Dict[str, Any],
-        lesson_id: Optional[str] = None
+        lesson_id: Optional[str] = None,
+        book_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Sinh nội dung chi tiết cho giáo án từ cấu trúc JSON
-        
+
         Args:
             lesson_plan_json: Cấu trúc JSON của giáo án
             lesson_id: ID của bài học để lấy nội dung tham khảo (optional)
-            
+            book_id: ID của sách giáo khoa để tìm lesson content trong collection cụ thể (optional)
+
         Returns:
             Dict chứa kết quả xử lý và JSON đã được sinh nội dung
         """
@@ -66,7 +68,9 @@ class LessonPlanContentService:
             lesson_content = ""
             if lesson_id:
                 try:
-                    content_result = await self.textbook_service.get_lesson_content(lesson_id)
+                    if book_id:
+                        logger.info(f"Retrieving lesson content for {lesson_id} from book {book_id}")
+                    content_result = await self.textbook_service.get_lesson_content(lesson_id, book_id)
                     print(f"DEBUG: content_result: {content_result}")
                     lesson_content = content_result.get("lesson_content", "")
                     logger.info(f"Retrieved lesson content: {len(lesson_content)} characters")
