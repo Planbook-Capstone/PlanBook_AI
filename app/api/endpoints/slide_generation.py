@@ -593,14 +593,14 @@ async def process_json_template(request: JsonTemplateRequest):
     """
     Xử lý JSON template từ frontend với nội dung bài học
 
-    Endpoint này nhận JSON template từ frontend và lesson_id, sau đó:
+    Endpoint này nhận danh sách slides đã được phân tích sẵn từ frontend và lesson_id, sau đó:
     1. Lấy nội dung bài học từ Qdrant
-    2. Phân tích cấu trúc JSON template và detect placeholders
+    2. Sử dụng trực tiếp slides đã được phân tích (có sẵn description trong mỗi slide)
     3. Sử dụng LLM để sinh nội dung phù hợp với template
-    4. Map nội dung vào JSON template và trả về
+    4. Map nội dung vào slides và trả về
 
     Args:
-        request: JsonTemplateRequest với lesson_id, template JSON và config tùy chọn
+        request: JsonTemplateRequest với lesson_id, danh sách slides đã phân tích và config tùy chọn
 
     Returns:
         JsonTemplateResponse: JSON template đã được xử lý với nội dung
@@ -608,7 +608,7 @@ async def process_json_template(request: JsonTemplateRequest):
     try:
         logger.info(f"=== PROCESS-JSON-TEMPLATE ENDPOINT CALLED ===")
         logger.info(f"Request: lesson_id={request.lesson_id}")
-        logger.info(f"Template slides count: {len(request.template.get('slides', []))}")
+        logger.info(f"Slides count: {len(request.slides)}")
 
         # Lấy JSON template service
         json_service = get_json_template_service()
@@ -619,10 +619,17 @@ async def process_json_template(request: JsonTemplateRequest):
                 detail="JSON template service not available"
             )
 
+        # Tạo template_json từ request format mới
+        template_json = {
+            "slides": request.slides,
+            "version": "1.0",
+            "slideFormat": "16:9"
+        }
+
         # Xử lý JSON template
         result = await json_service.process_json_template(
             lesson_id=request.lesson_id,
-            template_json=request.template,
+            template_json=template_json,
             config_prompt=request.config_prompt
         )
 

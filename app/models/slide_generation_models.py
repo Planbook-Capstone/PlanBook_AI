@@ -175,9 +175,9 @@ class JsonTemplateRequest(BaseModel):
         description="ID của bài học cần tạo slide"
     )
 
-    template: Dict[str, Any] = Field(
+    slides: List[Dict[str, Any]] = Field(
         ...,
-        description="JSON template từ frontend"
+        description="Danh sách slides đã được phân tích sẵn với description"
     )
 
     config_prompt: Optional[str] = Field(

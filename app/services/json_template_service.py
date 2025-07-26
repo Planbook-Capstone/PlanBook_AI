@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 class JsonTemplateService:
     """Service xử lý JSON template từ frontend"""
-    
+
     def __init__(self):
         self.llm_service = get_llm_service()
         self.textbook_service = get_textbook_retrieval_service()
@@ -28,7 +28,7 @@ class JsonTemplateService:
             self.llm_service and self.llm_service.is_available() and
             self.textbook_service is not None
         )
-    
+
     async def process_json_template(
         self,
         lesson_id: str,
@@ -43,7 +43,7 @@ class JsonTemplateService:
 
         Args:
             lesson_id: ID của bài học
-            template_json: JSON template từ frontend
+            template_json: JSON template từ frontend đã được phân tích sẵn
             config_prompt: Prompt cấu hình tùy chỉnh
 
         Returns:
@@ -76,12 +76,11 @@ class JsonTemplateService:
             if not content_text or not content_text.strip():
                 raise ValueError("lesson content is empty")
 
-            # Bước 2: Phân tích template và detect placeholders
-            try:
-                analyzed_template = self._analyze_json_template(template_json)
-                logger.info(f"📊 Analyzed template: {len(analyzed_template['slides'])} slides")
-            except Exception as e:
-                raise Exception(f"Failed to analyze template: {str(e)}")
+            # Bước 2: Sử dụng trực tiếp JSON đã được phân tích từ input
+            # Input đã có sẵn description trong slides nên không cần phân tích thêm
+            logger.info(f"📊 Using pre-analyzed template: {len(template_json['slides'])} slides")
+            # Sử dụng trực tiếp template_json với format mới
+            analyzed_template = template_json
 
             # Workflow tối ưu hóa 3 bước
             result = await self._execute_optimized_workflow(
@@ -130,7 +129,7 @@ class JsonTemplateService:
                 },
                 "slides_created": 0
             }
-    
+
     async def _get_lesson_content(self, lesson_id: str) -> Dict[str, Any]:
         """Lấy nội dung bài học từ TextbookRetrievalService"""
         try:
@@ -249,6 +248,8 @@ class JsonTemplateService:
             # Trả về text gốc nếu lỗi
             return text.replace("\\n", "\n")
 
+
+
     async def _execute_optimized_workflow(
         self,
         lesson_content: str,
@@ -314,6 +315,7 @@ class JsonTemplateService:
 
             # Track used slides để tránh duplicate
             used_slide_ids = set()
+            # analyzed_template bây giờ chính là input JSON với format mới
             template_slides = analyzed_template.get("slides", [])
 
             for i, framework_slide in enumerate(framework_slides):
@@ -1143,7 +1145,7 @@ Neutron không mang điện.\\nCó khối lượng gần bằng proton.\\nTạo 
         except Exception as e:
             logger.error(f"❌ Error mapping processed slides to template: {e}")
             raise
-    
+
     def _analyze_json_template(self, template_json: Dict[str, Any]) -> Dict[str, Any]:
         """Phân tích JSON template và detect placeholders (theo logic cũ)"""
         try:
@@ -1227,7 +1229,7 @@ Neutron không mang điện.\\nCó khối lượng gần bằng proton.\\nTạo 
         except Exception as e:
             logger.error(f"❌ Error analyzing JSON template: {e}")
             raise
-    
+
 
 
 
@@ -1285,6 +1287,35 @@ Neutron không mang điện.\\nCó khối lượng gần bằng proton.\\nTạo 
         except Exception as e:
             logger.warning(f"Error generating slide description: {e}")
             return "Slide không xác định"
+    def _parse_description_to_counts(self, description: str) -> Dict[str, int]:
+        """
+        Parse description có sẵn thành placeholder counts
+        Ví dụ: "1 TitleName, 1 TitleContent, 1 SubtitleName" -> {"TitleName": 1, "TitleContent": 1, "SubtitleName": 1}
+        """
+        try:
+            placeholder_counts = {}
+
+            if not description or not description.strip():
+                return placeholder_counts
+
+            # Pattern để match "số PlaceholderType"
+            import re
+            pattern = r'(\d+)\s+(\w+)'
+            matches = re.findall(pattern, description)
+
+            for count_str, placeholder_type in matches:
+                try:
+                    count = int(count_str)
+                    placeholder_counts[placeholder_type] = count
+                except ValueError:
+                    continue
+
+            logger.info(f"📋 Parsed description '{description}' -> {placeholder_counts}")
+            return placeholder_counts
+
+        except Exception as e:
+            logger.error(f"❌ Error parsing description '{description}': {e}")
+            return {}
 
 
 
@@ -1362,23 +1393,15 @@ SHORTENED CONTENT:"""
         """
         try:
             for slide in template_slides:
-                slide_id = slide.get("slideId")
+                slide_id = slide.get("id")  # Format mới sử dụng "id" thay vì "slideId"
 
                 # Skip used slides
                 if slide_id in used_slide_ids:
                     continue
 
-                # Get placeholder types and counts in this slide
-                slide_elements = slide.get("elements", [])
-                slide_placeholder_counts = {}
-
-                for elem in slide_elements:
-                    placeholder_type = elem.get("Type")
-                    if placeholder_type:
-                        if placeholder_type in slide_placeholder_counts:
-                            slide_placeholder_counts[placeholder_type] += 1
-                        else:
-                            slide_placeholder_counts[placeholder_type] = 1
+                # Sử dụng description có sẵn thay vì phân tích lại
+                description = slide.get("description", "")
+                slide_placeholder_counts = self._parse_description_to_counts(description)
 
                 # Check for EXACT match: same placeholder types and same counts
                 required_set = set(required_placeholders)
@@ -1436,19 +1459,11 @@ SHORTENED CONTENT:"""
             logger.info(f"🔍 Finding exact matching template with reuse support...")
 
             for slide in template_slides:
-                slide_id = slide.get("slideId")
+                slide_id = slide.get("id")  # Format mới sử dụng "id" thay vì "slideId"
 
-                # Get placeholder types and counts in this slide
-                slide_elements = slide.get("elements", [])
-                slide_placeholder_counts = {}
-
-                for elem in slide_elements:
-                    placeholder_type = elem.get("Type")
-                    if placeholder_type:
-                        if placeholder_type in slide_placeholder_counts:
-                            slide_placeholder_counts[placeholder_type] += 1
-                        else:
-                            slide_placeholder_counts[placeholder_type] = 1
+                # Sử dụng description có sẵn thay vì phân tích lại
+                description = slide.get("description", "")
+                slide_placeholder_counts = self._parse_description_to_counts(description)
 
                 # Check for EXACT match: same placeholder types and same counts
                 required_set = set(required_placeholders)
@@ -1506,9 +1521,10 @@ SHORTENED CONTENT:"""
             Dict processed slide hoặc None nếu fail
         """
         try:
-            template_slide_id = template_slide.get("slideId")
-            template_elements = template_slide.get("elements", [])
-            original_slide = template_slide.get("original_slide", {})
+            # Format mới: template_slide chính là slide từ input JSON
+            template_slide_id = template_slide.get("id")
+            slide_data = template_slide.get("slideData", {})
+            template_elements = slide_data.get("elements", [])
 
             # Tạo slideId mới cho processed slide
             if is_reused:
@@ -1518,70 +1534,90 @@ SHORTENED CONTENT:"""
                 new_slide_id = f"slide_{slide_number:03d}_from_{template_slide_id}"
                 logger.info(f"📄 Creating processed slide (NEW): {new_slide_id} (from template: {template_slide_id})")
 
-            # Copy toàn bộ slide structure từ template (giống luồng cũ copy slide)
-            processed_slide = copy.deepcopy(original_slide)
+            # Copy toàn bộ slide structure từ template (format mới)
+            processed_slide = copy.deepcopy(template_slide)
 
-            # Chỉ update những field cần thiết
-            processed_slide["id"] = new_slide_id  # Update slide ID
-            processed_slide["elements"] = []  # Reset elements để fill content mới
+            # Update slide ID và reset elements để fill content mới
+            processed_slide["id"] = new_slide_id
+            processed_slide["slideData"]["id"] = new_slide_id
+            processed_slide["slideData"]["title"] = f"Slide {slide_number}"
+            processed_slide["slideData"]["elements"] = []  # Reset elements để fill content mới
 
-            # Map content vào từng element
+            # Placeholder patterns để detect từ text elements
+            placeholder_patterns = {
+                "LessonName": r"LessonName\s+(\d+)",
+                "LessonDescription": r"LessonDescription\s+(\d+)",
+                "CreatedDate": r"CreatedDate\s+(\d+)",
+                "TitleName": r"TitleName\s+(\d+)",
+                "TitleContent": r"TitleContent\s+(\d+)",
+                "SubtitleName": r"SubtitleName\s+(\d+)",
+                "SubtitleContent": r"SubtitleContent\s+(\d+)",
+                "ImageName": r"ImageName\s+(\d+)",
+                "ImageContent": r"ImageContent\s+(\d+)"
+            }
+
+            # Map content vào từng element (format mới)
             for element in template_elements:
-                element_id = element.get("objectId")
-                placeholder_type = element.get("Type")
-                max_length = element.get("max_length", 1000)
-                original_element = element.get("original_element", {})
+                if element.get("type") == "text":
+                    text = element.get("text", "").strip()
+                    element_id = element.get("id")
 
-                # Get content for this placeholder type
-                content_list = parsed_data.get(placeholder_type, [])
-                current_index = content_index.get(placeholder_type, 0)
+                    # Detect placeholder type từ text
+                    placeholder_result = self._detect_placeholder_type_from_text(text, placeholder_patterns)
 
-                logger.info(f"🔍 Mapping content for {placeholder_type}:")
-                logger.info(f"   Available content items: {len(content_list)}")
-                logger.info(f"   Current index: {current_index}")
-                logger.info(f"   Element ID: {element_id}")
+                    if placeholder_result:
+                        placeholder_type, max_length = placeholder_result
 
-                if current_index < len(content_list):
-                    content_item = content_list[current_index]
-                    raw_content = content_item.get("content", "")
-                    logger.info(f"   Raw content: {raw_content}...")
+                        # Get content for this placeholder type
+                        content_list = parsed_data.get(placeholder_type, [])
+                        current_index = content_index.get(placeholder_type, 0)
 
-                    try:
-                        # Check max_length and handle if needed
-                        final_content = await self._handle_max_length_content(
-                            raw_content,
-                            max_length,
-                            placeholder_type
-                        )
+                        logger.info(f"🔍 Mapping content for {placeholder_type}:")
+                        logger.info(f"   Available content items: {len(content_list)}")
+                        logger.info(f"   Current index: {current_index}")
+                        logger.info(f"   Element ID: {element_id}")
 
-                        # Copy toàn bộ JSON structure từ template (giống luồng cũ copy slide)
-                        processed_element = copy.deepcopy(original_element)  # Deep copy toàn bộ structure
+                        if current_index < len(content_list):
+                            content_item = content_list[current_index]
+                            raw_content = content_item.get("content", "")
+                            logger.info(f"   Raw content: {raw_content[:100]}...")
 
-                        # Chỉ update những field cần thiết
-                        processed_element["id"] = element_id  # Update ID
-                        processed_element["text"] = final_content  # Update content
+                            try:
+                                # Check max_length and handle if needed
+                                final_content = await self._handle_max_length_content(
+                                    raw_content,
+                                    max_length,
+                                    placeholder_type
+                                )
 
-                        processed_slide["elements"].append(processed_element)
+                                # Copy element và update content (format mới)
+                                processed_element = copy.deepcopy(element)
+                                processed_element["text"] = final_content  # Update content
 
-                        # Increment content index
-                        content_index[placeholder_type] = current_index + 1
+                                processed_slide["slideData"]["elements"].append(processed_element)
 
-                        logger.info(f"✅ Mapped {placeholder_type} to {element_id}: {final_content}...")
-                        logger.info(f"   Final content length: {len(final_content)}")
-                        logger.info(f"   Element structure: {list(processed_element.keys())}")
-                    except Exception as e:
-                        logger.error(f"❌ Failed to handle content for {placeholder_type} in slide {slide_number}: {e}")
-                        logger.error(f"   Content length: {len(raw_content)}, Max length: {max_length}")
-                        logger.error(f"   SKIPPING this slide due to content length issue - NO FALLBACK")
-                        return None  # Skip entire slide if any content fails
-                else:
-                    logger.warning(f"❌ No more content available for {placeholder_type} in slide {slide_number}")
-                    logger.warning(f"   Available content items: {len(content_list)}")
-                    logger.warning(f"   Current index: {current_index}")
-                    logger.warning(f"   Content list: {[item.get('content', '') for item in content_list]}")
-                    return None  # Skip slide if missing content
+                                # Increment content index
+                                content_index[placeholder_type] = current_index + 1
 
-            logger.info(f"✅ Successfully created processed slide {slide_number} with {len(processed_slide['elements'])} elements")
+                                logger.info(f"✅ Mapped {placeholder_type} to {element_id}: {final_content[:100]}...")
+                                logger.info(f"   Final content length: {len(final_content)}")
+
+                            except Exception as e:
+                                logger.error(f"❌ Failed to handle content for {placeholder_type} in slide {slide_number}: {e}")
+                                logger.error(f"   Content length: {len(raw_content)}, Max length: {max_length}")
+                                logger.error(f"   SKIPPING this slide due to content length issue - NO FALLBACK")
+                                return None  # Skip entire slide if any content fails
+                        else:
+                            logger.warning(f"❌ No more content available for {placeholder_type} in slide {slide_number}")
+                            logger.warning(f"   Available content items: {len(content_list)}")
+                            logger.warning(f"   Current index: {current_index}")
+                            return None  # Skip slide if missing content
+                    else:
+                        # Copy element không phải placeholder (image, etc.)
+                        processed_element = copy.deepcopy(element)
+                        processed_slide["slideData"]["elements"].append(processed_element)
+
+            logger.info(f"✅ Successfully created processed slide {slide_number} with {len(processed_slide['slideData']['elements'])} elements")
             return processed_slide
 
         except Exception as e:
