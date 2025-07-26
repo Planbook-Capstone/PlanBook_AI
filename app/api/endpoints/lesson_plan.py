@@ -669,7 +669,7 @@ class LessonPlanContentRequest(BaseModel):
     lesson_id: Optional[Any] = None
     user_id: Optional[str] = None
     book_id: Optional[str] = Field(None, description="ID của sách giáo khoa (optional). Nếu có thì chỉ tìm lesson content trong collection textbook_{book_id}")
-
+    tool_log_id:Optional[Any] = None
 
 class LessonPlanContentResponse(BaseModel):
     success: bool

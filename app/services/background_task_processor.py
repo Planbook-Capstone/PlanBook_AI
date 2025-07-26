@@ -368,6 +368,7 @@ class BackgroundTaskProcessor:
         lesson_id: Optional[str] = None,
         user_id: Optional[str] = None,
         book_id: Optional[str] = None,
+        tool_log_id:Optional[Any] = None
     ) -> str:
         """Tạo task sinh nội dung giáo án - sử dụng Celery"""
 
@@ -376,6 +377,7 @@ class BackgroundTaskProcessor:
             "lesson_id": lesson_id,
             "user_id": user_id,
             "book_id": book_id,
+            "tool_log_id": tool_log_id
         }
 
         # Sử dụng Celery thay vì asyncio.create_task
