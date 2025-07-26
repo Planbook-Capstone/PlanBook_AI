@@ -78,6 +78,7 @@ class SmartExamRequest(BaseModel):
     outputLink: Literal["online"] = Field("online", description="Loại link trả về")
     bookID: Optional[str] = Field(None, description="ID của sách giáo khoa (optional). Nếu có thì chỉ tìm lessons trong collection textbook_{bookID}")
     matrix: List[LessonMatrixModel] = Field(..., description="Ma trận đề thi theo bài học")
+    user_id: Optional[str] = Field(None, description="ID của user (dùng cho Kafka integration)")
 
     @validator('matrix')
     def validate_matrix_not_empty(cls, v):
