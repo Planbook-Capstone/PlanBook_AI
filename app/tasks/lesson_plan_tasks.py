@@ -278,7 +278,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
         # Prepare final result
         final_result = {
             "success": result["success"],
-            "lesson_plan": result.get("lesson_plan"),
+            "output": result.get("lesson_plan"),
             "statistics": result.get("statistics", {}),
             "task_id": task_id,
             "processing_info": {
