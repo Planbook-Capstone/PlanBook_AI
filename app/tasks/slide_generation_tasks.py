@@ -16,6 +16,56 @@ from app.services.json_template_service import get_json_template_service
 logger = logging.getLogger(__name__)
 
 
+async def _send_slide_progress_notification(user_id: str, task_id: str, percentage: int, message: str):
+    """Send slide generation progress notification to SpringBoot via Kafka"""
+    try:
+        from app.services.kafka_service import kafka_service
+        from app.core.kafka_config import get_responses_topic
+
+        response_message = {
+            "type": "slide_generation_response",
+            "data": {
+                "status": "processing",
+                "user_id": user_id,
+                "task_id": task_id,
+                "progress": percentage,
+                "message": message,
+                "timestamp": datetime.now().isoformat()
+            }
+        }
+
+        await kafka_service.send_message_async(response_message, topic=get_responses_topic(), key=user_id)
+        logger.info(f"[KAFKA] 📊 Sent slide progress notification for user {user_id}, task {task_id}: {percentage}% - {message}")
+
+    except Exception as e:
+        logger.error(f"[KAFKA] ❌ Failed to send slide progress notification: {e}")
+
+
+async def _send_slide_completion_notification(user_id: str, task_id: str, result: Dict[str, Any]):
+    """Send slide generation completion notification to SpringBoot via Kafka"""
+    try:
+        from app.services.kafka_service import kafka_service
+        from app.core.kafka_config import get_responses_topic
+
+        response_message = {
+            "type": "slide_generation_response",
+            "data": {
+                "status": "completed",
+                "user_id": user_id,
+                "task_id": task_id,
+                "result": result,
+                "message": "Slide generation completed successfully",
+                "timestamp": result.get("timestamp", datetime.now().isoformat())
+            }
+        }
+
+        await kafka_service.send_message_async(response_message, topic=get_responses_topic(), key=user_id)
+        logger.info(f"[KAFKA] ✅ Sent slide completion notification for user {user_id}, task {task_id}")
+
+    except Exception as e:
+        logger.error(f"[KAFKA] ❌ Failed to send slide completion notification: {e}")
+
+
 @celery_app.task(name="app.tasks.slide_generation_tasks.test_task")
 def test_slide_generation_task(message: str = "Test slide generation task"):
     """Simple test task để kiểm tra Celery worker"""
@@ -230,7 +280,7 @@ def cleanup_old_presentations_task(self, days_old: int = 7):
 
 
 @celery_app.task(bind=True, name="app.tasks.slide_generation_tasks.process_json_template_task")
-def process_json_template_task(self, task_id: str, lesson_id: str, template_json: Dict[str, Any], config_prompt: str = None):
+def process_json_template_task(self, task_id: str, lesson_id: str, template_json: Dict[str, Any], config_prompt: str = None, user_id: str = None):
     """
     Celery task để xử lý JSON template bất đồng bộ với progress tracking
 
@@ -239,6 +289,7 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
         lesson_id: ID của bài học
         template_json: JSON template đã được phân tích sẵn
         config_prompt: Prompt cấu hình tùy chỉnh (optional)
+        user_id: ID của user (optional, for Kafka notifications)
     """
 
     logger.info(f"🚀 CELERY TASK STARTED: process_json_template_task")
@@ -283,12 +334,20 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
                 message="🔄 Bắt đầu xử lý JSON template..."
             )
 
+            # Send Kafka notification if user_id is available
+            if user_id:
+                await _send_slide_progress_notification(user_id, task_id, 10, "🔄 Bắt đầu xử lý JSON template...")
+
             # Cập nhật: Đang lấy nội dung bài học
             await task_service.update_task_progress(
                 task_id,
                 progress=20,
                 message="📚 Đang lấy nội dung bài học từ cơ sở dữ liệu..."
             )
+
+            # Send Kafka notification if user_id is available
+            if user_id:
+                await _send_slide_progress_notification(user_id, task_id, 20, "📚 Đang lấy nội dung bài học từ cơ sở dữ liệu...")
 
             # Cập nhật: Đang phân tích template
             await task_service.update_task_progress(
@@ -297,12 +356,20 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
                 message="🔍 Đang phân tích cấu trúc template slides..."
             )
 
+            # Send Kafka notification if user_id is available
+            if user_id:
+                await _send_slide_progress_notification(user_id, task_id, 30, "🔍 Đang phân tích cấu trúc template slides...")
+
             # Cập nhật: Đang sinh nội dung với LLM
             await task_service.update_task_progress(
                 task_id,
                 progress=40,
                 message="🤖 Đang sử dụng AI để sinh nội dung slide..."
             )
+
+            # Send Kafka notification if user_id is available
+            if user_id:
+                await _send_slide_progress_notification(user_id, task_id, 40, "🤖 Đang sử dụng AI để sinh nội dung slide...")
 
             # Thêm lesson_id vào template_json để sử dụng trong partial result
             template_json["lesson_id"] = lesson_id
@@ -313,7 +380,8 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
                 template_json=template_json,
                 config_prompt=config_prompt,
                 task_id=task_id,
-                task_service=task_service
+                task_service=task_service,
+                user_id=user_id
             )
 
             if result.get("success", False):
@@ -324,6 +392,10 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
                     task_id,
                     result=result
                 )
+
+                # Send Kafka completion notification if user_id is available
+                if user_id:
+                    await _send_slide_completion_notification(user_id, task_id, result)
 
                 logger.info(f"✅ Task {task_id} completed successfully")
             else:
@@ -448,7 +520,8 @@ async def trigger_slide_generation_task(
 async def trigger_json_template_task(
     lesson_id: str,
     template_json: Dict[str, Any],
-    config_prompt: str = None
+    config_prompt: str = None,
+    user_id: str = None
 ) -> str:
     """
     Trigger JSON template processing task và trả về task_id
@@ -457,6 +530,7 @@ async def trigger_json_template_task(
         lesson_id: ID của bài học
         template_json: JSON template đã được phân tích sẵn
         config_prompt: Prompt cấu hình tùy chỉnh
+        user_id: ID của user (optional, for Kafka notifications)
 
     Returns:
         str: Task ID để theo dõi progress
@@ -469,6 +543,7 @@ async def trigger_json_template_task(
             "lesson_id": lesson_id,
             "template_json": template_json,
             "config_prompt": config_prompt,
+            "user_id": user_id,
             "slides_count": len(template_json.get("slides", []))
         }
 
@@ -487,7 +562,7 @@ async def trigger_json_template_task(
         try:
             # Trigger Celery task với apply_async và queue cụ thể
             celery_result = process_json_template_task.apply_async(
-                args=[task_id, lesson_id, template_json, config_prompt],
+                args=[task_id, lesson_id, template_json, config_prompt, user_id],
                 queue='slide_generation_queue'
             )
 

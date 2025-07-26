@@ -136,11 +136,13 @@ class JsonTemplateService:
         template_json: Dict[str, Any],
         config_prompt: Optional[str] = None,
         task_id: Optional[str] = None,
-        task_service: Optional[Any] = None
+        task_service: Optional[Any] = None,
+        user_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Xử lý JSON template với progress tracking cho Celery
         Cập nhật progress theo từng slide hoàn thành
+        Gửi Kafka notifications cho từng slide hoàn thành nếu có user_id
         """
         try:
             logger.info(f"🔄 Starting JSON template processing with progress tracking")
@@ -192,7 +194,8 @@ class JsonTemplateService:
                 template_json,
                 analyzed_template,
                 task_id,
-                task_service
+                task_service,
+                user_id
             )
 
             # Format nội dung cho frontend
@@ -469,11 +472,13 @@ class JsonTemplateService:
         template_json: Dict[str, Any],
         analyzed_template: Dict[str, Any],
         task_id: Optional[str] = None,
-        task_service: Optional[Any] = None
+        task_service: Optional[Any] = None,
+        user_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Thực hiện workflow tối ưu hóa với progress tracking
         Cập nhật progress theo từng slide hoàn thành
+        Gửi Kafka notifications cho từng slide hoàn thành nếu có user_id
         """
         try:
             logger.info("🚀 Starting optimized workflow with progress tracking...")
@@ -551,18 +556,26 @@ class JsonTemplateService:
                         progress=int(current_progress),
                         message=f"🤖 Đang xử lý slide {slide_num}/{total_slides}..."
                     )
-
                 # Bước 2: Chi tiết hóa slide
-                detailed_slide = await self._detail_slide_content(
-                    framework_slide,
-                    lesson_content,
-                    config_prompt,
-                    slide_num
-                )
+                if slide_num == 1:
+                    # Slide đầu tiên không cần chi tiết hóa, sử dụng framework slide trực tiếp
+                    detailed_slide = {
+                        "success": True,
+                        "content": framework_slide.get("content", "")
+                    }
+                    logger.info(f"✅ Slide 1 sử dụng framework content trực tiếp")
+                else:
+                    # Từ slide 2 trở đi thì chi tiết hóa như bình thường
+                    detailed_slide = await self._detail_slide_content(
+                        framework_slide,
+                        lesson_content,
+                        config_prompt,
+                        slide_num
+                    )
 
-                if not detailed_slide.get("success", False):
-                    logger.error(f"❌ Step 2 failed for slide {slide_num}: {detailed_slide.get('error', 'Unknown error')}")
-                    continue
+                    if not detailed_slide.get("success", False):
+                        logger.error(f"❌ Step 2 failed for slide {slide_num}: {detailed_slide.get('error', 'Unknown error')}")
+                        continue
 
                 # Bước 3: Gắn placeholder
                 slide_with_placeholders = await self._map_placeholders(
@@ -618,6 +631,12 @@ class JsonTemplateService:
                             partial_result=partial_result
                         )
                         logger.info(f"✅ Successfully updated partial result for slide {slide_num}")
+
+                        # Send Kafka notification for slide completion if user_id is available
+                        if user_id:
+                            await self._send_slide_partial_result_notification(
+                                user_id, task_id, slide_num, total_slides, partial_result
+                            )
                 else:
                     logger.error(f"❌ Failed to map slide {slide_num} to template")
                     continue
@@ -806,14 +825,18 @@ YÊU CẦU KHUNG SLIDE:
 2. Đảm bảo khung slide có tính logic, hợp lý và dễ theo dõi
 3. Mỗi slide thể hiện một chủ đề chính, ý định và kiến thức cần truyền đạt
 4. Không cần chi tiết, chỉ cần khung tổng quát
+5. Slide đầu tiên bắt buộc là slide giới thiệu với 3 ý: tên bài học, mô tả ngắn và ngày tạo bài thuyết trình.
 
 FORMAT OUTPUT:
-SLIDE 1: [Tiêu đề slide]
+SLIDE 1: [Tên bài thuyết trình]
+Mô tả ngắn bài thuyết trình
+Ngày thuyết trình: 12-07-2025
+---
+SLIDE 2: [Tiêu đề slide]
 Mục đích: [Mục đích của slide này]
 Nội dung chính: [Tóm tắt nội dung chính cần truyền đạt]
 ---
-
-SLIDE 2: [Tiêu đề slide]
+SLIDE 3: [Tiêu đề slide]
 Mục đích: [Mục đích của slide này]
 Nội dung chính: [Tóm tắt nội dung chính cần truyền đạt]
 ---
@@ -824,6 +847,7 @@ LƯU Ý:
 - Chỉ tạo khung tổng quát, không chi tiết hóa
 - Đảm bảo logic từ slide này sang slide khác
 - Mỗi slide có mục đích rõ ràng trong chuỗi kiến thức
+- Slide đầu tiên bắt buộc là slide giới thiệu với 3 ý: tên bài học, mô tả ngắn và ngày tạo bài thuyết trình.
 """
 
         return prompt
@@ -1933,7 +1957,40 @@ SHORTENED CONTENT:"""
             logger.error(f"❌ Error creating processed slide from template: {e}")
             return None
 
+    async def _send_slide_partial_result_notification(
+        self,
+        user_id: str,
+        task_id: str,
+        slide_num: int,
+        total_slides: int,
+        partial_result: Dict[str, Any]
+    ):
+        """Send Kafka notification for individual slide completion"""
+        try:
+            from app.services.kafka_service import kafka_service
+            from app.core.kafka_config import get_responses_topic
 
+            response_message = {
+                "type": "slide_generation_response",
+                "data": {
+                    "status": "slide_completed",
+                    "user_id": user_id,
+                    "task_id": task_id,
+                    "slide_number": slide_num,
+                    "total_slides": total_slides,
+                    "completed_slides": partial_result.get("completed_slides", 0),
+                    "progress": int((slide_num / total_slides) * 100) if total_slides > 0 else 100,
+                    "partial_result": partial_result,
+                    "message": f"✅ Đã hoàn thành slide {slide_num}/{total_slides}",
+                    "timestamp": datetime.now().isoformat()
+                }
+            }
+
+            await kafka_service.send_message_async(response_message, topic=get_responses_topic(), key=user_id)
+            logger.info(f"[KAFKA] 📊 Sent slide completion notification for user {user_id}, slide {slide_num}/{total_slides}")
+
+        except Exception as e:
+            logger.error(f"[KAFKA] ❌ Failed to send slide completion notification: {e}")
 
 
 # Singleton instance

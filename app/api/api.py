@@ -147,6 +147,8 @@ async def handle_incoming_message(data: dict):
             await handle_lesson_plan_request(data)
         elif message_type == "Tạo giáo án":
             await handle_lesson_plan_content_generation_request(data)
+        elif message_type == "Tạo Slide":
+            await handle_slide_generation_request(data)
         elif message_type == "Tạo đề thi thông minh":
             await handle_smart_exam_generation_request(data)
         elif message_type == "exam_generation_request":
@@ -314,6 +316,28 @@ async def _send_smart_exam_error_response(user_id: str, error_message: str, time
         print(f"[KAFKA] ❌ Failed to send smart exam error response: {e}")
 
 
+async def _send_slide_generation_error_response(user_id: str, error_message: str, timestamp: str, tool_log_id: str = ""):
+    """Send error response for slide generation back to SpringBoot via Kafka"""
+    try:
+        error_response = {
+            "type": "slide_generation_response",
+            "data": {
+                "status": "error",
+                "user_id": user_id,
+                "tool_log_id": tool_log_id,
+                "error": error_message,
+                "message": "Failed to process slide generation request",
+                "timestamp": timestamp
+            }
+        }
+
+        await kafka_service.send_message_async(error_response, topic=get_responses_topic(), key=user_id)
+        print(f"[KAFKA] ✅ Sent slide generation error response for user {user_id}: {error_message}")
+
+    except Exception as e:
+        print(f"[KAFKA] ❌ Failed to send slide generation error response: {e}")
+
+
 async def handle_smart_exam_generation_request(data: dict):
     """Handle smart exam generation request from SpringBoot"""
     try:
@@ -381,6 +405,77 @@ async def handle_smart_exam_generation_request(data: dict):
         # Send error response back via Kafka
         if user_id:
             await _send_smart_exam_error_response(user_id, str(e), timestamp, tool_log_id)
+        else:
+            print(f"[KAFKA] ❌ Cannot send error response: missing user_id in data")
+
+
+async def handle_slide_generation_request(data: dict):
+    """Handle slide generation request from SpringBoot"""
+    try:
+        print(f"[KAFKA] 🎨 Processing slide generation request: {data}")
+
+        # Extract request parameters
+        user_id = data.get("user_id", "")
+        slides_data = data.get("slides", [])
+        lesson_id = data.get("lesson_id", "")
+        tool_log_id = data.get("tool_log_id", "")
+
+        if not user_id:
+            print(f"[KAFKA] ❌ Missing user_id in slide generation request")
+            return
+
+        if not slides_data:
+            print(f"[KAFKA] ❌ Missing slides data in slide generation request")
+            await _send_slide_generation_error_response(user_id, "Missing slides data in request", data.get("timestamp", ""), tool_log_id)
+            return
+
+        print(f"[KAFKA] 📋 Slide generation for user {user_id}, lesson {lesson_id}")
+
+        # Import the slide generation task function
+        from app.tasks.slide_generation_tasks import trigger_json_template_task
+
+        # Create template_json from slides data
+        template_json = {
+            "slides": slides_data,
+            "version": "1.0",
+            "slideFormat": "16:9"
+        }
+
+        # Trigger Celery task for JSON template processing
+        task_id = await trigger_json_template_task(
+            lesson_id=lesson_id,
+            template_json=template_json,
+            config_prompt=None,
+            user_id=user_id
+        )
+
+        # Send initial response back via Kafka
+        response_message = {
+            "type": "slide_generation_response",
+            "data": {
+                "status": "accepted",
+                "tool_log_id": tool_log_id,
+                "task_id": task_id,
+                "user_id": user_id,
+                "message": "Slide generation task created successfully",
+                "timestamp": data.get("timestamp", "")
+            }
+        }
+
+        await kafka_service.send_message_async(response_message, topic=get_responses_topic(), key=user_id)
+        print(f"[KAFKA] ✅ Sent response for slide generation request - Task ID: {task_id}")
+
+    except Exception as e:
+        print(f"[KAFKA] ❌ Error handling slide generation request: {e}")
+
+        # Extract user_id for error response
+        user_id = data.get("user_id", "")
+        timestamp = data.get("timestamp", "")
+        tool_log_id = data.get("tool_log_id", "")
+
+        # Send error response back via Kafka
+        if user_id:
+            await _send_slide_generation_error_response(user_id, str(e), timestamp, tool_log_id)
         else:
             print(f"[KAFKA] ❌ Cannot send error response: missing user_id in data")
 
