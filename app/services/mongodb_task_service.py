@@ -40,6 +40,7 @@ class TaskType(str, Enum):
     LESSON_PLAN_CONTENT_GENERATION = "lesson_plan_content_generation"
     SMART_EXAM_GENERATION = "smart_exam_generation"
     SLIDE_GENERATION = "slide_generation"
+    JSON_TEMPLATE_PROCESSING = "json_template_processing"
     GUIDE_IMPORT = "guide_import"
 
 
@@ -166,9 +167,9 @@ class MongoDBTaskService:
         """Lấy trạng thái task từ MongoDB"""
         await self.initialize()
 
-        # Kiểm tra cache trước
+        # Kiểm tra cache trước - nhưng không cache task đang processing hoặc pending để đảm bảo real-time updates
         cached_task = self._get_cached_task(task_id)
-        if cached_task:
+        if cached_task and cached_task.get("status") not in [TaskStatus.PROCESSING.value, TaskStatus.PENDING.value]:
             return cached_task
 
         try:
@@ -183,8 +184,9 @@ class MongoDBTaskService:
                 if task["completed_at"]:
                     task["completed_at"] = task["completed_at"].isoformat()
 
-                # Cache task status
-                self._cache_task(task_id, task)
+                # Cache task status - nhưng không cache task đang processing hoặc pending để đảm bảo real-time updates
+                if task.get("status") not in [TaskStatus.PROCESSING.value, TaskStatus.PENDING.value]:
+                    self._cache_task(task_id, task)
 
             return task
         except Exception as e:
@@ -294,6 +296,55 @@ class MongoDBTaskService:
             logger.info(f"Task {task_id}: {progress}% - {message}")
         except Exception as e:
             logger.error(f"Error updating task progress {task_id}: {e}")
+
+    async def update_task_progress_with_result(
+        self, task_id: str, progress: int, message: Optional[str] = None, partial_result: Optional[Dict[str, Any]] = None
+    ):
+        """Cập nhật tiến độ task và result từng phần (cho slide generation)"""
+        await self.initialize()
+
+        try:
+            # Tạo progress step cho history
+            progress_step = {
+                "progress": progress,
+                "message": message or f"Progress: {progress}%",
+                "timestamp": time.time(),
+                "datetime": datetime.now().isoformat()
+            }
+
+            update_data = {
+                "progress": progress,
+                "updated_at": datetime.now()
+            }
+            if message:
+                update_data["message"] = message
+
+            # Cập nhật result từng phần nếu có
+            if partial_result is not None:
+                update_data["result"] = partial_result
+                logger.info(f"🔄 Setting partial result for task {task_id} with {len(partial_result.get('processed_template', {}).get('slides', []))} slides")
+
+            # Update task và thêm vào progress_history
+            result = await self.tasks_collection.update_one(
+                {"task_id": task_id},
+                {
+                    "$set": update_data,
+                    "$push": {"progress_history": progress_step}
+                }
+            )
+
+            # Clear cache để force refresh lần query sau
+            self._clear_task_cache(task_id)
+
+            logger.info(f"Task {task_id}: {progress}% - {message}")
+            logger.info(f"MongoDB update result: modified_count={result.modified_count}")
+
+            if partial_result:
+                slides_count = len(partial_result.get("processed_template", {}).get("slides", []))
+                logger.info(f"✅ Task {task_id}: Successfully updated with {slides_count} completed slides in result field")
+
+        except Exception as e:
+            logger.error(f"Error updating task progress with result {task_id}: {e}")
 
     async def mark_task_processing(self, task_id: str):
         """Đánh dấu task đang xử lý và lưu vào history"""
@@ -483,6 +534,16 @@ class MongoDBTaskService:
             return "1-3 minutes"
         elif task_type == TaskType.GENERATE_LESSON_PLAN:
             return "2-4 minutes"
+        elif task_type == TaskType.JSON_TEMPLATE_PROCESSING:
+            slides_count = len(task_data.get("template_json", {}).get("slides", []))
+            if slides_count <= 3:
+                return "1-2 minutes"
+            elif slides_count <= 6:
+                return "2-4 minutes"
+            else:
+                return "4-8 minutes"
+        elif task_type == TaskType.SLIDE_GENERATION:
+            return "3-6 minutes"
         else:
             return "Unknown"
 

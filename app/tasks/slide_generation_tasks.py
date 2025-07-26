@@ -11,6 +11,7 @@ from datetime import datetime
 from app.core.celery_app import celery_app
 from app.services.mongodb_task_service import get_mongodb_task_service
 from app.services.slide_generation_service import get_slide_generation_service
+from app.services.json_template_service import get_json_template_service
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +229,153 @@ def cleanup_old_presentations_task(self, days_old: int = 7):
         logger.error(f"❌ Lỗi chạy cleanup task: {e}")
 
 
+@celery_app.task(bind=True, name="app.tasks.slide_generation_tasks.process_json_template_task")
+def process_json_template_task(self, task_id: str, lesson_id: str, template_json: Dict[str, Any], config_prompt: str = None):
+    """
+    Celery task để xử lý JSON template bất đồng bộ với progress tracking
+
+    Args:
+        task_id: ID của task trong MongoDB
+        lesson_id: ID của bài học
+        template_json: JSON template đã được phân tích sẵn
+        config_prompt: Prompt cấu hình tùy chỉnh (optional)
+    """
+
+    logger.info(f"🚀 CELERY TASK STARTED: process_json_template_task")
+    logger.info(f"   Task ID: {task_id}")
+    logger.info(f"   Lesson ID: {lesson_id}")
+    logger.info(f"   Slides count: {len(template_json.get('slides', []))}")
+    logger.info(f"   Config Prompt: {config_prompt}")
+
+    async def _async_process_json_template():
+        """Async wrapper cho JSON template processing"""
+        logger.info(f"🔄 ASYNC FUNCTION STARTED for task: {task_id}")
+
+        try:
+            logger.info("🔄 Getting MongoDB task service...")
+            task_service = get_mongodb_task_service()
+            logger.info("✅ MongoDB task service obtained")
+        except Exception as e:
+            logger.error(f"❌ Failed to get MongoDB task service: {e}")
+            raise
+
+        try:
+            logger.info("🔄 Getting JSON template service...")
+            json_service = get_json_template_service()
+
+            if not json_service.is_available():
+                raise Exception("JSON template service not available")
+
+            logger.info("✅ JSON template service obtained and available")
+        except Exception as e:
+            logger.error(f"❌ Failed to get JSON template service: {e}")
+            await task_service.mark_task_failed(task_id, f"Service unavailable: {str(e)}")
+            raise
+
+        try:
+            # Cập nhật trạng thái: Bắt đầu xử lý
+            await task_service.mark_task_processing(task_id)
+
+            # Cập nhật: Bắt đầu xử lý
+            await task_service.update_task_progress(
+                task_id,
+                progress=10,
+                message="🔄 Bắt đầu xử lý JSON template..."
+            )
+
+            # Cập nhật: Đang lấy nội dung bài học
+            await task_service.update_task_progress(
+                task_id,
+                progress=20,
+                message="📚 Đang lấy nội dung bài học từ cơ sở dữ liệu..."
+            )
+
+            # Cập nhật: Đang phân tích template
+            await task_service.update_task_progress(
+                task_id,
+                progress=30,
+                message="🔍 Đang phân tích cấu trúc template slides..."
+            )
+
+            # Cập nhật: Đang sinh nội dung với LLM
+            await task_service.update_task_progress(
+                task_id,
+                progress=40,
+                message="🤖 Đang sử dụng AI để sinh nội dung slide..."
+            )
+
+            # Thêm lesson_id vào template_json để sử dụng trong partial result
+            template_json["lesson_id"] = lesson_id
+
+            # Thực hiện JSON template processing với progress tracking
+            result = await json_service.process_json_template_with_progress(
+                lesson_id=lesson_id,
+                template_json=template_json,
+                config_prompt=config_prompt,
+                task_id=task_id,
+                task_service=task_service
+            )
+
+            if result.get("success", False):
+                logger.info(f"✅ JSON template processing completed successfully")
+
+                # Cập nhật: Hoàn thành
+                await task_service.mark_task_completed(
+                    task_id,
+                    result=result
+                )
+
+                logger.info(f"✅ Task {task_id} completed successfully")
+            else:
+                error_msg = result.get("error", "Unknown error occurred")
+                logger.error(f"❌ JSON template processing failed: {error_msg}")
+
+                await task_service.mark_task_failed(
+                    task_id,
+                    error_msg
+                )
+
+                raise Exception(error_msg)
+
+        except Exception as e:
+            logger.error(f"❌ Error in JSON template processing: {e}")
+
+            try:
+                await task_service.mark_task_failed(
+                    task_id,
+                    f"JSON template processing failed: {str(e)}"
+                )
+            except Exception as update_error:
+                logger.error(f"❌ Failed to update task error: {update_error}")
+
+            raise
+
+    # Chạy async function
+    logger.info(f"🔄 Starting Celery task execution for task_id: {task_id}")
+
+    try:
+        # Sử dụng asyncio.run() thay vì event loop phức tạp
+        logger.info("🔄 Running async JSON template processing function...")
+        asyncio.run(_async_process_json_template())
+        logger.info(f"✅ Celery task completed successfully for task_id: {task_id}")
+
+        return {
+            "success": True,
+            "task_id": task_id,
+            "message": "JSON template processing completed successfully"
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Celery task failed for task_id: {task_id}, error: {e}")
+
+        return {
+            "success": False,
+            "task_id": task_id,
+            "error": str(e),
+            "message": "JSON template processing failed"
+        }
+
+
 # Utility function để trigger task từ API
 async def trigger_slide_generation_task(
     lesson_id: str, 
@@ -290,7 +438,75 @@ async def trigger_slide_generation_task(
 
         logger.info(f"✅ Đã trigger slide generation task: {task_id}")
         return task_id
-        
+
     except Exception as e:
         logger.error(f"❌ Lỗi trigger slide generation task: {e}")
+        raise
+
+
+# Utility function để trigger JSON template task từ API
+async def trigger_json_template_task(
+    lesson_id: str,
+    template_json: Dict[str, Any],
+    config_prompt: str = None
+) -> str:
+    """
+    Trigger JSON template processing task và trả về task_id
+
+    Args:
+        lesson_id: ID của bài học
+        template_json: JSON template đã được phân tích sẵn
+        config_prompt: Prompt cấu hình tùy chỉnh
+
+    Returns:
+        str: Task ID để theo dõi progress
+    """
+    try:
+        # Tạo task trong MongoDB
+        task_service = get_mongodb_task_service()
+
+        task_data = {
+            "lesson_id": lesson_id,
+            "template_json": template_json,
+            "config_prompt": config_prompt,
+            "slides_count": len(template_json.get("slides", []))
+        }
+
+        from app.services.mongodb_task_service import TaskType
+
+        task_id = await task_service.create_task(
+            task_type=TaskType.JSON_TEMPLATE_PROCESSING,
+            task_data=task_data
+        )
+
+        # Trigger Celery task
+        logger.info(f"🔄 About to trigger JSON template Celery task for task_id: {task_id}")
+        logger.info(f"   Lesson ID: {lesson_id}")
+        logger.info(f"   Slides count: {len(template_json.get('slides', []))}")
+
+        try:
+            # Trigger Celery task với apply_async và queue cụ thể
+            celery_result = process_json_template_task.apply_async(
+                args=[task_id, lesson_id, template_json, config_prompt],
+                queue='slide_generation_queue'
+            )
+
+            logger.info(f"✅ JSON template Celery task triggered successfully:")
+            logger.info(f"   Task ID: {task_id}")
+            logger.info(f"   Celery Result ID: {celery_result.id}")
+            logger.info(f"   Celery State: {celery_result.state}")
+
+        except Exception as celery_error:
+            logger.error(f"❌ Failed to trigger Celery task: {celery_error}")
+            # Cập nhật task status thành failed
+            await task_service.mark_task_failed(
+                task_id,
+                f"Failed to trigger Celery task: {str(celery_error)}"
+            )
+            raise
+
+        return task_id
+
+    except Exception as e:
+        logger.error(f"❌ Failed to trigger JSON template task: {e}")
         raise

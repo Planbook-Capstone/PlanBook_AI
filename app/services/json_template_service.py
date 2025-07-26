@@ -130,6 +130,96 @@ class JsonTemplateService:
                 "slides_created": 0
             }
 
+    async def process_json_template_with_progress(
+        self,
+        lesson_id: str,
+        template_json: Dict[str, Any],
+        config_prompt: Optional[str] = None,
+        task_id: Optional[str] = None,
+        task_service: Optional[Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Xử lý JSON template với progress tracking cho Celery
+        Cập nhật progress theo từng slide hoàn thành
+        """
+        try:
+            logger.info(f"🔄 Starting JSON template processing with progress tracking")
+            logger.info(f"   Lesson ID: {lesson_id}")
+            logger.info(f"   Task ID: {task_id}")
+            logger.info(f"   Slides count: {len(template_json.get('slides', []))}")
+
+            # Validation
+            if not lesson_id or not lesson_id.strip():
+                raise ValueError("lesson_id is empty or missing")
+
+            if not template_json or not isinstance(template_json, dict):
+                raise ValueError("template_json is empty or invalid")
+
+            if not template_json.get("slides") or len(template_json.get("slides", [])) == 0:
+                raise ValueError("template_json has no slides")
+
+            # Bước 1: Lấy nội dung bài học
+            if task_service and task_id:
+                await task_service.update_task_progress(
+                    task_id,
+                    progress=50,
+                    message="📚 Đang lấy nội dung bài học..."
+                )
+
+            lesson_content = await self._get_lesson_content(lesson_id)
+            if not lesson_content.get("success", False):
+                error_msg = lesson_content.get("error", "Unknown error in lesson content")
+                raise Exception(error_msg)
+
+            content_text = lesson_content.get("content", "")
+            if not content_text or not content_text.strip():
+                raise ValueError("lesson content is empty")
+
+            # Bước 2: Sử dụng trực tiếp JSON đã được phân tích từ input
+            analyzed_template = template_json
+
+            if task_service and task_id:
+                await task_service.update_task_progress(
+                    task_id,
+                    progress=60,
+                    message="🔍 Đang phân tích cấu trúc template..."
+                )
+
+            # Workflow tối ưu hóa với progress tracking
+            result = await self._execute_optimized_workflow_with_progress(
+                content_text,
+                config_prompt,
+                template_json,
+                analyzed_template,
+                task_id,
+                task_service
+            )
+
+            # Format nội dung cho frontend
+            formatted_result = self._format_content_for_frontend(result)
+
+            return {
+                "success": True,
+                "lesson_id": lesson_id,
+                "processed_template": formatted_result,
+                "slides_created": len(formatted_result.get("slides", []))
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Error processing JSON template with progress: {e}")
+            return {
+                "success": False,
+                "error": f"Failed to process JSON template: {str(e)}",
+                "lesson_id": lesson_id,
+                "processed_template": {
+                    "version": "1.0",
+                    "createdAt": datetime.now().isoformat(),
+                    "slideFormat": "16:9",
+                    "slides": []
+                },
+                "slides_created": 0
+            }
+
     async def _get_lesson_content(self, lesson_id: str) -> Dict[str, Any]:
         """Lấy nội dung bài học từ TextbookRetrievalService"""
         try:
@@ -372,6 +462,191 @@ class JsonTemplateService:
             logger.error(f"❌ Error in optimized workflow: {e}")
             raise
 
+    async def _execute_optimized_workflow_with_progress(
+        self,
+        lesson_content: str,
+        config_prompt: Optional[str],
+        template_json: Dict[str, Any],
+        analyzed_template: Dict[str, Any],
+        task_id: Optional[str] = None,
+        task_service: Optional[Any] = None
+    ) -> Dict[str, Any]:
+        """
+        Thực hiện workflow tối ưu hóa với progress tracking
+        Cập nhật progress theo từng slide hoàn thành
+        """
+        try:
+            logger.info("🚀 Starting optimized workflow with progress tracking...")
+
+            # Bước 1: Xây dựng khung slide
+            if task_service and task_id:
+                await task_service.update_task_progress(
+                    task_id,
+                    progress=70,
+                    message="📋 Đang tạo khung slide..."
+                )
+
+            slide_framework = await self._generate_slide_framework(
+                lesson_content,
+                config_prompt
+            )
+
+            if not slide_framework.get("success", False):
+                raise Exception(f"Step 1 failed: {slide_framework.get('error', 'Unknown error')}")
+
+            framework_slides = slide_framework.get("slides", [])
+            logger.info(f"✅ Step 1 complete: Generated {len(framework_slides)} slide frameworks")
+
+            # Tạo final template
+            final_template = {
+                "version": template_json.get("version", "1.0"),
+                "createdAt": datetime.now().isoformat(),
+                "slideFormat": template_json.get("slideFormat", "16:9"),
+                "slides": []
+            }
+
+            # Content tracking
+            all_parsed_data = {
+                "LessonName": [],
+                "LessonDescription": [],
+                "CreatedDate": [],
+                "TitleName": [],
+                "TitleContent": [],
+                "SubtitleName": [],
+                "SubtitleContent": [],
+                "ImageName": [],
+                "ImageContent": []
+            }
+
+            content_index = {
+                "LessonName": 0,
+                "LessonDescription": 0,
+                "CreatedDate": 0,
+                "TitleName": 0,
+                "TitleContent": 0,
+                "SubtitleName": 0,
+                "SubtitleContent": 0,
+                "ImageName": 0,
+                "ImageContent": 0
+            }
+
+            # Track used slides
+            used_slide_ids = set()
+            template_slides = analyzed_template.get("slides", [])
+
+            total_slides = len(framework_slides)
+            base_progress = 75  # Bắt đầu từ 75%
+            progress_per_slide = 20 / total_slides if total_slides > 0 else 0  # 20% cho tất cả slides
+
+            # Xử lý từng slide với progress tracking
+            for i, framework_slide in enumerate(framework_slides):
+                slide_num = i + 1
+                logger.info(f"🔄 Processing slide {slide_num}/{total_slides}")
+
+                # Cập nhật progress cho slide hiện tại
+                current_progress = base_progress + (i * progress_per_slide)
+                if task_service and task_id:
+                    await task_service.update_task_progress(
+                        task_id,
+                        progress=int(current_progress),
+                        message=f"🤖 Đang xử lý slide {slide_num}/{total_slides}..."
+                    )
+
+                # Bước 2: Chi tiết hóa slide
+                detailed_slide = await self._detail_slide_content(
+                    framework_slide,
+                    lesson_content,
+                    config_prompt,
+                    slide_num
+                )
+
+                if not detailed_slide.get("success", False):
+                    logger.error(f"❌ Step 2 failed for slide {slide_num}: {detailed_slide.get('error', 'Unknown error')}")
+                    continue
+
+                # Bước 3: Gắn placeholder
+                slide_with_placeholders = await self._map_placeholders(
+                    detailed_slide.get("content", ""),
+                    slide_num
+                )
+
+                if not slide_with_placeholders.get("success", False):
+                    logger.error(f"❌ Step 3 failed for slide {slide_num}: {slide_with_placeholders.get('error', 'Unknown error')}")
+                    continue
+
+                slide_data = slide_with_placeholders.get("slide_data", {})
+
+                # Bước 4: Map vào template
+                mapped_slide = await self._map_single_slide_to_template(
+                    slide_data,
+                    template_slides,
+                    used_slide_ids,
+                    all_parsed_data,
+                    content_index,
+                    slide_num
+                )
+
+                if mapped_slide:
+                    final_template["slides"].append(mapped_slide)
+                    logger.info(f"✅ Slide {slide_num} completed and added to result")
+
+                    # Cập nhật progress và result từng phần sau khi hoàn thành slide
+                    completed_progress = base_progress + ((i + 1) * progress_per_slide)
+                    if task_service and task_id:
+                        logger.info(f"🔄 Updating partial result for slide {slide_num} - {len(final_template['slides'])} slides completed")
+
+                        # Tạo partial result với slides đã hoàn thành
+                        partial_result = {
+                            "success": True,
+                            "lesson_id": template_json.get("lesson_id", ""),
+                            "processed_template": {
+                                "version": final_template.get("version", "1.0"),
+                                "createdAt": final_template.get("createdAt"),
+                                "slideFormat": final_template.get("slideFormat", "16:9"),
+                                "slides": final_template["slides"]  # Chứa tất cả slides đã hoàn thành
+                            },
+                            "slides_created": len(final_template["slides"]),
+                            "total_slides": total_slides,
+                            "completed_slides": len(final_template["slides"])
+                        }
+
+                        logger.info(f"🔄 Calling update_task_progress_with_result for task {task_id}")
+                        await task_service.update_task_progress_with_result(
+                            task_id,
+                            progress=int(completed_progress),
+                            message=f"✅ Đã hoàn thành slide {slide_num}/{total_slides}",
+                            partial_result=partial_result
+                        )
+                        logger.info(f"✅ Successfully updated partial result for slide {slide_num}")
+                else:
+                    logger.error(f"❌ Failed to map slide {slide_num} to template")
+                    continue
+
+            # Hoàn thành - cập nhật final result
+            if task_service and task_id:
+                final_result = {
+                    "success": True,
+                    "lesson_id": template_json.get("lesson_id", ""),
+                    "processed_template": final_template,
+                    "slides_created": len(final_template.get("slides", [])),
+                    "total_slides": total_slides,
+                    "completed_slides": len(final_template.get("slides", []))
+                }
+
+                await task_service.update_task_progress_with_result(
+                    task_id,
+                    progress=95,
+                    message=f"🎉 Đã tạo thành công {len(final_template.get('slides', []))} slides",
+                    partial_result=final_result
+                )
+
+            logger.info(f"🎉 Optimized workflow with progress complete: {len(final_template.get('slides', []))} slides created")
+            return final_template
+
+        except Exception as e:
+            logger.error(f"❌ Error in optimized workflow with progress: {e}")
+            raise
+
     async def _map_single_slide_to_template(
         self,
         slide_data: Dict[str, Any],
@@ -421,7 +696,7 @@ class JsonTemplateService:
                 logger.error(f"❌ No matching template found for slide {slide_number}")
                 return None
 
-            template_id = best_template['slideId']
+            template_id = best_template['id']  # Format mới sử dụng 'id' thay vì 'slideId'
             is_reused = template_id in used_slide_ids
 
             if is_reused:
@@ -711,6 +986,7 @@ YÊU CẦU CHI TIẾT HÓA:
 3. Tạo nội dung đầy đủ, chi tiết, dễ hiểu
 4. Bao gồm định nghĩa, giải thích, ví dụ minh họa nếu cần
 5. Đảm bảo nội dung phù hợp với mục đích của slide
+6. 🚨 QUAN TRỌNG: Nếu có nhiều mục con, hãy GỘP CHÚNG LẠI để không vượt quá 6 mục
 
 🚨 TUYỆT ĐỐI TRÁNH:
 - KHÔNG sử dụng lời chào hỏi: "Chào mừng các em", "Xin chào", "Hôm nay chúng ta sẽ"
@@ -718,9 +994,11 @@ YÊU CẦU CHI TIẾT HÓA:
 - KHÔNG sử dụng ngôn ngữ nói chuyện: "Các em có biết không?", "Chúng ta hãy cùng tìm hiểu"
 - KHÔNG sử dụng câu mở đầu dài dòng không cần thiết
 - KHÔNG sử dụng emoji hoặc ký tự đặc biệt như **, *, •, -, etc.
+- TUYỆT ĐỐI KHÔNG tạo bảng (table) với dấu | hoặc format bảng - chỉ viết text thuần túy
+- 🚨 TUYỆT ĐỐI KHÔNG tạo quá 6 mục con trong 1 slide - hãy gộp nội dung nếu cần
 
 ✅ NỘI DUNG SLIDE PHẢI:
-- Đi thẳng vào nội dung chính
+- Đi thẳng vào nội dung chính, tránh nội dung lan man hoặc không liên quan tới bài học
 - Sử dụng ngôn ngữ khoa học, chính xác
 - Trình bày thông tin một cách súc tích, rõ ràng
 - Tập trung vào kiến thức cốt lõi
@@ -733,14 +1011,43 @@ Nội dung phải đầy đủ, chi tiết và phù hợp với mục đích c�
 VÍ DỤ ĐÚNG:
 "Nguyên tố hóa học là tập hợp các nguyên tử có cùng số proton trong hạt nhân. Số hiệu nguyên tử Z chính là số proton, xác định tính chất hóa học của nguyên tố. Ví dụ: Hydrogen có Z=1, Helium có Z=2. Các nguyên tố được sắp xếp trong bảng tuần hoàn theo thứ tự tăng dần của số hiệu nguyên tử."
 
-VÍ DỤ SAI:
+VÍ DỤ SAI (TUYỆT ĐỐI KHÔNG LÀM):
 "Chào mừng các em đến với bài học mới! Hôm nay chúng ta sẽ cùng nhau khám phá nguyên tố hóa học. **Nguyên tố hóa học** là một khái niệm rất quan trọng..."
+
+VÍ DỤ SAI VỀ BẢNG (TUYỆT ĐỐI KHÔNG LÀM):
+"| Kí hiệu | Số hiệu nguyên tử | Số khối |
+|---|---|---|
+| ⁴⁰₁₈Ar |  |  |
+| ³⁹₁₉K |  |  |"
+
+VÍ DỤ ĐÚNG THAY THẾ BẢNG:
+"Phân tích các nguyên tử: Argon (⁴⁰₁₈Ar) có số hiệu nguyên tử ?, số khối ?, chứa ? proton, ? electron và ? neutron."
+
+VÍ DỤ GỘP MỤC (TRÁNH VƯỢT QUÁ 6 MỤC):
+❌ SAI (8 mục - vượt quá):
+"Mục 1: Định nghĩa
+Mục 2: Tính chất vật lý
+Mục 3: Tính chất hóa học
+Mục 4: Ứng dụng trong công nghiệp
+Mục 5: Ứng dụng trong y học
+Mục 6: Ứng dụng trong nông nghiệp
+Mục 7: Tác hại với môi trường
+Mục 8: Biện pháp bảo vệ"
+
+✅ ĐÚNG (6 mục - đã gộp):
+"Mục 1: Định nghĩa và cấu trúc
+Mục 2: Tính chất vật lý và hóa học
+Mục 3: Ứng dụng trong công nghiệp và y học
+Mục 4: Ứng dụng trong nông nghiệp và đời sống
+Mục 5: Tác động môi trường và sức khỏe
+Mục 6: Biện pháp an toàn và bảo vệ"
 
 LƯU Ý:
 - Chỉ tập trung vào slide này, không đề cập đến slide khác
 - Nội dung phải chi tiết và đầy đủ
 - Sử dụng ngôn ngữ khoa học chính xác
 - Có thể bao gồm ví dụ minh họa cụ thể
+- 🚨 QUAN TRỌNG NHẤT: Nếu có nhiều hơn 6 mục con, hãy GỘP CHÚNG LẠI thành tối đa 6 mục
 """
 
         return prompt
@@ -821,6 +1128,7 @@ SLIDE CHI TIẾT CẦN GẮN PLACEHOLDER:
 4. TUYỆT ĐỐI KHÔNG tạo nhiều SubtitleContent riêng biệt cho 1 SubtitleName
 5. Nếu có nhiều ý trong cùng 1 mục, hãy GỘP TẤT CẢ thành 1 khối duy nhất
 6. Sử dụng \\n để xuống dòng giữa các ý trong cùng 1 khối content
+7. GIỚI HẠN: Tối đa 6 SubtitleName mỗi slide (không được vượt quá). Hãy gộp nội dung nếu cần thiết để tránh vượt quá 
 
 PLACEHOLDER TYPES:
 - LessonName: Tên bài học (chỉ slide đầu tiên)
@@ -828,7 +1136,7 @@ PLACEHOLDER TYPES:
 - CreatedDate: Ngày tạo (chỉ slide đầu tiên)
 - TitleName: Tiêu đề chính của slide
 - TitleContent: Nội dung giải thích chi tiết cho TitleName (CHỈ 1 KHỐI)
-- SubtitleName: Tiêu đề các mục con
+- SubtitleName: Tiêu đề các mục con (TỐI ĐA 6 MỤC MỖI SLIDE)
 - SubtitleContent: Nội dung chi tiết cho từng SubtitleName (CHỈ 1 KHỐI)
 - ImageName: Tên hình ảnh minh họa
 - ImageContent: Mô tả nội dung hình ảnh
@@ -856,10 +1164,11 @@ content #*(PlaceholderType)*#
 🔥 NHẮC NHỞ CUỐI CÙNG - CỰC KỲ QUAN TRỌNG:
 - CHỈ 1 TitleContent cho mỗi TitleName (KHÔNG BAO GIỜ NHIỀU HỠN 1)
 - CHỈ 1 SubtitleContent cho mỗi SubtitleName (KHÔNG BAO GIỜ NHIỀU HỠN 1)
+- TỐI ĐA 6 SubtitleName mỗi slide (KHÔNG ĐƯỢC VƯỢT QUÁ)
 - Sử dụng \\n để xuống dòng trong cùng 1 khối content
 - TUYỆT ĐỐI TUÂN THỦ QUY TẮC 1:1 MAPPING
 - NẾU CÓ NHIỀU Ý TRONG CÙNG MỤC, HÃY GỘP TẤT CẢ THÀNH 1 KHỐI DUY NHẤT
-- KIỂM TRA LẠI TRƯỚC KHI TRẢ VỀ: Mỗi TitleName chỉ có 1 TitleContent, mỗi SubtitleName chỉ có 1 SubtitleContent
+- KIỂM TRA LẠI TRƯỚC KHI TRẢ VỀ: Mỗi TitleName chỉ có 1 TitleContent, mỗi SubtitleName chỉ có 1 SubtitleContent, tối đa 6 SubtitleName
 
 🚨 VÍ DỤ CUỐI CÙNG - ĐÚNG 100%:
 Cấu trúc nguyên tử #*(TitleName)*#
@@ -1109,7 +1418,7 @@ Neutron không mang điện.\\nCó khối lượng gần bằng proton.\\nTạo 
                     )
 
                 if best_template:
-                    template_id = best_template['slideId']
+                    template_id = best_template['id']  # Format mới sử dụng 'id' thay vì 'slideId'
                     is_reused = template_id in used_slide_ids
 
                     if is_reused:
@@ -1207,7 +1516,7 @@ Neutron không mang điện.\\nCó khối lượng gần bằng proton.\\nTạo 
                 description = self._generate_slide_description(placeholder_counts)
 
                 analyzed_slide = {
-                    "slideId": slide.get("id"),
+                    "id": slide.get("id"),  # Sử dụng 'id' thay vì 'slideId' cho consistency
                     "description": description,
                     "elements": analyzed_elements,
                     "placeholder_counts": placeholder_counts,  # For logic selection
