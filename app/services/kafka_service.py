@@ -405,32 +405,4 @@ class KafkaService:
 kafka_service = KafkaService()
 
 
-# Message handlers
-async def handle_planbook_message(message_data: Dict[str, Any]):
-    """Handle planbook-specific messages"""
-    try:
-        data = message_data.get("data", {})
-        message_type = data.get("type")
-        
-        logger.info(f"📋 Processing planbook message type: {message_type}")
-        
-        # Add your message processing logic here
-        # For example:
-        if message_type == "lesson_plan_request":
-            # Handle lesson plan request from SpringBoot
-            pass
-        elif message_type == "exam_generation_request":
-            # Handle exam generation request
-            pass
-        elif message_type == "grading_request":
-            # Handle grading request
-            pass
-        else:
-            logger.info(f"ℹ️ Unknown message type: {message_type}")
-            
-    except Exception as e:
-        logger.error(f"❌ Error handling planbook message: {e}")
-
-
-# Register default handlers
-kafka_service.register_message_handler("planbook", handle_planbook_message)
+# Note: Message handling is done directly in app/api/api.py via handle_incoming_message function
