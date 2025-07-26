@@ -183,7 +183,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
         lesson_id = task_data.get("lesson_id")
         user_id = task_data.get("user_id")
         book_id = task_data.get("book_id")  # Lấy book_id từ task data
-        tool_log_id = lesson_plan_json.get("tool_log_id")
+        tool_log_id = task_data.get("tool_log_id")
         logger.info(f"tool_log_id : {tool_log_id}")
         print(f"DEBUG: lesson_plan_json type: {type(lesson_plan_json)}, lesson_id: {lesson_id}")
         if not lesson_plan_json:
@@ -204,7 +204,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
             logger.info(f"📤 Attempting to send Kafka progress update for task {task_id}")
             safe_kafka_call(
                 sync_kafka_progress_service.send_progress_update_sync,
-                tool_log_id=lesson_plan_json.get("tool_log_id"),task_id=task_id, user_id=user_id, progress=10,
+                tool_log_id=tool_log_id,task_id=task_id, user_id=user_id, progress=10,
                 message="Đang phân tích cấu trúc giáo án...", status="processing",
                 additional_data={"lesson_id": lesson_id} if lesson_id else None
             )
@@ -310,7 +310,8 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
                     task_id=task_id,
                     user_id=user_id,
                     result=final_result,
-                    lesson_id=lesson_id
+                    lesson_id=lesson_id,
+                    tool_log_id=tool_log_id
                 )
                 if success:
                     logger.info(f"Sent final result to SpringBoot for task {task_id}")
@@ -351,7 +352,8 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
                     task_id=task_id,
                     user_id=user_id,
                     result=error_result,
-                    lesson_id=lesson_id
+                    lesson_id=lesson_id,
+                    tool_log_id=tool_log_id
                 )
                 if success:
                     logger.info(f"✅ Sent error result to SpringBoot for task {task_id}")

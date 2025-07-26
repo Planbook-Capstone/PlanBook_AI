@@ -225,10 +225,10 @@ async def handle_lesson_plan_content_generation_request(data: dict):
 
         # Extract request parameters
         user_id = data.get("user_id", "")
-        lesson_plan_json = data.get("lesson_plan_json", {})
+        lesson_plan_json = data.get("input", {})
         lesson_id = data.get("lesson_id", "")
         # book_id = data.get("book_id", "")  # Lấy bookID từ SpringBoot message
-        tool_log_id = lesson_plan_json.get("tool_log_id","")
+        tool_log_id = data.get("tool_log_id","")
         if not user_id:
             print(f"[KAFKA] ❌ Missing user_id in lesson plan content generation request")
             return
@@ -253,6 +253,7 @@ async def handle_lesson_plan_content_generation_request(data: dict):
             lesson_plan_json=lesson_plan_json,
             lesson_id=lesson_id,
             user_id=user_id,
+            tool_log_id=tool_log_id
             # book_id=book_id
         )
 
@@ -261,6 +262,7 @@ async def handle_lesson_plan_content_generation_request(data: dict):
             lesson_plan_json=request_obj.lesson_plan_json,
             lesson_id=request_obj.lesson_id,
             user_id=request_obj.user_id,
+            tool_log_id=request_obj.tool_log_id
             # book_id=request_obj.book_id
         )
 

@@ -396,7 +396,8 @@ class SyncKafkaProgressService:
         task_id: str,
         user_id: str,
         result: Dict[str, Any],
-        lesson_id: Optional[str] = None
+        lesson_id: Optional[str] = None,
+        tool_log_id:Optional[Any] = None
     ) -> bool:
         """
         Gửi kết quả cuối cùng của task về SpringBoot (sync version)
@@ -412,6 +413,7 @@ class SyncKafkaProgressService:
             message_type = "lesson_plan_content_generation_result"
 
             progress_data = {
+                "tool_log_id": tool_log_id,
                 "task_id": task_id,
                 "user_id": user_id,
                 "success": is_success,
