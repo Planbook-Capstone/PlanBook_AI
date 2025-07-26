@@ -147,6 +147,8 @@ async def handle_incoming_message(data: dict):
             await handle_lesson_plan_request(data)
         elif message_type == "Tạo giáo án":
             await handle_lesson_plan_content_generation_request(data)
+        elif message_type == "Tạo đề thi thông minh":
+            await handle_smart_exam_generation_request(data)
         elif message_type == "exam_generation_request":
             await handle_exam_generation_request(data)
         elif message_type == "grading_request":
@@ -286,6 +288,99 @@ async def handle_lesson_plan_content_generation_request(data: dict):
         # Send error response back via Kafka using the helper function
         if user_id:
             await _send_error_response(user_id, str(e), timestamp)
+        else:
+            print(f"[KAFKA] ❌ Cannot send error response: missing user_id in data")
+
+
+async def _send_smart_exam_error_response(user_id: str, error_message: str, timestamp: str, tool_log_id: str = ""):
+    """Send error response for smart exam generation back to SpringBoot via Kafka"""
+    try:
+        error_response = {
+            "type": "smart_exam_generation_response",
+            "data": {
+                "status": "error",
+                "user_id": user_id,
+                "tool_log_id": tool_log_id,
+                "error": error_message,
+                "message": "Failed to process smart exam generation request",
+                "timestamp": timestamp
+            }
+        }
+
+        await kafka_service.send_message_async(error_response, topic=get_responses_topic(), key=user_id)
+        print(f"[KAFKA] ✅ Sent smart exam error response for user {user_id}: {error_message}")
+
+    except Exception as e:
+        print(f"[KAFKA] ❌ Failed to send smart exam error response: {e}")
+
+
+async def handle_smart_exam_generation_request(data: dict):
+    """Handle smart exam generation request from SpringBoot"""
+    try:
+        print(f"[KAFKA] 📝 Processing smart exam generation request: {data}")
+
+        # Extract request parameters
+        user_id = data.get("user_id", "")
+        exam_request_data = data.get("exam_request", {})
+        tool_log_id = data.get("tool_log_id", "")
+
+        if not user_id:
+            print(f"[KAFKA] ❌ Missing user_id in smart exam generation request")
+            return
+
+        if not exam_request_data:
+            print(f"[KAFKA] ❌ Missing exam_request in smart exam generation request")
+            await _send_smart_exam_error_response(user_id, "Missing exam_request in request", data.get("timestamp", ""), tool_log_id)
+            return
+
+        print(f"[KAFKA] 📋 Smart exam generation for user {user_id}")
+
+        # Add user_id to exam_request_data for processing
+        exam_request_data["user_id"] = user_id
+
+        # Import background task processor
+        from app.services.background_task_processor import get_background_task_processor
+
+        # Create task using background task processor
+        background_processor = get_background_task_processor()
+        task_result = await background_processor.create_smart_exam_task(
+            request_data=exam_request_data
+        )
+
+        if not task_result.get("success", False):
+            error_msg = f"Không thể tạo task: {task_result.get('error', 'Lỗi không xác định')}"
+            await _send_smart_exam_error_response(user_id, error_msg, data.get("timestamp", ""), tool_log_id)
+            return
+
+        task_id = task_result.get("task_id")
+
+        # Send initial response back via Kafka
+        response_message = {
+            "type": "smart_exam_generation_response",
+            "data": {
+                "status": "accepted",
+                "tool_log_id": tool_log_id,
+                "task_id": task_id,
+                "user_id": user_id,
+                "message": "Smart exam generation task created successfully",
+                "timestamp": data.get("timestamp", "")
+            }
+        }
+
+        await kafka_service.send_message_async(response_message, topic=get_responses_topic(), key=user_id)
+        print(f"[KAFKA] ✅ Sent response for smart exam generation request - Task ID: {task_id}")
+
+    except Exception as e:
+        print(f"[KAFKA] ❌ Error handling smart exam generation request: {e}")
+
+        # Extract user_id for error response
+        user_id = data.get("user_id", "")
+        timestamp = data.get("timestamp", "")
+        tool_log_id = data.get("tool_log_id", "")
+
+        # Send error response back via Kafka
+        if user_id:
+            await _send_smart_exam_error_response(user_id, str(e), timestamp, tool_log_id)
         else:
             print(f"[KAFKA] ❌ Cannot send error response: missing user_id in data")
 
