@@ -199,10 +199,9 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
         exam_request = SmartExamRequest(**request_data)
 
         # Get user_id for Kafka notifications
-        user_id = getattr(exam_request, 'user_id', None)
+        # user_id = getattr(exam_request, 'user_id', None)
+        user_id = task_data.get("user_id")
         logger.info(f"[DEBUG] User ID for Kafka notifications: {user_id}")
-        logger.info(f"[DEBUG] Kafka notifications enabled: {user_id is not None}")
-
         # Progress callback function with Kafka notification
         async def progress_callback(percentage: int, message: str):
             try:

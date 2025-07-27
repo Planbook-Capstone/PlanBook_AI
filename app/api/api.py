@@ -225,7 +225,7 @@ async def handle_lesson_plan_content_generation_request(data: dict):
         user_id = data.get("user_id", "")
         lesson_plan_json = data.get("input", {})
         lesson_id = data.get("lesson_id", "")
-        # book_id = data.get("book_id", "")  # Lấy bookID từ SpringBoot message
+        book_id = data.get("book_id", "")  # Lấy bookID từ SpringBoot message
         tool_log_id = data.get("tool_log_id","")
         if not user_id:
             print(f"[KAFKA] ❌ Missing user_id in lesson plan content generation request")
@@ -251,8 +251,8 @@ async def handle_lesson_plan_content_generation_request(data: dict):
             lesson_plan_json=lesson_plan_json,
             lesson_id=lesson_id,
             user_id=user_id,
-            tool_log_id=tool_log_id
-            # book_id=book_id
+            tool_log_id=tool_log_id,
+            book_id=book_id
         )
 
         # Create task using background task processor
@@ -323,9 +323,10 @@ async def handle_smart_exam_generation_request(data: dict):
 
         # Extract request parameters
         user_id = data.get("user_id", "")
-        exam_request_data = data.get("exam_request", {})
+        exam_request_data = data.get("input", {})
         tool_log_id = data.get("tool_log_id", "")
-
+        lesson_id = data.get("lesson_id", "")
+        book_id = data.get("book_id", "") 
         if not user_id:
             print(f"[KAFKA] ❌ Missing user_id in smart exam generation request")
             return
@@ -335,10 +336,13 @@ async def handle_smart_exam_generation_request(data: dict):
             await _send_smart_exam_error_response(user_id, "Missing exam_request in request", data.get("timestamp", ""), tool_log_id)
             return
 
-        print(f"[KAFKA] 📋 Smart exam generation for user {user_id}")
-
-        # Add user_id to exam_request_data for processing
-        exam_request_data["user_id"] = user_id
+        request_obj = {
+            "input": exam_request_data,
+            "user_id": user_id,
+            "tool_log_id": tool_log_id,
+            "lesson_id": lesson_id,
+            "book_id": book_id
+        }
 
         # Import background task processor
         from app.services.background_task_processor import get_background_task_processor
@@ -346,7 +350,7 @@ async def handle_smart_exam_generation_request(data: dict):
         # Create task using background task processor
         background_processor = get_background_task_processor()
         task_result = await background_processor.create_smart_exam_task(
-            request_data=exam_request_data
+            request_data=request_obj
         )
 
         if not task_result.get("success", False):
