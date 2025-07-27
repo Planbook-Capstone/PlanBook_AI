@@ -340,6 +340,117 @@ async def _send_slide_generation_error_response(user_id: str, error_message: str
         print(f"[KAFKA] ❌ Failed to send slide generation error response: {e}")
 
 
+def _validate_slides_json_format(slides_data) -> dict:
+    """Validate slides data format for JSON template processing"""
+    try:
+        print(f"[KAFKA] 🔍 Validating slides JSON format...")
+        print(f"[KAFKA] 📊 Slides data type: {type(slides_data).__name__}")
+
+        # Check if slides_data is a list
+        if not isinstance(slides_data, list):
+            return {
+                "valid": False,
+                "error": f"Slides data must be a list, got {type(slides_data).__name__}"
+            }
+
+        # Check if list is not empty
+        if len(slides_data) == 0:
+            return {
+                "valid": False,
+                "error": "Slides data cannot be empty"
+            }
+
+        print(f"[KAFKA] 📋 Found {len(slides_data)} slides to validate")
+
+        # Validate each slide
+        for i, slide in enumerate(slides_data):
+            if not isinstance(slide, dict):
+                return {
+                    "valid": False,
+                    "error": f"Slide {i+1} must be a dictionary, got {type(slide).__name__}"
+                }
+
+            # Check required fields for each slide
+            required_fields = ["id", "slideData"]
+            for field in required_fields:
+                if field not in slide:
+                    return {
+                        "valid": False,
+                        "error": f"Slide {i+1} missing required field: {field}"
+                    }
+
+            # Validate slide ID
+            slide_id = slide.get("id")
+            if not isinstance(slide_id, str) or not slide_id.strip():
+                return {
+                    "valid": False,
+                    "error": f"Slide {i+1} has invalid id: must be a non-empty string"
+                }
+
+            # Validate slideData structure
+            slide_data = slide.get("slideData")
+            if not isinstance(slide_data, dict):
+                return {
+                    "valid": False,
+                    "error": f"Slide {i+1} slideData must be a dictionary, got {type(slide_data).__name__}"
+                }
+
+            # Validate slideData has required fields
+            slide_data_required = ["id", "elements"]
+            for field in slide_data_required:
+                if field not in slide_data:
+                    return {
+                        "valid": False,
+                        "error": f"Slide {i+1} slideData missing required field: {field}"
+                    }
+
+            # Validate elements in slideData
+            elements = slide_data.get("elements")
+            if not isinstance(elements, list):
+                return {
+                    "valid": False,
+                    "error": f"Slide {i+1} slideData elements must be a list, got {type(elements).__name__}"
+                }
+
+            # Validate each element in slideData
+            for j, element in enumerate(elements):
+                if not isinstance(element, dict):
+                    return {
+                        "valid": False,
+                        "error": f"Slide {i+1} element {j+1} must be a dictionary, got {type(element).__name__}"
+                    }
+
+                # Check required element fields
+                element_required = ["id", "type"]
+                for field in element_required:
+                    if field not in element:
+                        return {
+                            "valid": False,
+                            "error": f"Slide {i+1} element {j+1} missing required field: {field}"
+                        }
+
+            # Check for description field (recommended for slide processing)
+            if "description" in slide:
+                description = slide["description"]
+                if not isinstance(description, str):
+                    return {
+                        "valid": False,
+                        "error": f"Slide {i+1} description must be a string, got {type(description).__name__}"
+                    }
+
+        print(f"[KAFKA] ✅ All slides validation passed")
+        return {
+            "valid": True,
+            "error": None
+        }
+
+    except Exception as e:
+        return {
+            "valid": False,
+            "error": f"Validation error: {str(e)}"
+        }
+
+
 async def handle_smart_exam_generation_request(data: dict):
     """Handle smart exam generation request from SpringBoot"""
     try:
@@ -418,9 +529,10 @@ async def handle_slide_generation_request(data: dict):
 
         # Extract request parameters
         user_id = data.get("user_id", "")
-        slides_data = data.get("slides", [])
+        slides_data = data.get("input", [])
         lesson_id = data.get("lesson_id", "")
         tool_log_id = data.get("tool_log_id", "")
+        book_id = data.get("book_id", "")
 
         if not user_id:
             print(f"[KAFKA] ❌ Missing user_id in slide generation request")
@@ -433,12 +545,38 @@ async def handle_slide_generation_request(data: dict):
 
         print(f"[KAFKA] 📋 Slide generation for user {user_id}, lesson {lesson_id}")
 
+        # Validate slides data format
+        validation_result = _validate_slides_json_format(slides_data)
+        if not validation_result["valid"]:
+            error_msg = f"Invalid slides JSON format: {validation_result['error']}"
+            print(f"[KAFKA] ❌ {error_msg}")
+            await _send_slide_generation_error_response(user_id, error_msg, data.get("timestamp", ""), tool_log_id)
+            return
+
+        print(f"[KAFKA] ✅ Slides data validation passed")
+
         # Import the slide generation task function
         from app.tasks.slide_generation_tasks import trigger_json_template_task
 
-        # Create template_json from slides data
+        # Transform slides data to the format expected by JSON template service
+        transformed_slides = []
+        for i, slide in enumerate(slides_data):
+            slide_id = slide.get("id")
+            slide_title = slide.get("title", f"Slide {i+1}")
+            description = slide.get("description", "")
+
+            print(f"[KAFKA] 🔄 Processing slide {i+1}: {slide_id} - {slide_title}")
+
+            # Extract slideData and add description from the outer slide object
+            slide_data = slide.get("slideData", {})
+            slide_data["description"] = description
+            transformed_slides.append(slide_data)
+
+        print(f"[KAFKA] ✅ Transformed {len(transformed_slides)} slides for processing")
+
+        # Create template_json from transformed slides data
         template_json = {
-            "slides": slides_data,
+            "slides": transformed_slides,
             "version": "1.0",
             "slideFormat": "16:9"
         }
@@ -448,7 +586,8 @@ async def handle_slide_generation_request(data: dict):
             lesson_id=lesson_id,
             template_json=template_json,
             config_prompt=None,
-            user_id=user_id
+            user_id=user_id,
+            book_id=book_id
         )
 
         # Send initial response back via Kafka

@@ -631,7 +631,8 @@ async def process_json_template(request: JsonTemplateRequest):
         result = await json_service.process_json_template(
             lesson_id=request.lesson_id,
             template_json=template_json,
-            config_prompt=request.config_prompt
+            config_prompt=request.config_prompt,
+            book_id=None  # No book_id for HTTP endpoint calls
         )
 
         if result["success"]:
@@ -736,7 +737,8 @@ async def process_json_template_async(request: JsonTemplateRequest):
             lesson_id=request.lesson_id,
             template_json=template_json,
             config_prompt=request.config_prompt,
-            user_id=None  # No user_id for HTTP endpoint calls
+            user_id=None,  # No user_id for HTTP endpoint calls
+            book_id=None   # No book_id for HTTP endpoint calls
         )
 
         logger.info(f"✅ JSON template processing task created: {task_id}")

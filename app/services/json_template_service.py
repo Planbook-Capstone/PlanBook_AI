@@ -33,7 +33,8 @@ class JsonTemplateService:
         self,
         lesson_id: str,
         template_json: Dict[str, Any],
-        config_prompt: Optional[str] = None
+        config_prompt: Optional[str] = None,
+        book_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Xử lý JSON template với workflow tối ưu hóa 3 bước:
@@ -45,6 +46,7 @@ class JsonTemplateService:
             lesson_id: ID của bài học
             template_json: JSON template từ frontend đã được phân tích sẵn
             config_prompt: Prompt cấu hình tùy chỉnh
+            book_id: ID của sách giáo khoa (optional)
 
         Returns:
             Dict chứa template đã được xử lý
@@ -65,7 +67,7 @@ class JsonTemplateService:
                 raise ValueError("template_json has no slides")
 
             # Bước 1: Lấy nội dung bài học
-            lesson_content = await self._get_lesson_content(lesson_id)
+            lesson_content = await self._get_lesson_content(lesson_id, book_id)
             logger.info(f"🔍 Lesson content result type: {type(lesson_content)}")
 
             if not lesson_content.get("success", False):
@@ -137,7 +139,8 @@ class JsonTemplateService:
         config_prompt: Optional[str] = None,
         task_id: Optional[str] = None,
         task_service: Optional[Any] = None,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        book_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Xử lý JSON template với progress tracking cho Celery
@@ -168,7 +171,7 @@ class JsonTemplateService:
                     message="📚 Đang lấy nội dung bài học..."
                 )
 
-            lesson_content = await self._get_lesson_content(lesson_id)
+            lesson_content = await self._get_lesson_content(lesson_id, book_id)
             if not lesson_content.get("success", False):
                 error_msg = lesson_content.get("error", "Unknown error in lesson content")
                 raise Exception(error_msg)
@@ -223,13 +226,13 @@ class JsonTemplateService:
                 "slides_created": 0
             }
 
-    async def _get_lesson_content(self, lesson_id: str) -> Dict[str, Any]:
+    async def _get_lesson_content(self, lesson_id: str, book_id: str = None) -> Dict[str, Any]:
         """Lấy nội dung bài học từ TextbookRetrievalService"""
         try:
-            logger.info(f"📚 Getting lesson content for: {lesson_id}")
+            logger.info(f"📚 Getting lesson content for: {lesson_id}, book_id: {book_id}")
 
             # Sử dụng TextbookRetrievalService để lấy lesson content
-            lesson_result = await self.textbook_service.get_lesson_content(lesson_id)
+            lesson_result = await self.textbook_service.get_lesson_content(lesson_id, book_id)
 
             logger.info(f"🔍 Lesson result keys: {list(lesson_result.keys())}")
 

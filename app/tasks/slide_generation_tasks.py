@@ -280,7 +280,7 @@ def cleanup_old_presentations_task(self, days_old: int = 7):
 
 
 @celery_app.task(bind=True, name="app.tasks.slide_generation_tasks.process_json_template_task")
-def process_json_template_task(self, task_id: str, lesson_id: str, template_json: Dict[str, Any], config_prompt: str = None, user_id: str = None):
+def process_json_template_task(self, task_id: str, lesson_id: str, template_json: Dict[str, Any], config_prompt: str = None, user_id: str = None, book_id: str = None):
     """
     Celery task để xử lý JSON template bất đồng bộ với progress tracking
 
@@ -290,6 +290,7 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
         template_json: JSON template đã được phân tích sẵn
         config_prompt: Prompt cấu hình tùy chỉnh (optional)
         user_id: ID của user (optional, for Kafka notifications)
+        book_id: ID của sách giáo khoa (optional)
     """
 
     logger.info(f"🚀 CELERY TASK STARTED: process_json_template_task")
@@ -381,7 +382,8 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
                 config_prompt=config_prompt,
                 task_id=task_id,
                 task_service=task_service,
-                user_id=user_id
+                user_id=user_id,
+                book_id=book_id
             )
 
             if result.get("success", False):
@@ -521,7 +523,8 @@ async def trigger_json_template_task(
     lesson_id: str,
     template_json: Dict[str, Any],
     config_prompt: str = None,
-    user_id: str = None
+    user_id: str = None,
+    book_id: str = None
 ) -> str:
     """
     Trigger JSON template processing task và trả về task_id
@@ -531,6 +534,7 @@ async def trigger_json_template_task(
         template_json: JSON template đã được phân tích sẵn
         config_prompt: Prompt cấu hình tùy chỉnh
         user_id: ID của user (optional, for Kafka notifications)
+        book_id: ID của sách giáo khoa (optional)
 
     Returns:
         str: Task ID để theo dõi progress
@@ -544,6 +548,7 @@ async def trigger_json_template_task(
             "template_json": template_json,
             "config_prompt": config_prompt,
             "user_id": user_id,
+            "book_id": book_id,
             "slides_count": len(template_json.get("slides", []))
         }
 
@@ -562,7 +567,7 @@ async def trigger_json_template_task(
         try:
             # Trigger Celery task với apply_async và queue cụ thể
             celery_result = process_json_template_task.apply_async(
-                args=[task_id, lesson_id, template_json, config_prompt, user_id],
+                args=[task_id, lesson_id, template_json, config_prompt, user_id, book_id],
                 queue='slide_generation_queue'
             )
 
