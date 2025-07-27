@@ -12,59 +12,12 @@ from app.core.celery_app import celery_app
 from app.services.mongodb_task_service import get_mongodb_task_service
 from app.services.slide_generation_service import get_slide_generation_service
 from app.services.json_template_service import get_json_template_service
+from app.services.kafka_service import kafka_service, safe_kafka_call
 from app.constants.kafka_message_types import PROGRESS_TYPE, RESULT_TYPE
 
 logger = logging.getLogger(__name__)
 
 
-async def _send_slide_progress_notification(user_id: str, task_id: str, percentage: int, message: str):
-    """Send slide generation progress notification to SpringBoot via Kafka"""
-    try:
-        from app.services.kafka_service import kafka_service
-        from app.core.kafka_config import get_responses_topic
-
-        response_message = {
-            "type": PROGRESS_TYPE,
-            "data": {
-                "status": "processing",
-                "user_id": user_id,
-                "task_id": task_id,
-                "progress": percentage,
-                "message": message,
-                "timestamp": datetime.now().isoformat()
-            }
-        }
-
-        await kafka_service.send_message_async(response_message, topic=get_responses_topic(), key=user_id)
-        logger.info(f"[KAFKA] 📊 Sent slide progress notification for user {user_id}, task {task_id}: {percentage}% - {message}")
-
-    except Exception as e:
-        logger.error(f"[KAFKA] ❌ Failed to send slide progress notification: {e}")
-
-
-async def _send_slide_completion_notification(user_id: str, task_id: str, result: Dict[str, Any]):
-    """Send slide generation completion notification to SpringBoot via Kafka"""
-    try:
-        from app.services.kafka_service import kafka_service
-        from app.core.kafka_config import get_responses_topic
-
-        response_message = {
-            "type": RESULT_TYPE,
-            "data": {
-                "status": "completed",
-                "user_id": user_id,
-                "task_id": task_id,
-                "result": result,
-                "message": "Slide generation completed successfully",
-                "timestamp": result.get("timestamp", datetime.now().isoformat())
-            }
-        }
-
-        await kafka_service.send_message_async(response_message, topic=get_responses_topic(), key=user_id)
-        logger.info(f"[KAFKA] ✅ Sent slide completion notification for user {user_id}, task {task_id}")
-
-    except Exception as e:
-        logger.error(f"[KAFKA] ❌ Failed to send slide completion notification: {e}")
 
 
 @celery_app.task(name="app.tasks.slide_generation_tasks.test_task")
@@ -168,11 +121,10 @@ def generate_slides_task(self, task_id: str, lesson_id: str, template_id: str,
                     message="📊 Đang tạo slides trên Google Slides..."
                 )
 
-                # Hoàn thành thành công
-                await task_service.mark_task_completed(
-                    task_id,
-                    result={
-                        "success": True,
+                # Hoàn thành thành công với format output
+                final_result = {
+                    "success": True,
+                    "output": {
                         "lesson_id": result["lesson_id"],
                         "template_id": result["original_template_id"],
                         "presentation_id": result["presentation_id"],
@@ -182,28 +134,73 @@ def generate_slides_task(self, task_id: str, lesson_id: str, template_id: str,
                         "template_info": result["template_info"],
                         "created_at": datetime.now().isoformat()
                     }
-                )
+                }
+
+                await task_service.mark_task_completed(task_id, result=final_result)
                 
                 logger.info(f"✅ Task {task_id} hoàn thành thành công")
                 
             else:
-                # Xử lý lỗi
+                # Xử lý lỗi với format output
                 error_message = result.get("error", "Unknown error")
-                await task_service.mark_task_failed(
-                    task_id,
-                    error=f"Lỗi tạo slide: {error_message}"
-                )
-                
+                error_result = {
+                    "success": False,
+                    "error": f"Lỗi tạo slide: {error_message}",
+                    "output": {
+                        "task_id": task_id,
+                        "error_details": {
+                            "error_message": error_message,
+                            "task_stage": "slide_generation"
+                        }
+                    }
+                }
+
+                await task_service.mark_task_failed(task_id, error=f"Lỗi tạo slide: {error_message}")
+
+                # Send Kafka error notification if user_id is available
+                if user_id:
+                    safe_kafka_call(
+                        kafka_service.send_final_result_sync,
+                        task_id=task_id,
+                        user_id=user_id,
+                        result=error_result,
+                        tool_log_id=None
+                    )
+
                 logger.error(f"❌ Task {task_id} thất bại: {error_message}")
                 
         except Exception as e:
             logger.error(f"❌ Lỗi không mong muốn trong task {task_id}: {e}")
-            
+
+            # Create error result with output format
+            error_result = {
+                "success": False,
+                "error": f"Lỗi hệ thống: {str(e)}",
+                "output": {
+                    "task_id": task_id,
+                    "error_details": {
+                        "error_message": str(e),
+                        "task_stage": "slide_generation_system_error"
+                    }
+                }
+            }
+
             try:
                 await task_service.mark_task_failed(
                     task_id,
                     error=f"Lỗi hệ thống: {str(e)}"
                 )
+
+                # Send Kafka error notification if user_id is available
+                if user_id:
+                    safe_kafka_call(
+                        kafka_service.send_final_result_sync,
+                        task_id=task_id,
+                        user_id=user_id,
+                        result=error_result,
+                        tool_log_id=None
+                    )
+
             except Exception as update_error:
                 logger.error(f"❌ Không thể cập nhật trạng thái task: {update_error}")
     
@@ -338,7 +335,15 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
 
             # Send Kafka notification if user_id is available
             if user_id:
-                await _send_slide_progress_notification(user_id, task_id, 10, "🔄 Bắt đầu xử lý JSON template...")
+                safe_kafka_call(
+                    kafka_service.send_progress_update_sync,
+                    tool_log_id=None,
+                    task_id=task_id,
+                    user_id=user_id,
+                    progress=10,
+                    message="🔄 Bắt đầu xử lý JSON template...",
+                    status="processing"
+                )
 
             # Cập nhật: Đang lấy nội dung bài học
             await task_service.update_task_progress(
@@ -349,7 +354,15 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
 
             # Send Kafka notification if user_id is available
             if user_id:
-                await _send_slide_progress_notification(user_id, task_id, 20, "📚 Đang lấy nội dung bài học từ cơ sở dữ liệu...")
+                safe_kafka_call(
+                    kafka_service.send_progress_update_sync,
+                    tool_log_id=None,
+                    task_id=task_id,
+                    user_id=user_id,
+                    progress=20,
+                    message="📚 Đang lấy nội dung bài học từ cơ sở dữ liệu...",
+                    status="processing"
+                )
 
             # Cập nhật: Đang phân tích template
             await task_service.update_task_progress(
@@ -360,7 +373,15 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
 
             # Send Kafka notification if user_id is available
             if user_id:
-                await _send_slide_progress_notification(user_id, task_id, 30, "🔍 Đang phân tích cấu trúc template slides...")
+                safe_kafka_call(
+                    kafka_service.send_progress_update_sync,
+                    tool_log_id=None,
+                    task_id=task_id,
+                    user_id=user_id,
+                    progress=30,
+                    message="🔍 Đang phân tích cấu trúc template slides...",
+                    status="processing"
+                )
 
             # Cập nhật: Đang sinh nội dung với LLM
             await task_service.update_task_progress(
@@ -371,7 +392,15 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
 
             # Send Kafka notification if user_id is available
             if user_id:
-                await _send_slide_progress_notification(user_id, task_id, 40, "🤖 Đang sử dụng AI để sinh nội dung slide...")
+                safe_kafka_call(
+                    kafka_service.send_progress_update_sync,
+                    tool_log_id=None,
+                    task_id=task_id,
+                    user_id=user_id,
+                    progress=40,
+                    message="🤖 Đang sử dụng AI để sinh nội dung slide...",
+                    status="processing"
+                )
 
             # Thêm lesson_id vào template_json để sử dụng trong partial result
             template_json["lesson_id"] = lesson_id
@@ -398,7 +427,13 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
 
                 # Send Kafka completion notification if user_id is available
                 if user_id:
-                    await _send_slide_completion_notification(user_id, task_id, result)
+                    safe_kafka_call(
+                        kafka_service.send_final_result_sync,
+                        task_id=task_id,
+                        user_id=user_id,
+                        result=final_result,
+                        tool_log_id=None
+                    )
 
                 logger.info(f"✅ Task {task_id} completed successfully")
             else:

@@ -159,7 +159,7 @@ async def handle_incoming_message(data: dict):
         elif message_type == "Tạo giáo án":
             await handle_lesson_plan_content_generation_request(message_payload)
         elif message_type == "Tạo Slide":
-            await handle_slide_generation_request(data)
+            await handle_slide_generation_request(message_payload)
         elif message_type == "Tạo đề thi thông minh":
             await handle_smart_exam_generation_request(message_payload)
         elif message_type == "exam_generation_request":
