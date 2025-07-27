@@ -21,7 +21,7 @@ from app.api.endpoints import (
 
 from app.services.kafka_service import kafka_service
 from app.core.kafka_config import get_responses_topic
-from app.constants.kafka_message_types import RESPONSE_TYPE
+from app.constants.kafka_message_types import RESPONSE_TYPE, RESULT_TYPE
 from app.api.endpoints import auto_grading
 
 # Initialize FastAPI app
@@ -97,17 +97,13 @@ async def startup_event():
     # Only initialize services that absolutely need to be ready at startup
 
     try:
-        # Kafka service cần khởi tạo ngay để listen messages từ external services
-        await kafka_service.initialize()
-        print("[OK] Kafka Service initialized successfully")
-
         # Start Kafka consumer in background to listen for messages from other services
         import asyncio
         asyncio.create_task(start_kafka_consumer_background())
         print("[OK] Kafka consumer started in background")
 
     except Exception as e:
-        print(f"[ERROR] Failed to initialize Kafka Service: {e}")
+        print(f"[ERROR] Failed to start Kafka consumer: {e}")
         print("[INFO] Kafka service will be available when Kafka server is running")
 
     # Other services (LessonPlanFrameworkService, etc.) will initialize lazily when first used
@@ -337,7 +333,7 @@ async def _send_slide_generation_error_response(user_id: str, error_message: str
     """Send error response for slide generation back to SpringBoot via Kafka"""
     try:
         error_response = {
-            "type": "slide_generation_response",
+            "type": RESULT_TYPE,
             "data": {
                 "status": "error",
                 "user_id": user_id,
@@ -612,7 +608,7 @@ async def handle_slide_generation_request(data: dict):
 
         # Send initial response back via Kafka
         response_message = {
-            "type": "slide_generation_response",
+            "type": RESPONSE_TYPE,
             "data": {
                 "status": "accepted",
                 "tool_log_id": tool_log_id,

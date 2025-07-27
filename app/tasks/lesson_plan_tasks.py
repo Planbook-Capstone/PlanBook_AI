@@ -7,22 +7,11 @@ from typing import Dict, Any
 
 from app.core.celery_app import celery_app
 from app.services.mongodb_task_service import get_mongodb_task_service
+from app.services.kafka_service import kafka_service, safe_kafka_call
 
 logger = logging.getLogger(__name__)
 
 
-def safe_kafka_call(func, *args, **kwargs):
-    """
-    Simplified Kafka call without threading to avoid deadlocks
-    """
-    try:
-        logger.info("📤 Attempting Kafka operation...")
-        result = func(*args, **kwargs)
-        logger.info("✅ Kafka operation completed")
-        return result
-    except Exception as kafka_error:
-        logger.warning(f"⚠️ Kafka operation failed: {kafka_error}, continuing...")
-        return False
 
 
 def run_async_task(coro):
@@ -116,8 +105,6 @@ def process_lesson_plan_content_generation(self, task_id: str) -> Dict[str, Any]
             # Fallback: Send Kafka notification directly if MongoDB fails
             # Use sync version for Celery compatibility
             try:
-                from app.services.kafka_progress_service import sync_kafka_progress_service
-
                 # Get task data to extract user_id
                 mongodb_fallback = get_mongodb_task_service()
                 task_data_coro = mongodb_fallback.get_task_status(task_id)
@@ -126,14 +113,22 @@ def process_lesson_plan_content_generation(self, task_id: str) -> Dict[str, Any]
                 if task_data and task_data.get("data", {}).get("user_id"):
                     user_id = task_data["data"]["user_id"]
                     lesson_id = task_data["data"].get("lesson_id")
+                    tool_log_id = task_data["data"].get("tool_log_id")
 
                     # Send error notification via sync Kafka
+                    error_result = {
+                        "success": False,
+                        "error": error_msg,
+                        "task_id": task_id
+                    }
+
                     success = safe_kafka_call(
-                        sync_kafka_progress_service.send_task_failed_sync,
+                        kafka_service.send_final_result_sync,
                         task_id=task_id,
                         user_id=user_id,
-                        error=error_msg,
-                        lesson_id=lesson_id
+                        result=error_result,
+                        lesson_id=lesson_id,
+                        tool_log_id=tool_log_id
                     )
                     if success:
                         logger.info(f"✅ Fallback Kafka error notification sent for task {task_id}")
@@ -192,9 +187,6 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
         # Mark task as processing
         await mongodb_task_service.mark_task_processing(task_id)
 
-        # Initialize sync Kafka service for progress updates
-        from app.services.kafka_progress_service import sync_kafka_progress_service
-
         # Update progress: Starting analysis
         await mongodb_task_service.update_task_progress(
             task_id, 10, "Đang phân tích cấu trúc giáo án..."
@@ -203,7 +195,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
         if user_id:
             logger.info(f"📤 Attempting to send Kafka progress update for task {task_id}")
             safe_kafka_call(
-                sync_kafka_progress_service.send_progress_update_sync,
+                kafka_service.send_progress_update_sync,
                 tool_log_id=tool_log_id,task_id=task_id, user_id=user_id, progress=10,
                 message="Đang phân tích cấu trúc giáo án...", status="processing",
                 additional_data={"lesson_id": lesson_id} if lesson_id else None
@@ -220,7 +212,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
         # Send sync progress update to SpringBoot
         if user_id:
             safe_kafka_call(
-                sync_kafka_progress_service.send_progress_update_sync,
+                kafka_service.send_progress_update_sync,
                 tool_log_id=tool_log_id,task_id=task_id, user_id=user_id, progress=20,
                 message=f"Đã tìm thấy {total_nodes} node cần xử lý. Bắt đầu tạo nội dung...",
                 status="processing"
@@ -233,7 +225,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
         # Send sync progress update to SpringBoot
         if user_id:
             safe_kafka_call(
-                sync_kafka_progress_service.send_progress_update_sync,
+                kafka_service.send_progress_update_sync,
                 tool_log_id=tool_log_id,task_id=task_id, user_id=user_id, progress=50,
                 message="Đang tạo nội dung giáo án với tài liệu tham khảo từ sách giáo khoa...",
                 status="processing"
@@ -257,7 +249,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
         # Send sync progress update to SpringBoot
         if user_id:
             safe_kafka_call(
-                sync_kafka_progress_service.send_progress_update_sync,
+                kafka_service.send_progress_update_sync,
                 tool_log_id=tool_log_id,task_id=task_id, user_id=user_id, progress=90,
                 message="Đã hoàn thành tạo nội dung. Đang xử lý kết quả...",
                 status="processing"
@@ -270,7 +262,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
         # Send sync progress update to SpringBoot
         if user_id:
             safe_kafka_call(
-                sync_kafka_progress_service.send_progress_update_sync,
+                kafka_service.send_progress_update_sync,
                 tool_log_id=tool_log_id,task_id=task_id, user_id=user_id, progress=95,
                 message="Đang hoàn thiện nội dung giáo án...", status="processing"
             )
@@ -304,9 +296,8 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
                 user_id = task_data["data"]["user_id"]
                 lesson_id = task_data["data"].get("lesson_id")
 
-                from app.services.kafka_progress_service import sync_kafka_progress_service
                 success = safe_kafka_call(
-                    sync_kafka_progress_service.send_final_result_sync,
+                    kafka_service.send_final_result_sync,
                     task_id=task_id,
                     user_id=user_id,
                     result=final_result,
@@ -338,17 +329,21 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
                 user_id = task_data["data"]["user_id"]
                 lesson_id = task_data["data"].get("lesson_id")
 
-                from app.services.kafka_progress_service import sync_kafka_progress_service
-
                 # Send final result with error
                 error_result = {
                     "success": False,
                     "error": error_msg,
-                    "task_id": task_id
+                    "output": {
+                        "task_id": task_id,
+                        "error_details": {
+                            "error_message": error_msg,
+                            "task_stage": "lesson_plan_generation"
+                        }
+                    }
                 }
 
                 success = safe_kafka_call(
-                    sync_kafka_progress_service.send_final_result_sync,
+                    kafka_service.send_final_result_sync,
                     task_id=task_id,
                     user_id=user_id,
                     result=error_result,

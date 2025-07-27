@@ -12,6 +12,7 @@ from app.core.celery_app import celery_app
 from app.services.mongodb_task_service import get_mongodb_task_service
 from app.services.slide_generation_service import get_slide_generation_service
 from app.services.json_template_service import get_json_template_service
+from app.constants.kafka_message_types import PROGRESS_TYPE, RESULT_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ async def _send_slide_progress_notification(user_id: str, task_id: str, percenta
         from app.core.kafka_config import get_responses_topic
 
         response_message = {
-            "type": "slide_generation_response",
+            "type": PROGRESS_TYPE,
             "data": {
                 "status": "processing",
                 "user_id": user_id,
@@ -48,7 +49,7 @@ async def _send_slide_completion_notification(user_id: str, task_id: str, result
         from app.core.kafka_config import get_responses_topic
 
         response_message = {
-            "type": "slide_generation_response",
+            "type": RESULT_TYPE,
             "data": {
                 "status": "completed",
                 "user_id": user_id,

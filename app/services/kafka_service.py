@@ -15,7 +15,6 @@ from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
 from aiokafka.errors import KafkaConnectionError
 
 from app.core.kafka_config import (
-    kafka_settings,
     get_kafka_servers,
     get_topic_name,
     get_requests_topic,
@@ -29,8 +28,23 @@ from app.core.kafka_config import (
     get_max_retries,
     get_retry_backoff_ms
 )
+from app.constants.kafka_message_types import PROGRESS_TYPE, RESULT_TYPE
 
 logger = logging.getLogger(__name__)
+
+
+def safe_kafka_call(func, *args, **kwargs):
+    """
+    Simplified Kafka call without threading to avoid deadlocks
+    """
+    try:
+        logger.info("📤 Attempting Kafka operation...")
+        result = func(*args, **kwargs)
+        logger.info("✅ Kafka operation completed")
+        return result
+    except Exception as kafka_error:
+        logger.warning(f"⚠️ Kafka operation failed: {kafka_error}, continuing...")
+        return False
 
 
 class KafkaService:
@@ -44,18 +58,7 @@ class KafkaService:
         self.is_connected = False
         self.message_handlers: Dict[str, Callable] = {}
     
-    async def initialize(self):
-        """Initialize Kafka connections"""
-        try:
-            await self._initialize_async_producer()
-            await self._initialize_async_consumer()
-            self.is_connected = True
-            logger.info("✅ Kafka service initialized successfully")
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to initialize Kafka service: {e}")
-            logger.info("ℹ️ Kafka service will be available when Kafka server is running")
-            self.is_connected = False
-            # Don't raise exception to allow app to start without Kafka
+
     
     async def _initialize_async_producer(self):
         """Initialize async Kafka producer"""
@@ -261,33 +264,7 @@ class KafkaService:
 
         return False
 
-    def check_kafka_health(self) -> bool:
-        """Check if Kafka is healthy and accessible"""
-        try:
-            if not is_kafka_enabled():
-                logger.info("ℹ️ Kafka is disabled")
-                return False
 
-            # Try to create a simple producer to test connection
-            test_config = get_producer_config()
-            test_config['bootstrap_servers'] = get_kafka_servers()
-
-            test_producer = KafkaProducer(
-                **test_config,
-                request_timeout_ms=3000,  # Short timeout for health check
-                api_version_auto_timeout_ms=3000
-            )
-
-            # Get cluster metadata to verify connection
-            metadata = test_producer.list_topics(timeout=3)
-            test_producer.close()
-
-            logger.info("✅ Kafka health check passed")
-            return True
-
-        except Exception as e:
-            logger.warning(f"⚠️ Kafka health check failed: {e}")
-            return False
 
     async def consume_messages_async(self, handler: Union[Callable[[Dict[str, Any]], None], Callable[[Dict[str, Any]], Awaitable[None]]]):
         """Consume messages asynchronously"""
@@ -375,30 +352,137 @@ class KafkaService:
                 "error": str(e)
             }
     
-    async def close(self):
-        """Close all Kafka connections"""
+    def send_progress_update_sync(
+        self,
+        tool_log_id: str,
+        task_id: str,
+        user_id: str,
+        progress: int,
+        message: str,
+        status: str = "processing",
+        additional_data: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """
+        Gửi progress update qua Kafka (sync version cho Celery)
+        Với fallback mechanism để không block task processing
+        """
         try:
-            if self.async_producer:
-                await self.async_producer.stop()
-                logger.info("✅ Async producer closed")
-            
-            if self.async_consumer:
-                await self.async_consumer.stop()
-                logger.info("✅ Async consumer closed")
-            
-            if self.producer:
-                self.producer.close()
-                logger.info("✅ Sync producer closed")
-            
-            if self.consumer:
-                self.consumer.close()
-                logger.info("✅ Sync consumer closed")
-            
-            self.is_connected = False
-            logger.info("✅ Kafka service closed successfully")
-            
+            # Chuẩn bị message data
+            progress_data = {
+                "tool_log_id": tool_log_id,
+                "task_id": task_id,
+                "user_id": user_id,
+                "progress": progress,
+                "message": message,
+                "status": status,
+                "timestamp": datetime.now().isoformat()
+            }
+
+            # Thêm dữ liệu bổ sung nếu có
+            if additional_data:
+                progress_data.update(additional_data)
+
+            # Tạo Kafka message
+            kafka_message = {
+                "type": PROGRESS_TYPE,
+                "data": progress_data
+            }
+
+            # Gửi message qua sync Kafka producer
+            logger.info(f"📤 [SYNC] Sending progress - Task: {task_id}, Progress: {progress}%")
+
+            success = self.send_message_sync(
+                message=kafka_message,
+                topic=get_responses_topic(),
+                key=user_id
+            )
+
+            if success:
+                logger.info(f"✅ [SYNC] Sent progress update - Task: {task_id}")
+            else:
+                logger.warning(f"⚠️ [SYNC] Failed to send progress update - Task: {task_id}, but continuing...")
+
+            # Always return True to not block task processing
+            return True
+
         except Exception as e:
-            logger.error(f"❌ Error closing Kafka service: {e}")
+            logger.warning(f"⚠️ [SYNC] Error sending progress update: {e}, but continuing...")
+            return True
+
+    def send_final_result_sync(
+        self,
+        task_id: str,
+        user_id: str,
+        result: Dict[str, Any],
+        lesson_id: Optional[str] = None,
+        tool_log_id: Optional[Any] = None
+    ) -> bool:
+        """
+        Gửi kết quả cuối cùng của task về SpringBoot (sync version)
+        Với fallback mechanism để không block task completion
+        """
+        try:
+            is_success = result.get("success", False)
+            error_msg = result.get("error", "")
+
+            logger.info(f"📤 [SYNC] Sending final result - Task: {task_id}, Success: {is_success}")
+
+            # Tạo formatted result với output field
+            formatted_result = {
+                "success": is_success,
+                "output": result.get("output", result)  # Nếu đã có output thì giữ nguyên, không thì wrap toàn bộ result
+            }
+
+            # Nếu có error, thêm vào formatted_result
+            if not is_success and error_msg:
+                formatted_result["error"] = error_msg
+
+            # Tạo message data
+            progress_data = {
+                "tool_log_id": tool_log_id,
+                "task_id": task_id,
+                "user_id": user_id,
+                "success": is_success,
+                "result": formatted_result,
+                "timestamp": datetime.now().isoformat()
+            }
+
+            if lesson_id:
+                progress_data["lesson_id"] = lesson_id
+
+            if not is_success and error_msg:
+                progress_data["message"] = f"Tác vụ hoàn thành với lỗi: {error_msg}"
+                progress_data["status"] = "completed_with_error"
+            else:
+                progress_data["message"] = "Tác vụ đã hoàn thành thành công"
+                progress_data["status"] = "completed"
+
+            # Tạo Kafka message
+            kafka_message = {
+                "type": RESULT_TYPE,
+                "data": progress_data
+            }
+
+            # Gửi message
+            success = self.send_message_sync(
+                message=kafka_message,
+                topic=get_responses_topic(),
+                key=user_id
+            )
+
+            if success:
+                logger.info(f"✅ [SYNC] Final result sent - Task: {task_id}")
+            else:
+                logger.warning(f"⚠️ [SYNC] Failed to send final result - Task: {task_id}, but task completed")
+
+            # Always return True to not block task completion
+            return True
+
+        except Exception as e:
+            logger.warning(f"⚠️ [SYNC] Error sending final result: {e}, but task completed")
+            return True
+
+
 
 
 # Global Kafka service instance
