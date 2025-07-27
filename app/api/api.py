@@ -124,37 +124,51 @@ async def start_kafka_consumer_background():
 async def handle_incoming_message(data: dict):
     """Handle incoming messages from other services via Kafka"""
     try:
-        message_data_str = data.get("payload", "{}")
-        message_data = json.loads(message_data_str)
+        # Check if payload exists and use it, otherwise use data directly
+        if data.get("payload"):
+            # If payload exists, it might be a string that needs parsing
+            payload = data.get("payload")
+            if isinstance(payload, str):
+                message_data = json.loads(payload)
+            else:
+                message_data = payload
+        else:
+            # Use data directly if no payload field
+            if isinstance(data, dict):
+                message_data = data
+            else:
+                # Fallback for string data
+                message_data = json.loads(data)
+
         print(f"[KAFKA] 📨 Received message from other service: {message_data}")
 
         # Extract message information
         source = message_data.get("source", "unknown")
         timestamp = message_data.get("timestamp", "")
-        data = message_data.get("data", {})
+        message_payload = message_data.get("data", {})
 
         # Message type có thể ở top level hoặc trong data
-        message_type = message_data.get("type") or data.get("type", "unknown")
+        message_type = message_data.get("type") or message_payload.get("type", "unknown")
 
         print(f"[KAFKA] 📋 Message details:")
         print(f"  - Source: {source}")
         print(f"  - Type: {message_type}")
         print(f"  - Timestamp: {timestamp}")
-        print(f"  - Data: {data}")
+        print(f"  - Data: {message_payload}")
 
         # Process message based on type
         if message_type == "lesson_plan_request":
-            await handle_lesson_plan_request(data)
+            await handle_lesson_plan_request(message_payload)
         elif message_type == "Tạo giáo án":
-            await handle_lesson_plan_content_generation_request(data)
+            await handle_lesson_plan_content_generation_request(message_payload)
         elif message_type == "Tạo đề thi thông minh":
-            await handle_smart_exam_generation_request(data)
+            await handle_smart_exam_generation_request(message_payload)
         elif message_type == "exam_generation_request":
-            await handle_exam_generation_request(data)
+            await handle_exam_generation_request(message_payload)
         elif message_type == "grading_request":
-            await handle_grading_request(data)
+            await handle_grading_request(message_payload)
         elif message_type == "textbook_processing_request":
-            await handle_textbook_processing_request(data)
+            await handle_textbook_processing_request(message_payload)
         else:
             print(f"[KAFKA] ⚠️ Unknown message type: {message_type}")
 
