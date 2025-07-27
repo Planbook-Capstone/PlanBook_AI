@@ -71,7 +71,7 @@ async def _send_kafka_message_with_timeout(message: Dict[str, Any], topic: str, 
                 logger.warning(f"Warning during Kafka producer cleanup: {cleanup_error}")
 
 
-async def _send_smart_exam_progress_notification(user_id: str, task_id: str, percentage: int, message: str):
+async def _send_smart_exam_progress_notification(user_id: str, task_id: str, percentage: int, message: str, tool_log_id: str = None):
     """Send progress notification to SpringBoot via Kafka"""
     try:
         from app.core.kafka_config import get_responses_topic
@@ -87,6 +87,10 @@ async def _send_smart_exam_progress_notification(user_id: str, task_id: str, per
                 "timestamp": datetime.now().isoformat()
             }
         }
+
+        # Add tool_log_id if provided
+        if tool_log_id:
+            response_message["data"]["tool_log_id"] = tool_log_id
 
         success = await _send_kafka_message_with_timeout(
             response_message,
@@ -104,7 +108,7 @@ async def _send_smart_exam_progress_notification(user_id: str, task_id: str, per
         logger.error(f"[KAFKA] ❌ Failed to send smart exam progress notification: {e}")
 
 
-async def _send_smart_exam_completion_notification(user_id: str, task_id: str, result: Dict[str, Any]):
+async def _send_smart_exam_completion_notification(user_id: str, task_id: str, result: Dict[str, Any], tool_log_id: str = None):
     """Send completion notification to SpringBoot via Kafka"""
     try:
         from app.core.kafka_config import get_responses_topic
@@ -120,6 +124,10 @@ async def _send_smart_exam_completion_notification(user_id: str, task_id: str, r
                 "timestamp": result.get("timestamp", "")
             }
         }
+
+        # Add tool_log_id if provided
+        if tool_log_id:
+            response_message["data"]["tool_log_id"] = tool_log_id
 
         success = await _send_kafka_message_with_timeout(
             response_message,
@@ -137,7 +145,7 @@ async def _send_smart_exam_completion_notification(user_id: str, task_id: str, r
         logger.error(f"[KAFKA] ❌ Failed to send smart exam completion notification: {e}")
 
 
-async def _send_smart_exam_error_notification(user_id: str, task_id: str, error_result: Dict[str, Any]):
+async def _send_smart_exam_error_notification(user_id: str, task_id: str, error_result: Dict[str, Any], tool_log_id: str = None):
     """Send error notification to SpringBoot via Kafka"""
     try:
         from app.core.kafka_config import get_responses_topic
@@ -154,6 +162,10 @@ async def _send_smart_exam_error_notification(user_id: str, task_id: str, error_
                 "timestamp": error_result.get("timestamp", "")
             }
         }
+
+        # Add tool_log_id if provided
+        if tool_log_id:
+            response_message["data"]["tool_log_id"] = tool_log_id
 
         success = await _send_kafka_message_with_timeout(
             response_message,
@@ -301,7 +313,7 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
 
         # Extract metadata fields
         user_id = request_data.get("user_id")
-
+        tool_log_id = request_data.get("tool_log_id")
         # Create exam request (remove metadata fields)
         exam_params = {k: v for k, v in request_data.items()
                       if k not in ["user_id", "tool_log_id", "lesson_id", "book_id"]}
@@ -349,11 +361,13 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
 
             # Send Kafka error notification if user_id is present
             if user_id:
-                await _send_smart_exam_error_notification(user_id, task_id, error_result)
+                await _send_smart_exam_error_notification(user_id, task_id, error_result, tool_log_id)
 
             return error_result
 
         logger.info(f"[DEBUG] User ID for Kafka notifications: {user_id}")
+        logger.info(f"[DEBUG] Tool Log ID for Kafka notifications: {tool_log_id}")
+
         # Progress callback function with Kafka notification
         async def progress_callback(percentage: int, message: str):
             try:
@@ -363,7 +377,7 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
                 # Send Kafka progress notification if user_id is present
                 if user_id:
                     logger.info(f"[DEBUG] Sending Kafka progress notification: {percentage}% - {message}")
-                    await _send_smart_exam_progress_notification(user_id, task_id, percentage, message)
+                    await _send_smart_exam_progress_notification(user_id, task_id, percentage, message, tool_log_id)
                 else:
                     logger.info(f"[DEBUG] Skipping Kafka notification - no user_id")
 
@@ -511,7 +525,7 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
 
         # Send Kafka completion notification if user_id is present
         if user_id:
-            await _send_smart_exam_completion_notification(user_id, task_id, result)
+            await _send_smart_exam_completion_notification(user_id, task_id, result, tool_log_id)
 
         logger.info(f"Smart exam generation task {task_id} hoàn thành thành công")
         return result
@@ -533,8 +547,9 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
                     task_data = task_info.get("data", {})
                     request_data = task_data.get("request_data", {})
                     user_id = request_data.get("user_id")
+                    tool_log_id = request_data.get("tool_log_id")
                     if user_id:
-                        await _send_smart_exam_error_notification(user_id, task_id, error_result)
+                        await _send_smart_exam_error_notification(user_id, task_id, error_result, tool_log_id)
             except Exception as kafka_error:
                 logger.error(f"Error sending Kafka error notification for task {task_id}: {kafka_error}")
 
