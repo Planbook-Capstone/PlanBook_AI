@@ -7,6 +7,7 @@ import logging
 import asyncio
 import os
 from typing import Dict, Any
+from datetime import datetime
 
 from app.core.celery_app import celery_app
 from app.services.mongodb_task_service import get_mongodb_task_service
@@ -15,17 +16,65 @@ from app.services.textbook_retrieval_service import get_textbook_retrieval_servi
 from app.services.smart_exam_docx_service import smart_exam_docx_service
 from app.services.google_drive_service import get_google_drive_service
 from app.models.smart_exam_models import SmartExamRequest
-from app.constants.kafka_message_types import RESPONSE_TYPE, PROGRESS_TYPE, RESULT_TYPE
+from app.constants.kafka_message_types import PROGRESS_TYPE, RESULT_TYPE
 
 logger = logging.getLogger(__name__)
+
+
+async def _send_kafka_message_with_timeout(message: Dict[str, Any], topic: str, key: str, timeout: float = 5.0):
+    """Send Kafka message with timeout and proper cleanup"""
+    from aiokafka import AIOKafkaProducer
+    from app.core.kafka_config import get_aiokafka_producer_config
+    import json
+    from datetime import datetime
+
+    producer = None
+    try:
+        # Create a fresh producer for each message to avoid connection issues
+        config = get_aiokafka_producer_config()
+        producer = AIOKafkaProducer(**config)
+
+        # Start producer with timeout
+        await asyncio.wait_for(producer.start(), timeout=timeout)
+
+        # Prepare message
+        message_data = {
+            "timestamp": datetime.now().isoformat(),
+            "source": "planbook-fastapi",
+            "data": message
+        }
+
+        # Convert to JSON string
+        message_json = json.dumps(message_data, ensure_ascii=False)
+
+        # Send message with timeout
+        await asyncio.wait_for(
+            producer.send_and_wait(topic=topic, value=message_json, key=key),
+            timeout=timeout
+        )
+
+        logger.info(f"✅ Message sent to topic '{topic}': {message}")
+        return True
+
+    except asyncio.TimeoutError:
+        logger.error(f"❌ Kafka message timeout after {timeout}s")
+        return False
+    except Exception as e:
+        logger.error(f"❌ Failed to send Kafka message: {e}")
+        return False
+    finally:
+        # Always cleanup producer
+        if producer:
+            try:
+                await asyncio.wait_for(producer.stop(), timeout=2.0)
+            except Exception as cleanup_error:
+                logger.warning(f"Warning during Kafka producer cleanup: {cleanup_error}")
 
 
 async def _send_smart_exam_progress_notification(user_id: str, task_id: str, percentage: int, message: str):
     """Send progress notification to SpringBoot via Kafka"""
     try:
-        from app.services.kafka_service import kafka_service
         from app.core.kafka_config import get_responses_topic
-        from datetime import datetime
 
         response_message = {
             "type": PROGRESS_TYPE,
@@ -39,8 +88,17 @@ async def _send_smart_exam_progress_notification(user_id: str, task_id: str, per
             }
         }
 
-        await kafka_service.send_message_async(response_message, topic=get_responses_topic(), key=user_id)
-        logger.info(f"[KAFKA] 📊 Sent smart exam progress notification for user {user_id}, task {task_id}: {percentage}% - {message}")
+        success = await _send_kafka_message_with_timeout(
+            response_message,
+            get_responses_topic(),
+            user_id,
+            timeout=3.0
+        )
+
+        if success:
+            logger.info(f"[KAFKA] 📊 Sent smart exam progress notification for user {user_id}, task {task_id}: {percentage}% - {message}")
+        else:
+            logger.warning(f"[KAFKA] ⚠️ Failed to send progress notification for user {user_id}, task {task_id}")
 
     except Exception as e:
         logger.error(f"[KAFKA] ❌ Failed to send smart exam progress notification: {e}")
@@ -49,7 +107,6 @@ async def _send_smart_exam_progress_notification(user_id: str, task_id: str, per
 async def _send_smart_exam_completion_notification(user_id: str, task_id: str, result: Dict[str, Any]):
     """Send completion notification to SpringBoot via Kafka"""
     try:
-        from app.services.kafka_service import kafka_service
         from app.core.kafka_config import get_responses_topic
 
         response_message = {
@@ -64,8 +121,17 @@ async def _send_smart_exam_completion_notification(user_id: str, task_id: str, r
             }
         }
 
-        await kafka_service.send_message_async(response_message, topic=get_responses_topic(), key=user_id)
-        logger.info(f"[KAFKA] ✅ Sent smart exam completion notification for user {user_id}, task {task_id}")
+        success = await _send_kafka_message_with_timeout(
+            response_message,
+            get_responses_topic(),
+            user_id,
+            timeout=3.0
+        )
+
+        if success:
+            logger.info(f"[KAFKA] ✅ Sent smart exam completion notification for user {user_id}, task {task_id}")
+        else:
+            logger.warning(f"[KAFKA] ⚠️ Failed to send completion notification for user {user_id}, task {task_id}")
 
     except Exception as e:
         logger.error(f"[KAFKA] ❌ Failed to send smart exam completion notification: {e}")
@@ -74,7 +140,6 @@ async def _send_smart_exam_completion_notification(user_id: str, task_id: str, r
 async def _send_smart_exam_error_notification(user_id: str, task_id: str, error_result: Dict[str, Any]):
     """Send error notification to SpringBoot via Kafka"""
     try:
-        from app.services.kafka_service import kafka_service
         from app.core.kafka_config import get_responses_topic
 
         response_message = {
@@ -90,8 +155,17 @@ async def _send_smart_exam_error_notification(user_id: str, task_id: str, error_
             }
         }
 
-        await kafka_service.send_message_async(response_message, topic=get_responses_topic(), key=user_id)
-        logger.info(f"[KAFKA] ✅ Sent smart exam error notification for user {user_id}, task {task_id}")
+        success = await _send_kafka_message_with_timeout(
+            response_message,
+            get_responses_topic(),
+            user_id,
+            timeout=3.0
+        )
+
+        if success:
+            logger.info(f"[KAFKA] ✅ Sent smart exam error notification for user {user_id}, task {task_id}")
+        else:
+            logger.warning(f"[KAFKA] ⚠️ Failed to send error notification for user {user_id}, task {task_id}")
 
     except Exception as e:
         logger.error(f"[KAFKA] ❌ Failed to send smart exam error notification: {e}")
@@ -159,25 +233,52 @@ def process_smart_exam_generation(task_id: str) -> Dict[str, Any]:
     logger.info(f"Bắt đầu tạo đề thi thông minh task: {task_id}")
 
     # Tạo một event loop duy nhất cho toàn bộ task
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
+    loop = None
     try:
-        return loop.run_until_complete(_process_smart_exam_generation_async(task_id))
+        # Always create a completely fresh event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        # Run the async task
+        result = loop.run_until_complete(_process_smart_exam_generation_async(task_id))
+        logger.info(f"Task {task_id} completed successfully")
+        return result
+
+    except Exception as e:
+        logger.error(f"Task {task_id} failed with error: {e}")
+        raise
     finally:
-        try:
-            # Cancel all pending tasks
-            pending = asyncio.all_tasks(loop)
-            for task in pending:
-                task.cancel()
+        # Comprehensive cleanup
+        if loop:
+            try:
+                # Cancel all pending tasks first
+                pending = asyncio.all_tasks(loop)
+                if pending:
+                    logger.info(f"Cancelling {len(pending)} pending tasks for task {task_id}")
+                    for task in pending:
+                        task.cancel()
 
-            # Wait for all tasks to be cancelled
-            if pending:
-                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                    # Wait for all tasks to be cancelled with timeout
+                    try:
+                        loop.run_until_complete(
+                            asyncio.wait_for(
+                                asyncio.gather(*pending, return_exceptions=True),
+                                timeout=5.0
+                            )
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Timeout waiting for tasks to cancel for task {task_id}")
 
-            loop.close()
-        except Exception as cleanup_error:
-            logger.warning(f"Error during loop cleanup: {cleanup_error}")
+                # Close the loop
+                if not loop.is_closed():
+                    loop.close()
+                    logger.info(f"Event loop closed for task {task_id}")
+
+            except Exception as cleanup_error:
+                logger.warning(f"Error during loop cleanup for task {task_id}: {cleanup_error}")
+            finally:
+                # Clear the event loop reference
+                asyncio.set_event_loop(None)
 
 
 async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
@@ -200,7 +301,6 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
 
         # Extract metadata fields
         user_id = request_data.get("user_id")
-        tool_log_id = request_data.get("tool_log_id")
 
         # Create exam request (remove metadata fields)
         exam_params = {k: v for k, v in request_data.items()
