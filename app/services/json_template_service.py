@@ -1359,239 +1359,14 @@ Neutron không mang điện.\\nCó khối lượng gần bằng proton.\\nTạo 
             # Return original data if validation fails
             return slide_data
 
-    async def _map_processed_slides_to_template(
-        self,
-        processed_slides: List[Dict[str, Any]],
-        template_json: Dict[str, Any],
-        analyzed_template: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Map processed slides vào template JSON"""
-        try:
-            logger.info(f"🔧 Mapping {len(processed_slides)} processed slides to template...")
-
-            # Create processed template copy
-            processed_template = {
-                "version": template_json.get("version", "1.0"),
-                "createdAt": datetime.now().isoformat(),
-                "slideFormat": template_json.get("slideFormat", "16:9"),
-                "slides": []
-            }
-
-            # Content index để track việc sử dụng content
-            content_index = {
-                "LessonName": 0,
-                "LessonDescription": 0,
-                "CreatedDate": 0,
-                "TitleName": 0,
-                "TitleContent": 0,
-                "SubtitleName": 0,
-                "SubtitleContent": 0,
-                "ImageName": 0,
-                "ImageContent": 0
-            }
-
-            # Gộp tất cả parsed data từ các slides
-            all_parsed_data = {
-                "LessonName": [],
-                "LessonDescription": [],
-                "CreatedDate": [],
-                "TitleName": [],
-                "TitleContent": [],
-                "SubtitleName": [],
-                "SubtitleContent": [],
-                "ImageName": [],
-                "ImageContent": []
-            }
-
-            for slide_data in processed_slides:
-                parsed_data = slide_data.get("parsed_data", {})
-                for placeholder_type, items in parsed_data.items():
-                    all_parsed_data[placeholder_type].extend(items)
-
-            logger.info(f"📋 Combined parsed data summary:")
-            for placeholder_type, items in all_parsed_data.items():
-                if items:
-                    logger.info(f"  {placeholder_type}: {len(items)} items")
-
-            # Track used slides để tránh duplicate
-            used_slide_ids = set()
-            template_slides = analyzed_template.get("slides", [])
-
-            # Process từng processed slide với intelligent template selection
-            for slide_data in processed_slides:
-                slide_num = slide_data.get("slide_number", 0)
-                placeholder_counts = slide_data.get("placeholder_counts", {})
-                required_placeholders = list(placeholder_counts.keys())
-
-                logger.info(f"🔍 Processing slide {slide_num}:")
-                logger.info(f"   Required placeholders: {required_placeholders}")
-                logger.info(f"   Required counts: {placeholder_counts}")
-
-                # Tìm template phù hợp CHÍNH XÁC
-                best_template = self._find_exact_matching_template(
-                    required_placeholders,
-                    placeholder_counts,
-                    template_slides,
-                    used_slide_ids
-                )
-
-                # Nếu không tìm thấy template chưa sử dụng, cho phép reuse template
-                if not best_template:
-                    logger.info(f"🔄 No unused template found, trying to reuse existing template...")
-                    best_template = self._find_exact_matching_template_with_reuse(
-                        required_placeholders,
-                        placeholder_counts,
-                        template_slides
-                    )
-
-                if best_template:
-                    template_id = best_template['id']  # Format mới sử dụng 'id' thay vì 'slideId'
-                    is_reused = template_id in used_slide_ids
-
-                    if is_reused:
-                        logger.info(f"✅ Found exact matching template (REUSED): {template_id}")
-                    else:
-                        logger.info(f"✅ Found exact matching template (NEW): {template_id}")
-
-                    # Tạo processed slide từ template
-                    processed_slide = await self._create_processed_slide_from_template(
-                        best_template,
-                        all_parsed_data,
-                        content_index,
-                        slide_num,
-                        is_reused
-                    )
-
-                    if processed_slide:
-                        processed_template["slides"].append(processed_slide)
-                        # Chỉ thêm vào used_slide_ids nếu chưa được sử dụng
-                        if not is_reused:
-                            used_slide_ids.add(template_id)
-                        logger.info(f"✅ Successfully processed slide {slide_num} ({'reused' if is_reused else 'new'})")
-                    else:
-                        logger.error(f"❌ Failed to create processed slide {slide_num} - SKIPPING")
-                        continue
-                else:
-                    logger.error(f"❌ No exact matching template found for slide {slide_num} - SKIPPING")
-                    continue
-
-            logger.info(f"✅ Template mapping complete: {len(processed_template['slides'])} slides created")
-            return processed_template
-
-        except Exception as e:
-            logger.error(f"❌ Error mapping processed slides to template: {e}")
-            raise
-
-    def _analyze_json_template(self, template_json: Dict[str, Any]) -> Dict[str, Any]:
-        """Phân tích JSON template và detect placeholders (theo logic cũ)"""
-        try:
-            logger.info("🔍 Analyzing JSON template structure...")
-            logger.info(f"🔍 Template JSON type: {type(template_json)}")
-            logger.info(f"🔍 Template JSON keys: {list(template_json.keys()) if isinstance(template_json, dict) else 'Not a dict'}")
-
-            slides = template_json.get("slides", [])
-            analyzed_slides = []
-
-            # Placeholder patterns để detect
-            placeholder_patterns = {
-                "LessonName": r"LessonName\s+(\d+)",
-                "LessonDescription": r"LessonDescription\s+(\d+)",
-                "CreatedDate": r"CreatedDate\s+(\d+)",
-                "TitleName": r"TitleName\s+(\d+)",
-                "TitleContent": r"TitleContent\s+(\d+)",
-                "SubtitleName": r"SubtitleName\s+(\d+)",
-                "SubtitleContent": r"SubtitleContent\s+(\d+)",
-                "ImageName": r"ImageName\s+(\d+)",
-                "ImageContent": r"ImageContent\s+(\d+)"
-            }
-
-            for slide in slides:
-                analyzed_elements = []
-                placeholder_counts = {}
-
-                # Phân tích elements
-                for element in slide.get("elements", []):
-                    text = element.get("text", "").strip()
-
-                    # Detect placeholder type từ text
-                    placeholder_result = self._detect_placeholder_type_from_text(text, placeholder_patterns)
-
-                    if placeholder_result:  # Chỉ xử lý nếu detect được placeholder
-                        placeholder_type, max_length = placeholder_result
-
-                        logger.info(f"✅ Found placeholder: {placeholder_type} <{max_length}>")
-
-                        # Đếm số lượng placeholder types
-                        placeholder_counts[placeholder_type] = placeholder_counts.get(placeholder_type, 0) + 1
-
-                        # Tạo analyzed element với thông tin đầy đủ
-                        analyzed_element = {
-                            "objectId": element.get("id"),
-                            "text": None,  # LLM sẽ insert nội dung sau
-                            "Type": placeholder_type,
-                            "max_length": max_length,
-                            "original_element": element  # Giữ thông tin gốc để mapping
-                        }
-
-                        analyzed_elements.append(analyzed_element)
-                    else:
-                        # Bỏ qua text không phải placeholder format
-                        logger.info(f"❌ Skipping non-placeholder text: '{text}'")
-                        continue
-
-                # Tạo description cho slide dựa trên placeholder counts (như luồng cũ)
-                description = self._generate_slide_description(placeholder_counts)
-
-                analyzed_slide = {
-                    "id": slide.get("id"),  # Sử dụng 'id' thay vì 'slideId' cho consistency
-                    "description": description,
-                    "elements": analyzed_elements,
-                    "placeholder_counts": placeholder_counts,  # For logic selection
-                    "original_slide": slide  # Giữ thông tin gốc
-                }
-
-                analyzed_slides.append(analyzed_slide)
-
-            result = {
-                "slides": analyzed_slides,
-                "total_slides": len(analyzed_slides),
-                "slideFormat": template_json.get("slideFormat", "16:9"),
-                "version": template_json.get("version", "1.0")
-            }
-
-            logger.info(f"✅ Template analysis complete: {len(analyzed_slides)} slides analyzed")
-            return result
-
-        except Exception as e:
-            logger.error(f"❌ Error analyzing JSON template: {e}")
-            raise
 
 
 
 
-    def _detect_placeholder_type_from_text(self, text: str, placeholder_patterns: Dict[str, str]) -> Optional[tuple]:
-        """
-        Detect placeholder type và max_length từ text format "PlaceholderName max_length"
 
-        Args:
-            text: Text từ element
-            placeholder_patterns: Dictionary của patterns
 
-        Returns:
-            tuple: (placeholder_type, max_length) hoặc None nếu không detect được
-        """
-        try:
-            for placeholder_type, pattern in placeholder_patterns.items():
-                match = re.search(pattern, text)
-                if match:
-                    max_length = int(match.group(1))
-                    return placeholder_type, max_length
 
-            return None
 
-        except Exception as e:
-            logger.warning(f"Error detecting placeholder type: {e}")
-            return None
 
     def _generate_slide_description(self, placeholder_counts: Dict[str, int]) -> str:
         """
@@ -1972,9 +1747,10 @@ SHORTENED CONTENT:"""
         try:
             from app.services.kafka_service import kafka_service
             from app.core.kafka_config import get_responses_topic
+            from app.constants.kafka_message_types import PROGRESS_TYPE
 
             response_message = {
-                "type": "slide_generation_response",
+                "type": PROGRESS_TYPE,
                 "data": {
                     "status": "slide_completed",
                     "user_id": user_id,
