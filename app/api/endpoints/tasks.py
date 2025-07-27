@@ -179,29 +179,29 @@ async def get_task_status(task_id: str) -> Dict[str, Any]:
             }
         }
 
-        # Thêm result nếu task đã hoàn thành
-        if task["status"] == "completed":
+        # Thêm result nếu có (bao gồm cả partial results trong quá trình xử lý)
+        if task.get("result"):
             response["result"] = task["result"]
 
-            # Thêm thông tin nhanh cho completed tasks
-            if task["result"]:
-                response["quick_info"] = {
-                    "success": task["result"].get("success", False),
-                    "book_id": task["result"].get("book_id"),
-                    "filename": task["result"].get("filename"),
-                    "embeddings_created": task["result"].get(
-                        "embeddings_created", False
-                    ),
-                    "total_pages": task["result"]
-                    .get("statistics", {})
-                    .get("total_pages", 0),
-                    "total_chapters": task["result"]
-                    .get("statistics", {})
-                    .get("total_chapters", 0),
-                    "total_lessons": task["result"]
-                    .get("statistics", {})
-                    .get("total_lessons", 0),
-                }
+        # Thêm thông tin nhanh cho completed tasks
+        if task["status"] == "completed" and task.get("result"):
+            response["quick_info"] = {
+                "success": task["result"].get("success", False),
+                "book_id": task["result"].get("book_id"),
+                "filename": task["result"].get("filename"),
+                "embeddings_created": task["result"].get(
+                    "embeddings_created", False
+                ),
+                "total_pages": task["result"]
+                .get("statistics", {})
+                .get("total_pages", 0),
+                "total_chapters": task["result"]
+                .get("statistics", {})
+                .get("total_chapters", 0),
+                "total_lessons": task["result"]
+                .get("statistics", {})
+                .get("total_lessons", 0),
+            }
 
         # Thêm error nếu task thất bại
         if task["status"] == "failed":

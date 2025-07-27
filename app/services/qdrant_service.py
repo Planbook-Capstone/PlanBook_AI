@@ -29,6 +29,19 @@ class QdrantService:
         self.semantic_analysis_service = get_semantic_analysis_service()
         self.smart_chunking_service = get_smart_chunking_service()
 
+    def is_available(self) -> bool:
+        """Check if Qdrant service is available"""
+        try:
+            self._ensure_service_initialized()
+            return (
+                self._service_initialized and
+                self.qdrant_client is not None and
+                self.embedding_model is not None
+            )
+        except Exception as e:
+            logger.error(f"❌ QdrantService availability check failed: {e}")
+            return False
+
     def _ensure_service_initialized(self):
         """Ensure Qdrant service is initialized"""
         if not self._service_initialized:

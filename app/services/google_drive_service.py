@@ -71,6 +71,7 @@ Service will be disabled.
                 if creds and creds.expired and creds.refresh_token:
                     # Refresh token nếu expired
                     creds.refresh(Request())
+                    logger.info("Token refreshed successfully")
                     # Lưu lại token mới
                     with open(token_path, 'w') as token:
                         token.write(creds.to_json())
@@ -79,12 +80,26 @@ Service will be disabled.
                     flow = InstalledAppFlow.from_client_secrets_file(
                         credentials_path, SCOPES
                     )
-                    # Sử dụng local server để nhận callback
-                    creds = flow.run_local_server(port=0)
+
+                    # Đảm bảo lấy refresh_token khi đăng nhập lần đầu
+                    # access_type='offline' để lấy refresh_token
+                    # prompt='consent' để buộc hiển thị consent screen (đảm bảo refresh_token được trả về)
+                    creds = flow.run_local_server(
+                        port=0,
+                        access_type='offline',
+                        prompt='consent'
+                    )
+
+                    # Kiểm tra xem có refresh_token không
+                    if creds.refresh_token:
+                        logger.info("✅ Refresh token obtained successfully")
+                    else:
+                        logger.warning("⚠️ No refresh token received - may need to revoke and re-authorize")
 
                     # Lưu token để sử dụng lần sau
                     with open(token_path, 'w') as token:
                         token.write(creds.to_json())
+                        logger.info(f"Token saved to {token_path}")
 
             self.credentials = creds
 
