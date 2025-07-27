@@ -589,11 +589,19 @@ async def handle_slide_generation_request(data: dict):
             description = slide.get("description", "")
 
             print(f"[KAFKA] 🔄 Processing slide {i+1}: {slide_id} - {slide_title}")
-
+            
             # Extract slideData and add description from the outer slide object
-            slide_data = slide.get("slideData", {})
-            slide_data["description"] = description
-            transformed_slides.append(slide_data)
+            transformed_slide = {
+                "id": slide_id,
+                "title": slide_title,
+                "description": description,
+                "slideData": slide.get("slideData", {}),
+                "status": slide.get("status", "ACTIVE"),
+                "slideTemplateId": slide.get("slideTemplateId"),
+                "createdAt": slide.get("createdAt"),
+                "updatedAt": slide.get("updatedAt")
+            }
+            transformed_slides.append(transformed_slide)    
 
         print(f"[KAFKA] ✅ Transformed {len(transformed_slides)} slides for processing")
 

@@ -6,7 +6,7 @@ Xử lý slide generation với JSON template từ frontend thay vì Google Slid
 import logging
 import re
 import copy
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 
 from app.services.llm_service import get_llm_service
@@ -637,8 +637,24 @@ class JsonTemplateService:
 
                         # Send Kafka notification for slide completion if user_id is available
                         if user_id:
-                            await self._send_slide_partial_result_notification(
-                                user_id, task_id, slide_num, total_slides, partial_result
+                            from app.services.kafka_service import kafka_service
+                            from app.services.kafka_service import safe_kafka_call
+
+                            progress = int((slide_num / total_slides) * 100) if total_slides > 0 else 100
+                            safe_kafka_call(
+                                kafka_service.send_progress_update_sync,
+                                tool_log_id=task_id,
+                                task_id=task_id,
+                                user_id=user_id,
+                                progress=progress,
+                                message=f"✅ Đã hoàn thành slide {slide_num}/{total_slides}",
+                                status="processing",
+                                additional_data={
+                                    "slide_number": slide_num,
+                                    "total_slides": total_slides,
+                                    "completed_slides": partial_result.get("completed_slides", 0),
+                                    "partial_result": partial_result
+                                }
                             )
                 else:
                     logger.error(f"❌ Failed to map slide {slide_num} to template")
@@ -1735,41 +1751,36 @@ SHORTENED CONTENT:"""
             logger.error(f"❌ Error creating processed slide from template: {e}")
             return None
 
-    async def _send_slide_partial_result_notification(
-        self,
-        user_id: str,
-        task_id: str,
-        slide_num: int,
-        total_slides: int,
-        partial_result: Dict[str, Any]
-    ):
-        """Send Kafka notification for individual slide completion"""
+    def _detect_placeholder_type_from_text(self, text: str, placeholder_patterns: Dict[str, str]) -> Optional[Tuple[str, int]]:
+        """
+        Detect placeholder type từ text element và extract max length
+
+        Args:
+            text: Text content của element
+            placeholder_patterns: Dict mapping placeholder types to regex patterns
+
+        Returns:
+            Tuple (placeholder_type, max_length) hoặc None nếu không match
+        """
         try:
-            from app.services.kafka_service import kafka_service
-            from app.core.kafka_config import get_responses_topic
-            from app.constants.kafka_message_types import PROGRESS_TYPE
+            import re
 
-            response_message = {
-                "type": PROGRESS_TYPE,
-                "data": {
-                    "status": "slide_completed",
-                    "user_id": user_id,
-                    "task_id": task_id,
-                    "slide_number": slide_num,
-                    "total_slides": total_slides,
-                    "completed_slides": partial_result.get("completed_slides", 0),
-                    "progress": int((slide_num / total_slides) * 100) if total_slides > 0 else 100,
-                    "partial_result": partial_result,
-                    "message": f"✅ Đã hoàn thành slide {slide_num}/{total_slides}",
-                    "timestamp": datetime.now().isoformat()
-                }
-            }
+            for placeholder_type, pattern in placeholder_patterns.items():
+                match = re.search(pattern, text)
+                if match:
+                    # Extract max_length từ captured group
+                    max_length = int(match.group(1)) if match.group(1) else 0
+                    logger.info(f"🎯 Detected placeholder: {placeholder_type} with max_length: {max_length}")
+                    return (placeholder_type, max_length)
 
-            await kafka_service.send_message_async(response_message, topic=get_responses_topic(), key=user_id)
-            logger.info(f"[KAFKA] 📊 Sent slide completion notification for user {user_id}, slide {slide_num}/{total_slides}")
+            # Không tìm thấy placeholder pattern
+            return None
 
         except Exception as e:
-            logger.error(f"[KAFKA] ❌ Failed to send slide completion notification: {e}")
+            logger.error(f"❌ Error detecting placeholder type from text '{text}': {e}")
+            return None
+
+
 
 
 # Singleton instance
