@@ -543,9 +543,9 @@ async def handle_slide_generation_request(data: dict):
     try:
         print(f"[KAFKA] 🎨 Processing slide generation request: {data}")
 
-        # Extract request parameters
+        # Extract request parameters from nested data structure
         user_id = data.get("user_id", "")
-        slides_data = data.get("input", [])
+        slides_input = data.get("input", {})  # input is now a dict with numbered keys
         lesson_id = data.get("lesson_id", "")
         tool_log_id = data.get("tool_log_id", "")
         book_id = data.get("book_id", "")
@@ -554,12 +554,19 @@ async def handle_slide_generation_request(data: dict):
             print(f"[KAFKA] ❌ Missing user_id in slide generation request")
             return
 
-        if not slides_data:
+        if not slides_input:
             print(f"[KAFKA] ❌ Missing slides data in slide generation request")
             await _send_slide_generation_error_response(user_id, "Missing slides data in request", data.get("timestamp", ""), tool_log_id)
             return
 
         print(f"[KAFKA] 📋 Slide generation for user {user_id}, lesson {lesson_id}")
+        print(f"[KAFKA] 📊 Received {len(slides_input)} slides in input")
+
+        # Convert slides_input dict to list format for validation
+        slides_data = []
+        for key in sorted(slides_input.keys(), key=lambda x: int(x)):  # Sort by numeric key
+            slide_info = slides_input[key]
+            slides_data.append(slide_info)
 
         # Validate slides data format
         validation_result = _validate_slides_json_format(slides_data)
