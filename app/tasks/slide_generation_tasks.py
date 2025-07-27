@@ -64,6 +64,7 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
                 template_json=template_json,
                 config_prompt=config_prompt,
                 task_id=task_id,
+                task_service=task_service,
                 user_id=user_id,
                 book_id=book_id
             )
@@ -215,18 +216,31 @@ async def trigger_json_template_task(
         str: Task ID để theo dõi tiến trình
     """
     try:
+        # Import TaskType enum
+        from app.services.mongodb_task_service import TaskType
+
         # Tạo task trong MongoDB trước
         task_service = get_mongodb_task_service()
+        task_data = {
+            "lesson_id": lesson_id,
+            "template_json": template_json,
+            "config_prompt": config_prompt,
+            "user_id": user_id,
+            "book_id": book_id
+        }
+
+        metadata = {
+            "lesson_id": lesson_id,
+            "slides_count": len(template_json.get("slides", [])),
+            "config_prompt": config_prompt,
+            "user_id": user_id,
+            "book_id": book_id
+        }
+
         task_id = await task_service.create_task(
-            task_type="json_template_processing",
-            status="PENDING",
-            metadata={
-                "lesson_id": lesson_id,
-                "slides_count": len(template_json.get("slides", [])),
-                "config_prompt": config_prompt,
-                "user_id": user_id,
-                "book_id": book_id
-            }
+            task_type=TaskType.JSON_TEMPLATE_PROCESSING,
+            task_data=task_data,
+            metadata=metadata
         )
 
         logger.info(f"✅ Created MongoDB task: {task_id}")
