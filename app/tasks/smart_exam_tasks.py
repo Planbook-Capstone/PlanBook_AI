@@ -15,6 +15,7 @@ from app.services.textbook_retrieval_service import get_textbook_retrieval_servi
 from app.services.smart_exam_docx_service import smart_exam_docx_service
 from app.services.google_drive_service import get_google_drive_service
 from app.models.smart_exam_models import SmartExamRequest
+from app.constants.kafka_message_types import RESPONSE_TYPE, PROGRESS_TYPE, RESULT_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +24,11 @@ async def _send_smart_exam_progress_notification(user_id: str, task_id: str, per
     """Send progress notification to SpringBoot via Kafka"""
     try:
         from app.services.kafka_service import kafka_service
-        from app.core.config import get_responses_topic
+        from app.core.kafka_config import get_responses_topic
         from datetime import datetime
 
         response_message = {
-            "type": "smart_exam_generation_response",
+            "type": PROGRESS_TYPE,
             "data": {
                 "status": "processing",
                 "user_id": user_id,
@@ -49,10 +50,10 @@ async def _send_smart_exam_completion_notification(user_id: str, task_id: str, r
     """Send completion notification to SpringBoot via Kafka"""
     try:
         from app.services.kafka_service import kafka_service
-        from app.core.config import get_responses_topic
+        from app.core.kafka_config import get_responses_topic
 
         response_message = {
-            "type": "smart_exam_generation_response",
+            "type": RESULT_TYPE,
             "data": {
                 "status": "completed",
                 "user_id": user_id,
@@ -74,10 +75,10 @@ async def _send_smart_exam_error_notification(user_id: str, task_id: str, error_
     """Send error notification to SpringBoot via Kafka"""
     try:
         from app.services.kafka_service import kafka_service
-        from app.core.config import get_responses_topic
+        from app.core.kafka_config import get_responses_topic
 
         response_message = {
-            "type": "smart_exam_generation_response",
+            "type": RESULT_TYPE,
             "data": {
                 "status": "error",
                 "user_id": user_id,
@@ -196,11 +197,62 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
         # Parse request data
         task_data = task_info.get("data", {})
         request_data = task_data.get("request_data", {})
-        exam_request = SmartExamRequest(**request_data)
 
-        # Get user_id for Kafka notifications
-        # user_id = getattr(exam_request, 'user_id', None)
-        user_id = task_data.get("user_id")
+        # Extract metadata fields
+        user_id = request_data.get("user_id")
+        tool_log_id = request_data.get("tool_log_id")
+
+        # Create exam request (remove metadata fields)
+        exam_params = {k: v for k, v in request_data.items()
+                      if k not in ["user_id", "tool_log_id", "lesson_id", "book_id"]}
+
+        # Handle invalid examCode - if it's not a valid 4-digit number, set to None
+        if "examCode" in exam_params:
+            exam_code = exam_params["examCode"]
+            if not isinstance(exam_code, str) or not exam_code.isdigit() or len(exam_code) != 4:
+                logger.warning(f"Invalid examCode '{exam_code}', setting to None for auto-generation")
+                exam_params["examCode"] = None
+
+        # Handle invalid grade - ensure it's an integer between 1-12
+        if "grade" in exam_params:
+            try:
+                grade = int(exam_params["grade"])
+                if grade < 1 or grade > 12:
+                    logger.warning(f"Invalid grade '{grade}', setting to 12")
+                    exam_params["grade"] = 12
+                else:
+                    exam_params["grade"] = grade
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid grade '{exam_params['grade']}', setting to 12")
+                exam_params["grade"] = 12
+
+        # Handle invalid duration - ensure it's an integer between 15-180
+        if "duration" in exam_params:
+            try:
+                duration = int(exam_params["duration"])
+                if duration < 15 or duration > 180:
+                    logger.warning(f"Invalid duration '{duration}', setting to 45")
+                    exam_params["duration"] = 45
+                else:
+                    exam_params["duration"] = duration
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid duration '{exam_params['duration']}', setting to 45")
+                exam_params["duration"] = 45
+
+        try:
+            exam_request = SmartExamRequest(**exam_params)
+        except Exception as validation_error:
+            error_msg = f"Lỗi validation: {str(validation_error)}"
+            logger.error(f"SmartExamRequest validation failed: {validation_error}")
+
+            error_result = create_error_result(task_id, error_msg, "ValidationError", "validation")
+
+            # Send Kafka error notification if user_id is present
+            if user_id:
+                await _send_smart_exam_error_notification(user_id, task_id, error_result)
+
+            return error_result
+
         logger.info(f"[DEBUG] User ID for Kafka notifications: {user_id}")
         # Progress callback function with Kafka notification
         async def progress_callback(percentage: int, message: str):

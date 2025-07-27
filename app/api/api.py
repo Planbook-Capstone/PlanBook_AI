@@ -21,6 +21,7 @@ from app.api.endpoints import (
 
 from app.services.kafka_service import kafka_service
 from app.core.kafka_config import get_responses_topic
+from app.constants.kafka_message_types import RESPONSE_TYPE
 from app.api.endpoints import auto_grading
 
 # Initialize FastAPI app
@@ -193,7 +194,7 @@ async def handle_lesson_plan_request(data: dict):
 
         # Send response back via Kafka if needed
         response_message = {
-            "type": "lesson_plan_response",
+            "type": RESPONSE_TYPE,
             "data": {
                 "status": "received",
                 "lesson_id": lesson_id,
@@ -213,7 +214,7 @@ async def _send_error_response(user_id: str, error_message: str, timestamp: str)
     """Send error response back to SpringBoot via Kafka"""
     try:
         error_response = {
-            "type": "lesson_plan_content_generation_response",
+            "type": RESPONSE_TYPE,
             "data": {
                 "status": "error",
                 "user_id": user_id,
@@ -280,7 +281,7 @@ async def handle_lesson_plan_content_generation_request(data: dict):
 
         # Send initial response back via Kafka
         response_message = {
-            "type": "lesson_plan_content_generation_response",
+            "type": RESPONSE_TYPE,
             "data": {
                 "status": "accepted",
                 "tool_log_id": tool_log_id,
@@ -312,7 +313,7 @@ async def _send_smart_exam_error_response(user_id: str, error_message: str, time
     """Send error response for smart exam generation back to SpringBoot via Kafka"""
     try:
         error_response = {
-            "type": "smart_exam_generation_response",
+            "type": RESPONSE_TYPE,
             "data": {
                 "status": "error",
                 "user_id": user_id,
@@ -350,13 +351,14 @@ async def handle_smart_exam_generation_request(data: dict):
             await _send_smart_exam_error_response(user_id, "Missing exam_request in request", data.get("timestamp", ""), tool_log_id)
             return
 
-        request_obj = {
-            "input": exam_request_data,
+        # Add metadata to the exam request data
+        request_obj = exam_request_data.copy()
+        request_obj.update({
             "user_id": user_id,
             "tool_log_id": tool_log_id,
             "lesson_id": lesson_id,
             "book_id": book_id
-        }
+        })
 
         # Import background task processor
         from app.services.background_task_processor import get_background_task_processor
@@ -376,7 +378,7 @@ async def handle_smart_exam_generation_request(data: dict):
 
         # Send initial response back via Kafka
         response_message = {
-            "type": "smart_exam_generation_response",
+            "type": RESPONSE_TYPE,
             "data": {
                 "status": "accepted",
                 "tool_log_id": tool_log_id,
@@ -420,7 +422,7 @@ async def handle_exam_generation_request(data: dict):
 
         # Send response back via Kafka if needed
         response_message = {
-            "type": "exam_generation_response",
+            "type": RESPONSE_TYPE,
             "data": {
                 "status": "received",
                 "exam_type": exam_type,
@@ -448,7 +450,7 @@ async def handle_grading_request(data: dict):
 
         # Send response back via Kafka if needed
         response_message = {
-            "type": "grading_response",
+            "type": RESPONSE_TYPE,
             "data": {
                 "status": "received",
                 "exam_id": exam_id,
@@ -476,7 +478,7 @@ async def handle_textbook_processing_request(data: dict):
 
         # Send response back via Kafka if needed
         response_message = {
-            "type": "textbook_processing_response",
+            "type": RESPONSE_TYPE,
             "data": {
                 "status": "received",
                 "textbook_path": textbook_path,
