@@ -147,8 +147,8 @@ async def process_json_template_async(request: JsonTemplateRequest):
             lesson_id=request.lesson_id,
             template_json=template_json,
             config_prompt=request.config_prompt,
-            user_id=None,  # No user_id for HTTP endpoint calls
-            book_id=None   # No book_id for HTTP endpoint calls
+            user_id=None,  
+            book_id=None  
         )
 
         logger.info(f"✅ JSON template processing task created: {task_id}")

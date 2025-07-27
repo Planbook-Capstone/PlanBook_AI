@@ -64,6 +64,7 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
                 template_json=template_json,
                 config_prompt=config_prompt,
                 task_id=task_id,
+                task_service=task_service,
                 user_id=user_id,
                 book_id=book_id
             )

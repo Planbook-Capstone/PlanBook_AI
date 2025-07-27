@@ -97,13 +97,17 @@ async def startup_event():
     # Only initialize services that absolutely need to be ready at startup
 
     try:
+        # Initialize Kafka producer to ensure it's ready for progress updates
+        await kafka_service._initialize_async_producer()
+        print("[OK] Kafka producer initialized")
+
         # Start Kafka consumer in background to listen for messages from other services
         import asyncio
         asyncio.create_task(start_kafka_consumer_background())
         print("[OK] Kafka consumer started in background")
 
     except Exception as e:
-        print(f"[ERROR] Failed to start Kafka consumer: {e}")
+        print(f"[ERROR] Failed to start Kafka services: {e}")
         print("[INFO] Kafka service will be available when Kafka server is running")
 
     # Other services (LessonPlanFrameworkService, etc.) will initialize lazily when first used
@@ -541,7 +545,9 @@ async def handle_smart_exam_generation_request(data: dict):
 async def handle_slide_generation_request(data: dict):
     """Handle slide generation request from SpringBoot"""
     try:
-        print(f"[KAFKA] 🎨 Processing slide generation request: {data}")
+        print(f"[KAFKA] 🎨 Processing slide generation request")
+        print(f"[KAFKA] 📊 Data keys: {list(data.keys())}")
+        print(f"[KAFKA] 📋 Full data: {json.dumps(data, indent=2, ensure_ascii=False)}")
 
         # Extract request parameters from nested data structure
         user_id = data.get("user_id", "")
@@ -549,6 +555,14 @@ async def handle_slide_generation_request(data: dict):
         lesson_id = data.get("lesson_id", "")
         tool_log_id = data.get("tool_log_id", "")
         book_id = data.get("book_id", "")
+
+        print(f"[KAFKA] 🔍 Extracted values:")
+        print(f"[KAFKA]   - user_id: {user_id}")
+        print(f"[KAFKA]   - lesson_id: {lesson_id}")
+        print(f"[KAFKA]   - tool_log_id: {tool_log_id}")
+        print(f"[KAFKA]   - book_id: {book_id}")
+        print(f"[KAFKA]   - slides_input type: {type(slides_input)}")
+        print(f"[KAFKA]   - slides_input keys: {list(slides_input.keys()) if isinstance(slides_input, dict) else 'Not a dict'}")
 
         if not user_id:
             print(f"[KAFKA] ❌ Missing user_id in slide generation request")
@@ -634,8 +648,17 @@ async def handle_slide_generation_request(data: dict):
             }
         }
 
-        await kafka_service.send_message_async(response_message, topic=get_responses_topic(), key=user_id)
-        print(f"[KAFKA] ✅ Sent response for slide generation request - Task ID: {task_id}")
+        print(f"[KAFKA] 📤 Sending response message:")
+        print(f"[KAFKA] 📋 Response: {json.dumps(response_message, indent=2, ensure_ascii=False)}")
+        print(f"[KAFKA] 🎯 Topic: {get_responses_topic()}")
+        print(f"[KAFKA] 🔑 Key: {user_id}")
+
+        success = await kafka_service.send_message_async(response_message, topic=get_responses_topic(), key=user_id)
+
+        if success:
+            print(f"[KAFKA] ✅ Successfully sent response for slide generation request - Task ID: {task_id}")
+        else:
+            print(f"[KAFKA] ❌ Failed to send response for slide generation request - Task ID: {task_id}")
 
     except Exception as e:
         print(f"[KAFKA] ❌ Error handling slide generation request: {e}")

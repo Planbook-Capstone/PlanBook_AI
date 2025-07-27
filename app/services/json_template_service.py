@@ -559,16 +559,6 @@ class JsonTemplateService:
                         progress=int(current_progress),
                         message=f"🤖 Đang xử lý slide {slide_num}/{total_slides}..."
                     )
-                # Bước 2: Chi tiết hóa slide
-                if slide_num == 1:
-                    # Slide đầu tiên không cần chi tiết hóa, sử dụng framework slide trực tiếp
-                    detailed_slide = {
-                        "success": True,
-                        "content": framework_slide.get("content", "")
-                    }
-                    logger.info(f"✅ Slide 1 sử dụng framework content trực tiếp")
-                else:
-                    # Từ slide 2 trở đi thì chi tiết hóa như bình thường
                     detailed_slide = await self._detail_slide_content(
                         framework_slide,
                         lesson_content,
