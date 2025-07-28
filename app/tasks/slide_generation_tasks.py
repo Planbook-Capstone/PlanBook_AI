@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 @celery_app.task(bind=True, name="app.tasks.slide_generation_tasks.process_json_template_task")
-def process_json_template_task(self, task_id: str, lesson_id: str, template_json: Dict[str, Any], config_prompt: str = None, user_id: str = None, book_id: str = None):
+def process_json_template_task(self, task_id: str, lesson_id: str, template_json: Dict[str, Any], config_prompt: str = None, user_id: str = None, book_id: str = None, tool_log_id: str = None):
     """
     Celery task để xử lý JSON template bất đồng bộ với progress tracking
 
@@ -29,6 +29,7 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
         config_prompt: Prompt cấu hình tùy chỉnh (optional)
         user_id: ID của user (optional, for Kafka notifications)
         book_id: ID của sách giáo khoa (optional)
+        tool_log_id: ID của tool log (optional, for Kafka notifications)
     """
 
     logger.info(f"🚀 CELERY TASK STARTED: process_json_template_task")
@@ -45,6 +46,14 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
             logger.info("🔄 Getting MongoDB task service...")
             task_service = get_mongodb_task_service()
             logger.info("✅ MongoDB task service obtained")
+
+            # Lấy tool_log_id từ task data nếu không được truyền trực tiếp
+            if not tool_log_id:
+                task_info = await task_service.get_task_status(task_id)
+                if task_info and task_info.get("data"):
+                    tool_log_id = task_info["data"].get("tool_log_id")
+                    logger.info(f"📋 Retrieved tool_log_id from task data: {tool_log_id}")
+
         except Exception as e:
             logger.error(f"❌ Failed to get MongoDB task service: {e}")
             raise
@@ -66,7 +75,8 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
                 task_id=task_id,
                 task_service=task_service,
                 user_id=user_id,
-                book_id=book_id
+                book_id=book_id,
+                tool_log_id=tool_log_id
             )
 
             if result["success"]:
@@ -200,7 +210,8 @@ async def trigger_json_template_task(
     template_json: Dict[str, Any],
     config_prompt: str = None,
     user_id: str = None,
-    book_id: str = None
+    book_id: str = None,
+    tool_log_id: str = None
 ) -> str:
     """
     Trigger Celery task cho JSON template processing và tạo task trong MongoDB
@@ -211,6 +222,7 @@ async def trigger_json_template_task(
         config_prompt: Prompt cấu hình tùy chỉnh (optional)
         user_id: ID của user (optional)
         book_id: ID của sách giáo khoa (optional)
+        tool_log_id: ID của tool log (optional, for Kafka notifications)
 
     Returns:
         str: Task ID để theo dõi tiến trình
@@ -226,7 +238,8 @@ async def trigger_json_template_task(
             "template_json": template_json,
             "config_prompt": config_prompt,
             "user_id": user_id,
-            "book_id": book_id
+            "book_id": book_id,
+            "tool_log_id": tool_log_id
         }
 
         metadata = {
@@ -252,7 +265,8 @@ async def trigger_json_template_task(
             template_json=template_json,
             config_prompt=config_prompt,
             user_id=user_id,
-            book_id=book_id
+            book_id=book_id,
+            tool_log_id=tool_log_id
         )
 
         logger.info(f"✅ Triggered Celery task: {celery_task.id}")
