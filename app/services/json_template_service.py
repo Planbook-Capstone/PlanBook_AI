@@ -418,17 +418,26 @@ class JsonTemplateService:
                 slide_num = i + 1
                 logger.info(f"🔄 Processing slide {slide_num}/{len(framework_slides)}")
 
-                # Bước 2: Chi tiết hóa slide
-                detailed_slide = await self._detail_slide_content(
-                    framework_slide,
-                    lesson_content,
-                    config_prompt,
-                    slide_num
-                )
+                # Bước 2: Chi tiết hóa slide (bỏ qua slide đầu - slide giới thiệu)
+                if slide_num == 1:
+                    logger.info(f"⏭️ Skipping detailed processing for slide {slide_num} (introduction slide)")
+                    # Sử dụng trực tiếp framework_slide content cho slide giới thiệu
+                    detailed_slide = {
+                        "success": True,
+                        "content": framework_slide
+                    }
+                else:
+                    detailed_slide = await self._detail_slide_content(
+                        framework_slide,
+                        lesson_content,
+                        config_prompt,
+                        slide_num
+                    )
 
-                if not detailed_slide.get("success", False):
-                    logger.error(f"❌ Step 2 failed for slide {slide_num}: {detailed_slide.get('error', 'Unknown error')}")
-                    continue  # Skip slide này
+                    if not detailed_slide.get("success", False):
+                        logger.error(f"❌ Step 2 failed for slide {slide_num}: {detailed_slide.get('error', 'Unknown error')}")
+                        continue  # Skip slide này
+
                 logger.info(f"---------detailed_slide: {detailed_slide}")
 
                 # Bước 3: Gắn placeholder
@@ -559,6 +568,16 @@ class JsonTemplateService:
                         progress=int(current_progress),
                         message=f"🤖 Đang xử lý slide {slide_num}/{total_slides}..."
                     )
+
+                # Bước 2: Chi tiết hóa slide (bỏ qua slide đầu - slide giới thiệu)
+                if slide_num == 1:
+                    logger.info(f"⏭️ Skipping detailed processing for slide {slide_num} (introduction slide)")
+                    # Sử dụng trực tiếp framework_slide content cho slide giới thiệu
+                    detailed_slide = {
+                        "success": True,
+                        "content": framework_slide
+                    }
+                else:
                     detailed_slide = await self._detail_slide_content(
                         framework_slide,
                         lesson_content,
@@ -774,7 +793,7 @@ class JsonTemplateService:
             # Gọi LLM để tạo khung slide
             llm_response = await self.llm_service.generate_content(
                 prompt=framework_prompt,
-                max_tokens=10000,
+                max_tokens=20000,
                 temperature=0.1
             )
 
@@ -834,20 +853,29 @@ YÊU CẦU KHUNG SLIDE:
 2. Đảm bảo khung slide có tính logic, hợp lý và dễ theo dõi
 3. Mỗi slide thể hiện một chủ đề chính, ý định và kiến thức cần truyền đạt
 4. Không cần chi tiết, chỉ cần khung tổng quát
-5. Slide đầu tiên bắt buộc là slide giới thiệu với 3 ý: tên bài học, mô tả ngắn và ngày tạo bài thuyết trình.
+5. Slide đầu tiên bắt buộc là slide giới thiệu với ĐÚNG 3 dòng: tên bài học, mô tả ngắn và ngày tạo bài thuyết trình.
 
 FORMAT OUTPUT:
+
 SLIDE 1: [Tên bài thuyết trình]
 Mô tả ngắn bài thuyết trình
 Ngày thuyết trình: 12-07-2025
 ---
+
 SLIDE 2: [Tiêu đề slide]
 Mục đích: [Mục đích của slide này]
-Nội dung chính: [Tóm tắt nội dung chính cần truyền đạt]
+Nội dung chính: 
+- [Nội dung chính 1 cần truyền đạt]
+- [Nội dung chính 2 cần truyền đạt]
+- ....
 ---
+
 SLIDE 3: [Tiêu đề slide]
 Mục đích: [Mục đích của slide này]
-Nội dung chính: [Tóm tắt nội dung chính cần truyền đạt]
+Nội dung chính:
+- [Nội dung chính 1 cần truyền đạt]
+- [Nội dung chính 2 cần truyền đạt]
+- ....
 ---
 
 ... (tiếp tục cho các slide khác)
@@ -856,7 +884,7 @@ LƯU Ý:
 - Chỉ tạo khung tổng quát, không chi tiết hóa
 - Đảm bảo logic từ slide này sang slide khác
 - Mỗi slide có mục đích rõ ràng trong chuỗi kiến thức
-- Slide đầu tiên bắt buộc là slide giới thiệu với 3 ý: tên bài học, mô tả ngắn và ngày tạo bài thuyết trình.
+- Slide đầu tiên bắt buộc là slide giới thiệu với ĐÚNG 3 dòng: tên bài học, mô tả ngắn và ngày tạo bài thuyết trình.
 """
 
         return prompt
@@ -940,7 +968,7 @@ LƯU Ý:
 
                 llm_response = await self.llm_service.generate_content(
                     prompt=detail_prompt,
-                    max_tokens=15000,
+                    max_tokens=30000,
                     temperature=0.1
                 )
 
@@ -1000,6 +1028,8 @@ Bạn là chuyên gia thiết kế nội dung slide giáo dục chuyên nghiệp
 """
 
         prompt = f"""
+
+YÊU CẦU CỦA NGƯỜI DÙNG:
 {default_config}
 
 NHIỆM VỤ: Chi tiết hóa nội dung cho slide cụ thể
@@ -1014,9 +1044,9 @@ NỘI DUNG BÀI HỌC THAM KHẢO:
 {lesson_content}
 
 YÊU CẦU CHI TIẾT HÓA:
-1. Chi tiết hóa nội dung cho slide cụ thể dựa trên nội dung bài học và thông tin từ config_prompt
-2. Điều chỉnh thái độ, cách nói, độ khó sao cho phù hợp với đối tượng và bối cảnh thuyết trình
-3. Tạo nội dung đầy đủ, chi tiết, dễ hiểu
+1. Chi tiết hóa nội dung cho slide cụ thể dựa trên nội dung bài học 
+2. Điều chỉnh ngữ điệu, độ khó, độ chi tiết hoặc nâng cao sao cho phù hợp với đối tượng và bối cảnh thuyết trình theo mục YÊU CẦU CỦA NGƯỜI DÙNG
+3. Tạo nội dung đầy đủ, chi tiết
 4. Bao gồm định nghĩa, giải thích, ví dụ minh họa nếu cần
 5. Đảm bảo nội dung phù hợp với mục đích của slide
 6. 🚨 QUAN TRỌNG: Nếu có nhiều mục con, hãy GỘP CHÚNG LẠI để không vượt quá 6 mục
@@ -1161,7 +1191,8 @@ SLIDE CHI TIẾT CẦN GẮN PLACEHOLDER:
 4. TUYỆT ĐỐI KHÔNG tạo nhiều SubtitleContent riêng biệt cho 1 SubtitleName
 5. Nếu có nhiều ý trong cùng 1 mục, hãy GỘP TẤT CẢ thành 1 khối duy nhất
 6. Sử dụng \\n để xuống dòng giữa các ý trong cùng 1 khối content
-7. GIỚI HẠN: Tối đa 6 SubtitleName mỗi slide (không được vượt quá). Hãy gộp nội dung nếu cần thiết để tránh vượt quá 
+7. GIỚI HẠN: Tối đa 6 SubtitleName mỗi slide (không được vượt quá) 
+8. Hãy gộp nội dung nếu cần thiết để tránh vượt quá 
 
 PLACEHOLDER TYPES:
 - LessonName: Tên bài học (chỉ slide đầu tiên)
@@ -1198,6 +1229,7 @@ content #*(PlaceholderType)*#
 - CHỈ 1 TitleContent cho mỗi TitleName (KHÔNG BAO GIỜ NHIỀU HỠN 1)
 - CHỈ 1 SubtitleContent cho mỗi SubtitleName (KHÔNG BAO GIỜ NHIỀU HỠN 1)
 - TỐI ĐA 6 SubtitleName mỗi slide (KHÔNG ĐƯỢC VƯỢT QUÁ)
+- Hãy gộp nội dung nếu cần thiết để tránh vượt quá 
 - Sử dụng \\n để xuống dòng trong cùng 1 khối content
 - TUYỆT ĐỐI TUÂN THỦ QUY TẮC 1:1 MAPPING
 - NẾU CÓ NHIỀU Ý TRONG CÙNG MỤC, HÃY GỘP TẤT CẢ THÀNH 1 KHỐI DUY NHẤT
@@ -1470,7 +1502,7 @@ SHORTENED CONTENT:"""
 
                 llm_response = await self.llm_service.generate_content(
                     prompt=shorten_prompt,
-                    max_tokens=5000,
+                    max_tokens=12000,
                     temperature=0.1
                 )
 
