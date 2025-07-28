@@ -154,13 +154,13 @@ class SmartExamGenerationService:
                         )
                         part_questions.extend(level_questions)
             elif part_num == 3:
-                # Phần III: Tự luận tính toán - có mức độ VẬN DỤNG và VẬN DỤNG CAO
-                if objectives.Vận_dụng > 0:
-                    level_questions = await self._generate_questions_for_level(
-                        part_num, "Vận_dụng", objectives.Vận_dụng, lesson_data, subject, lesson_id
-                    )
-                    part_questions.extend(level_questions)
-                # Nếu có yêu cầu thêm câu vận dụng cao, có thể thêm logic ở đây
+                # Phần III: Tự luận tính toán - hỗ trợ Biết, Hiểu, Vận dụng
+                for level, count in [("Biết", objectives.Biết), ("Hiểu", objectives.Hiểu), ("Vận_dụng", objectives.Vận_dụng)]:
+                    if count > 0:
+                        level_questions = await self._generate_questions_for_level(
+                            part_num, level, count, lesson_data, subject, lesson_id
+                        )
+                        part_questions.extend(level_questions)
 
             return part_questions
 
@@ -246,7 +246,7 @@ class SmartExamGenerationService:
         part_descriptions = {
             1: "PART I: Trắc nghiệm nhiều lựa chọn (A, B, C, D) - Hỗ trợ mức độ BIẾT, HIỂU, VẬN DỤNG: 18 câu đa dạng từ nhận biết đến tính toán đơn giản",
             2: "PART II: Trắc nghiệm Đúng/Sai - Hỗ trợ mức độ BIẾT, HIỂU, VẬN DỤNG: 4 câu lớn, mỗi câu có 4 phát biểu a,b,c,d để đánh giá",
-            3: "PART III: Tự luận tính toán - Mức độ VẬN DỤNG/VẬN DỤNG CAO: Bài toán tính toán phức tạp, đòi hỏi tư duy sâu và tổng hợp kiến thức"
+            3: "PART III: Tự luận tính toán - Hỗ trợ mức độ BIẾT, HIỂU, VẬN DỤNG: Bài toán tính toán từ cơ bản đến phức tạp, đòi hỏi tư duy và tổng hợp kiến thức"
         }
 
         prompt = f"""
@@ -284,7 +284,7 @@ Lưu ý: chỉ trả về JSON, không có văn bản bổ sung.
         descriptions = {
             1: "Trắc nghiệm nhiều phương án (Hỗ trợ BIẾT, HIỂU, VẬN DỤNG)",
             2: "Trắc nghiệm đúng/sai (Hỗ trợ BIẾT, HIỂU, VẬN DỤNG)",
-            3: "Tự luận tính toán (Mức độ VẬN DỤNG/VẬN DỤNG CAO)"
+            3: "Tự luận tính toán (Hỗ trợ BIẾT, HIỂU, VẬN DỤNG)"
         }
         return descriptions.get(part_num, "")
 
@@ -429,8 +429,38 @@ DẠNG 3: Chùm phát biểu kết hợp tính toán nhỏ
 Format answer: {"a": {"content": "Nội dung phát biểu a", "evaluation": "Đúng/Sai"}, ...}
 """
         elif part_num == 3:
-            # PHẦN III - MỨC ĐỘ VẬN DỤNG VÀ VẬN DỤNG CAO
-            if level == "Vận_dụng":
+            # PHẦN III - TỰ LUẬN TÍNH TOÁN - HỖ TRỢ TẤT CẢ MỨC ĐỘ
+            if level == "Biết":
+                return """
+HƯỚNG DẪN PHẦN III - MỨC ĐỘ BIẾT:
+- Câu hỏi tự luận đơn giản, áp dụng trực tiếp công thức cơ bản
+- Đáp án là số thực dương, thường có giá trị đơn giản
+Có thể tham khảo các dạng bên dưới:
+DẠNG 1: Tính toán cơ bản theo công thức
+- Áp dụng trực tiếp công thức n = m/M, C = n/V, pH = -log[H⁺]
+- Ví dụ: "Tính số mol của 8g CuO" hoặc "Tính nồng độ mol của dung dịch chứa 0,1 mol NaCl trong 500ml"
+DẠNG 2: Tính toán theo phương trình hóa học đơn giản
+- Phản ứng 1 bước, tỉ lệ mol đơn giản 1:1 hoặc 1:2
+- Ví dụ: "Cho 0,1 mol Zn tác dụng với HCl dư. Tính thể tích H₂ thu được ở đktc"
+
+Yêu cầu: Đáp án phải là số cụ thể, sử dụng công thức cơ bản.
+"""
+            elif level == "Hiểu":
+                return """
+HƯỚNG DẪN PHẦN III - MỨC ĐỘ HIỂU:
+- Câu hỏi tự luận yêu cầu hiểu bản chất phản ứng và áp dụng công thức phù hợp
+- Đáp án là số thực dương, có thể cần 2-3 bước tính toán
+Có thể tham khảo các dạng bên dưới:
+DẠNG 1: Tính toán theo chuỗi phản ứng
+- Phản ứng 2-3 bước liên tiếp, cần hiểu mối liên hệ giữa các chất
+- Ví dụ: "Từ 11,2g Fe tạo thành FeCl₃ qua 2 giai đoạn. Tính khối lượng FeCl₃ thu được"
+DẠNG 2: Bài toán dung dịch cơ bản
+- Pha loãng, cô cạn, trộn dung dịch với tỉ lệ đơn giản
+- Ví dụ: "Trộn 100ml dung dịch NaCl 0,2M với 200ml dung dịch NaCl 0,1M. Tính nồng độ dung dịch sau trộn"
+
+Yêu cầu: Đáp án phải là số cụ thể, cần hiểu bản chất để chọn công thức đúng.
+"""
+            elif level == "Vận_dụng":
                 return """
 HƯỚNG DẪN PHẦN III - MỨC ĐỘ VẬN DỤNG:
 - Câu hỏi yêu cầu áp dụng công thức và giải quyết bài toán nhiều bước trong bối cảnh quen thuộc
