@@ -68,7 +68,6 @@ class Settings(BaseSettings):
     CONCURRENT_WORKERS: int = int(os.getenv("CONCURRENT_WORKERS", "4"))
 
     # OCR Settings
-    TESSERACT_CONFIG: str = os.getenv("TESSERACT_CONFIG", "--oem 3 --psm 6")
     IMAGE_DPI: int = int(os.getenv("IMAGE_DPI", "300"))
     PREPROCESSING_ENABLED: bool = (
         os.getenv("PREPROCESSING_ENABLED", "True").lower() == "true"

@@ -632,7 +632,8 @@ async def handle_slide_generation_request(data: dict):
             template_json=template_json,
             config_prompt=None,
             user_id=user_id,
-            book_id=book_id
+            book_id=book_id,
+            tool_log_id=tool_log_id
         )
 
         # Send initial response back via Kafka

@@ -806,6 +806,272 @@ class QdrantService:
             logger.error(f"Error getting file URLs for deletion: {e}")
             return []
 
+    async def update_lesson_id_in_book(
+        self, book_id: str, old_lesson_id: str, new_lesson_id: str
+    ) -> Dict[str, Any]:
+        """
+        Update tất cả lessonID cũ thành lessonID mới trong một bookID
+
+        Args:
+            book_id: ID của book
+            old_lesson_id: lessonID cũ cần thay đổi
+            new_lesson_id: lessonID mới
+
+        Returns:
+            Dict chứa kết quả update
+        """
+        from qdrant_client.http import models as qdrant_models
+
+        self._ensure_service_initialized()
+
+        if not self.qdrant_client:
+            return {
+                "success": False,
+                "error": "Qdrant client not initialized"
+            }
+
+        try:
+            # Tìm collection cho book_id (textbook hoặc guide)
+            collections = self.qdrant_client.get_collections()
+            target_collection = None
+
+            for collection in collections.collections:
+                collection_name = collection.name
+                if collection_name == f"textbook_{book_id}" or collection_name == f"guide_{book_id}":
+                    target_collection = collection_name
+                    break
+
+            if not target_collection:
+                return {
+                    "success": False,
+                    "error": f"No collection found for book_id '{book_id}'"
+                }
+
+            logger.info(f"Updating lesson_id from '{old_lesson_id}' to '{new_lesson_id}' in collection '{target_collection}'")
+
+            # Tìm tất cả points có old_lesson_id
+            filter_condition = qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="book_id",
+                        match=qdrant_models.MatchValue(value=book_id)
+                    ),
+                    qdrant_models.FieldCondition(
+                        key="lesson_id",
+                        match=qdrant_models.MatchValue(value=old_lesson_id)
+                    )
+                ]
+            )
+
+            # Scroll để lấy tất cả points cần update
+            scroll_result = self.qdrant_client.scroll(
+                collection_name=target_collection,
+                scroll_filter=filter_condition,
+                limit=10000,  # Lấy nhiều points
+                with_payload=True,
+                with_vectors=False
+            )
+
+            points_to_update = scroll_result[0]
+
+            if not points_to_update:
+                return {
+                    "success": False,
+                    "error": f"No points found with lesson_id '{old_lesson_id}' in book '{book_id}'"
+                }
+
+            logger.info(f"Found {len(points_to_update)} points to update")
+
+            # Update từng point
+            updated_count = 0
+            for point in points_to_update:
+                try:
+                    # Update payload với lesson_id mới
+                    self.qdrant_client.set_payload(
+                        collection_name=target_collection,
+                        payload={"lesson_id": new_lesson_id},
+                        points=[point.id]
+                    )
+                    updated_count += 1
+                except Exception as e:
+                    logger.error(f"Error updating point {point.id}: {e}")
+                    continue
+
+            logger.info(f"Successfully updated {updated_count} points")
+
+            return {
+                "success": True,
+                "book_id": book_id,
+                "old_lesson_id": old_lesson_id,
+                "new_lesson_id": new_lesson_id,
+                "collection_name": target_collection,
+                "points_updated": updated_count,
+                "message": f"Updated {updated_count} points from lesson_id '{old_lesson_id}' to '{new_lesson_id}' in book '{book_id}'"
+            }
+
+        except Exception as e:
+            logger.error(f"Error updating lesson_id in book {book_id}: {e}")
+            return {
+                "success": False,
+                "error": f"Failed to update lesson_id: {str(e)}"
+            }
+
+    async def update_book_id_in_qdrant(
+        self, old_book_id: str, new_book_id: str
+    ) -> Dict[str, Any]:
+        """
+        Update bookID cũ thành bookID mới trong Qdrant (rename collection và update metadata)
+
+        Args:
+            old_book_id: bookID cũ
+            new_book_id: bookID mới
+
+        Returns:
+            Dict chứa kết quả update
+        """
+        from qdrant_client.http import models as qdrant_models
+
+        self._ensure_service_initialized()
+
+        if not self.qdrant_client:
+            return {
+                "success": False,
+                "error": "Qdrant client not initialized"
+            }
+
+        try:
+            # Tìm collections cho old_book_id
+            collections = self.qdrant_client.get_collections()
+            old_collections = []
+
+            for collection in collections.collections:
+                collection_name = collection.name
+                if collection_name == f"textbook_{old_book_id}" or collection_name == f"guide_{old_book_id}":
+                    old_collections.append(collection_name)
+
+            if not old_collections:
+                return {
+                    "success": False,
+                    "error": f"No collections found for book_id '{old_book_id}'"
+                }
+
+            logger.info(f"Found {len(old_collections)} collections to update for book_id '{old_book_id}'")
+
+            results = []
+
+            for old_collection_name in old_collections:
+                try:
+                    # Xác định loại collection và tạo tên mới
+                    if old_collection_name.startswith("textbook_"):
+                        new_collection_name = f"textbook_{new_book_id}"
+                        content_type = "textbook"
+                    else:  # guide_
+                        new_collection_name = f"guide_{new_book_id}"
+                        content_type = "guide"
+
+                    logger.info(f"Processing collection: {old_collection_name} -> {new_collection_name}")
+
+                    # Kiểm tra xem collection mới đã tồn tại chưa
+                    existing_collections = [c.name for c in self.qdrant_client.get_collections().collections]
+                    if new_collection_name in existing_collections:
+                        return {
+                            "success": False,
+                            "error": f"Collection '{new_collection_name}' already exists. Cannot update book_id to '{new_book_id}'"
+                        }
+
+                    # Tạo collection mới
+                    if not self._ensure_collection_exists(new_collection_name):
+                        return {
+                            "success": False,
+                            "error": f"Failed to create new collection '{new_collection_name}'"
+                        }
+
+                    # Lấy tất cả points từ collection cũ
+                    scroll_result = self.qdrant_client.scroll(
+                        collection_name=old_collection_name,
+                        limit=10000,  # Lấy nhiều points
+                        with_payload=True,
+                        with_vectors=True
+                    )
+
+                    points_to_copy = scroll_result[0]
+                    logger.info(f"Found {len(points_to_copy)} points to copy from {old_collection_name}")
+
+                    if points_to_copy:
+                        # Tạo points mới với book_id được update
+                        new_points = []
+                        for point in points_to_copy:
+                            # Update payload với book_id mới
+                            updated_payload = point.payload.copy()
+                            updated_payload["book_id"] = new_book_id
+
+                            new_points.append(
+                                qdrant_models.PointStruct(
+                                    id=point.id,
+                                    vector=point.vector,
+                                    payload=updated_payload
+                                )
+                            )
+
+                        # Upsert points vào collection mới theo batch
+                        batch_size = 100
+                        for i in range(0, len(new_points), batch_size):
+                            batch = new_points[i:i + batch_size]
+                            self.qdrant_client.upsert(
+                                collection_name=new_collection_name,
+                                points=batch
+                            )
+                            logger.info(f"Copied batch {i//batch_size + 1}/{(len(new_points)-1)//batch_size + 1}")
+
+                    # Xóa collection cũ
+                    self.qdrant_client.delete_collection(old_collection_name)
+                    logger.info(f"Deleted old collection: {old_collection_name}")
+
+                    results.append({
+                        "old_collection": old_collection_name,
+                        "new_collection": new_collection_name,
+                        "content_type": content_type,
+                        "points_copied": len(points_to_copy),
+                        "success": True
+                    })
+
+                except Exception as e:
+                    logger.error(f"Error processing collection {old_collection_name}: {e}")
+                    results.append({
+                        "old_collection": old_collection_name,
+                        "success": False,
+                        "error": str(e)
+                    })
+
+            # Kiểm tra kết quả tổng thể
+            successful_updates = [r for r in results if r.get("success")]
+            failed_updates = [r for r in results if not r.get("success")]
+
+            if failed_updates:
+                return {
+                    "success": False,
+                    "old_book_id": old_book_id,
+                    "new_book_id": new_book_id,
+                    "results": results,
+                    "error": f"Some collections failed to update: {len(failed_updates)} failed, {len(successful_updates)} succeeded"
+                }
+
+            return {
+                "success": True,
+                "old_book_id": old_book_id,
+                "new_book_id": new_book_id,
+                "collections_updated": len(successful_updates),
+                "results": results,
+                "message": f"Successfully updated book_id from '{old_book_id}' to '{new_book_id}' across {len(successful_updates)} collections"
+            }
+
+        except Exception as e:
+            logger.error(f"Error updating book_id from {old_book_id} to {new_book_id}: {e}")
+            return {
+                "success": False,
+                "error": f"Failed to update book_id: {str(e)}"
+            }
+
     async def global_search(
         self, query: str, limit: int = 10, book_id: Optional[str] = None, lesson_id: Optional[str] = None
     ) -> Dict[str, Any]:

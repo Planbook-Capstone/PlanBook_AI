@@ -140,7 +140,8 @@ class JsonTemplateService:
         task_id: Optional[str] = None,
         task_service: Optional[Any] = None,
         user_id: Optional[str] = None,
-        book_id: Optional[str] = None
+        book_id: Optional[str] = None,
+        tool_log_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Xử lý JSON template với progress tracking cho Celery
@@ -198,7 +199,8 @@ class JsonTemplateService:
                 analyzed_template,
                 task_id,
                 task_service,
-                user_id
+                user_id,
+                tool_log_id
             )
 
             # Format nội dung cho frontend
@@ -485,7 +487,8 @@ class JsonTemplateService:
         analyzed_template: Dict[str, Any],
         task_id: Optional[str] = None,
         task_service: Optional[Any] = None,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        tool_log_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Thực hiện workflow tối ưu hóa với progress tracking
@@ -652,7 +655,7 @@ class JsonTemplateService:
                             progress = int((slide_num / total_slides) * 100) if total_slides > 0 else 100
                             safe_kafka_call(
                                 kafka_service.send_progress_update_sync,
-                                tool_log_id=task_id,
+                                tool_log_id=tool_log_id,
                                 task_id=task_id,
                                 user_id=user_id,
                                 progress=progress,

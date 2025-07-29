@@ -548,9 +548,10 @@ async def health_check():
     Health check endpoint
     """
     try:
-        from app.services.simple_ocr_service import simple_ocr_service
+        from app.services.simple_ocr_service import get_simple_ocr_service
 
         # Check OCR service availability
+        simple_ocr_service = get_simple_ocr_service()
         supported_langs = simple_ocr_service.get_supported_languages()
 
         # Check LLM service availability
@@ -593,6 +594,8 @@ async def health_check():
                 "/lesson/{lesson_id}/info",  # Get lesson info with metadata
                 "/lesson/{lesson_id}/check",  # Check lesson_id existence
                 "/search",  # Global content search with book_id/lesson_id filters
+                "/update-lesson-id",  # PUT: Update lesson_id in book
+                "/update-book-id",  # PUT: Update book_id in Qdrant
                 "/textbook",  # DELETE: Flexible textbook deletion
                 "/health",
             ],
@@ -605,7 +608,9 @@ async def health_check():
                 "5": "Get lessons list: GET /textbook/{book_id}/lessons",
                 "6": "Get lesson info: GET /lesson/{lesson_id}/info",
                 "7": "Global search: GET /search?query=your_query&book_id=book123&lesson_id=lesson456",
-                "8": "Delete textbook: DELETE /textbook?textbook_id=your_id OR DELETE /textbook?lesson_id=your_lesson_id"
+                "8": "Update lesson_id: PUT /update-lesson-id?book_id=xxx&old_lesson_id=yyy&new_lesson_id=zzz",
+                "9": "Update book_id: PUT /update-book-id?old_book_id=xxx&new_book_id=yyy",
+                "10": "Delete textbook: DELETE /textbook?textbook_id=your_id OR DELETE /textbook?lesson_id=your_lesson_id"
             },
         }
     except Exception as e:
@@ -613,6 +618,104 @@ async def health_check():
         return {"status": "unhealthy", "error": str(e)}
 
 
+
+
+@router.put("/update-lesson-id", response_model=Dict[str, Any])
+async def update_lesson_id(
+    book_id: str = Query(..., description="ID của book chứa lesson cần update"),
+    old_lesson_id: str = Query(..., description="lessonID cũ cần thay đổi"),
+    new_lesson_id: str = Query(..., description="lessonID mới")
+) -> Dict[str, Any]:
+    """
+    Update tất cả lessonID cũ thành lessonID mới trong một bookID
+
+    Endpoint này sẽ tìm tất cả points trong collection của book_id có lesson_id cũ
+    và update thành lesson_id mới.
+
+    Args:
+        book_id: ID của book chứa lesson cần update
+        old_lesson_id: lessonID cũ cần thay đổi
+        new_lesson_id: lessonID mới
+
+    Returns:
+        Dict chứa kết quả update với số lượng points đã được update
+
+    Examples:
+        PUT /api/v1/pdf/update-lesson-id?book_id=hoa12&old_lesson_id=hoa12_bai1&new_lesson_id=hoa12_lesson1
+    """
+    try:
+        qdrant_service = get_qdrant_service()
+
+        logger.info(f"Updating lesson_id from '{old_lesson_id}' to '{new_lesson_id}' in book '{book_id}'")
+
+        result = await qdrant_service.update_lesson_id_in_book(
+            book_id=book_id,
+            old_lesson_id=old_lesson_id,
+            new_lesson_id=new_lesson_id
+        )
+
+        if not result.get("success"):
+            raise HTTPException(
+                status_code=400,
+                detail=result.get("error", "Failed to update lesson_id")
+            )
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating lesson_id: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.put("/update-book-id", response_model=Dict[str, Any])
+async def update_book_id(
+    old_book_id: str = Query(..., description="bookID cũ cần thay đổi"),
+    new_book_id: str = Query(..., description="bookID mới")
+) -> Dict[str, Any]:
+    """
+    Update bookID cũ thành bookID mới trong Qdrant
+
+    Endpoint này sẽ:
+    1. Tìm tất cả collections có old_book_id (textbook_xxx, guide_xxx)
+    2. Tạo collections mới với new_book_id
+    3. Copy tất cả points với book_id được update
+    4. Xóa collections cũ
+
+    Args:
+        old_book_id: bookID cũ cần thay đổi
+        new_book_id: bookID mới
+
+    Returns:
+        Dict chứa kết quả update với thông tin các collections đã được xử lý
+
+    Examples:
+        PUT /api/v1/pdf/update-book-id?old_book_id=hoa12&new_book_id=chemistry12
+    """
+    try:
+        qdrant_service = get_qdrant_service()
+
+        logger.info(f"Updating book_id from '{old_book_id}' to '{new_book_id}'")
+
+        result = await qdrant_service.update_book_id_in_qdrant(
+            old_book_id=old_book_id,
+            new_book_id=new_book_id
+        )
+
+        if not result.get("success"):
+            raise HTTPException(
+                status_code=400,
+                detail=result.get("error", "Failed to update book_id")
+            )
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating book_id: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @router.delete("", response_model=Dict[str, Any])
