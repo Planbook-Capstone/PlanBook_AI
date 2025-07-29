@@ -1,6 +1,6 @@
 """
 OCR Service đơn giản cho xử lý PDF
-Sử dụng EasyOCR và Tesseract
+Chỉ sử dụng EasyOCR
 """
 import io
 import logging
@@ -9,7 +9,6 @@ from typing import Tuple, Dict, Any, List
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import fitz  # PyMuPDF
-import pytesseract
 import numpy as np
 
 # pdf2image import (requires Poppler)
@@ -19,24 +18,15 @@ try:
     PDF2IMAGE_AVAILABLE = True
 except ImportError:
     PDF2IMAGE_AVAILABLE = False
-    logging.warning("pdf2image not available. Install poppler-utils for OCR support")
+    raise ImportError("pdf2image not available. Install poppler-utils for OCR support")
 
-# EasyOCR lazy import - chỉ import khi cần thiết
-EASYOCR_AVAILABLE = None  # Will be determined when first needed
-_easyocr_module = None
-
-def _get_easyocr():
-    """Lazy import EasyOCR"""
-    global EASYOCR_AVAILABLE, _easyocr_module
-    if EASYOCR_AVAILABLE is None:
-        try:
-            import easyocr
-            _easyocr_module = easyocr
-            EASYOCR_AVAILABLE = True
-        except ImportError:
-            EASYOCR_AVAILABLE = False
-            logging.warning("EasyOCR not available. Install with: pip install easyocr")
-    return _easyocr_module if EASYOCR_AVAILABLE else None
+# EasyOCR import - bắt buộc phải có
+try:
+    import easyocr
+    EASYOCR_AVAILABLE = True
+except ImportError:
+    EASYOCR_AVAILABLE = False
+    raise ImportError("EasyOCR not available. Install with: pip install easyocr")
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +37,11 @@ class SimpleOCRService:
 
     def __init__(self):
         """Initialize OCR service"""
+        if not EASYOCR_AVAILABLE:
+            raise ImportError("EasyOCR is required but not available. Install with: pip install easyocr")
+
         self.executor = ThreadPoolExecutor(max_workers=2)
         self.easyocr_reader = None
-        self.tesseract_config = '--oem 3 --psm 6 -l vie+eng'
         self.dpi = 200  # Moderate DPI for balance between quality and speed
 
         # EasyOCR sẽ được khởi tạo lazy khi cần thiết
@@ -58,25 +50,18 @@ class SimpleOCRService:
     def _ensure_easyocr_initialized(self):
         """Ensure EasyOCR is initialized"""
         if not self._easyocr_initialized:
-            # Check if EasyOCR is available (this will set EASYOCR_AVAILABLE)
-            easyocr_module = _get_easyocr()
-            if easyocr_module:
-                self._init_easyocr()
-                self._easyocr_initialized = True
-    
+            self._init_easyocr()
+            self._easyocr_initialized = True
+
     def _init_easyocr(self):
         """Initialize EasyOCR reader"""
         try:
             logger.info("🔄 SimpleOCRService: First-time EasyOCR initialization triggered")
-            easyocr_module = _get_easyocr()
-            if easyocr_module:
-                self.easyocr_reader = easyocr_module.Reader(['vi', 'en'], gpu=False)
-                logger.info("✅ SimpleOCRService: EasyOCR initialization completed")
-            else:
-                self.easyocr_reader = None
+            self.easyocr_reader = easyocr.Reader(['vi', 'en'], gpu=False)
+            logger.info("✅ SimpleOCRService: EasyOCR initialization completed")
         except Exception as e:
-            logger.warning(f"Failed to initialize EasyOCR: {e}")
-            self.easyocr_reader = None
+            logger.error(f"Failed to initialize EasyOCR: {e}")
+            raise RuntimeError(f"EasyOCR initialization failed: {e}")
     
     async def extract_text_from_pdf(
         self, 
@@ -195,7 +180,7 @@ class SimpleOCRService:
             "successful_pages": successful_pages,
             "failed_pages": total_pages - successful_pages,
             "ocr_used": True,
-            "extraction_method": "easyocr" if self.easyocr_reader else "tesseract"
+            "extraction_method": "easyocr"
         }
         
         logger.info(f"OCR completed: {successful_pages}/{total_pages} pages successful")
@@ -223,23 +208,22 @@ class SimpleOCRService:
                 # Ensure EasyOCR is initialized if available
                 self._ensure_easyocr_initialized()
 
-                # Try EasyOCR first if available
-                if self.easyocr_reader:
-                    try:
-                        results = self.easyocr_reader.readtext(np.array(image))
-                        # EasyOCR returns list of [bbox, text, confidence]
-                        text_parts = []
-                        for result in results:
-                            if isinstance(result, (list, tuple)) and len(result) >= 2:
-                                text_parts.append(str(result[1]))
-                        text = ' '.join(text_parts)
-                        return text
-                    except Exception as e:
-                        logger.warning(f"EasyOCR failed for page {page_num}: {e}, falling back to Tesseract")
-                
-                # Fallback to Tesseract
-                text = pytesseract.image_to_string(image, config=self.tesseract_config)
-                return text
+                # Use EasyOCR only
+                if not self.easyocr_reader:
+                    raise RuntimeError("EasyOCR reader not initialized")
+
+                try:
+                    results = self.easyocr_reader.readtext(np.array(image))
+                    # EasyOCR returns list of [bbox, text, confidence]
+                    text_parts = []
+                    for result in results:
+                        if isinstance(result, (list, tuple)) and len(result) >= 2:
+                            text_parts.append(str(result[1]))
+                    text = ' '.join(text_parts)
+                    return text
+                except Exception as e:
+                    logger.error(f"EasyOCR failed for page {page_num}: {e}")
+                    raise RuntimeError(f"OCR processing failed for page {page_num}: {e}")
                 
             except Exception as e:
                 logger.error(f"OCR error for page {page_num}: {e}")
@@ -288,28 +272,18 @@ class SimpleOCRService:
                                 from PIL import Image
                                 pil_image = Image.open(io.BytesIO(img_data))
 
-                                # OCR the image
-                                if self.easyocr_reader:
-                                    try:
-                                        results = self.easyocr_reader.readtext(np.array(pil_image))
-                                        for result in results:
-                                            if isinstance(result, (list, tuple)) and len(result) >= 2:
-                                                page_ocr_text += str(result[1]) + " "
-                                    except Exception as e:
-                                        logger.warning(f"EasyOCR failed for image {img_index}: {e}")
-                                        # Fallback to Tesseract
-                                        try:
-                                            ocr_text = pytesseract.image_to_string(pil_image, config=self.tesseract_config)
-                                            page_ocr_text += ocr_text + " "
-                                        except Exception as te:
-                                            logger.error(f"Tesseract also failed: {te}")
-                                else:
-                                    # Use Tesseract only
-                                    try:
-                                        ocr_text = pytesseract.image_to_string(pil_image, config=self.tesseract_config)
-                                        page_ocr_text += ocr_text + " "
-                                    except Exception as te:
-                                        logger.error(f"Tesseract failed: {te}")
+                                # OCR the image using EasyOCR only
+                                if not self.easyocr_reader:
+                                    raise RuntimeError("EasyOCR reader not initialized")
+
+                                try:
+                                    results = self.easyocr_reader.readtext(np.array(pil_image))
+                                    for result in results:
+                                        if isinstance(result, (list, tuple)) and len(result) >= 2:
+                                            page_ocr_text += str(result[1]) + " "
+                                except Exception as e:
+                                    logger.error(f"EasyOCR failed for image {img_index}: {e}")
+                                    raise RuntimeError(f"OCR processing failed for image {img_index}: {e}")
 
                             pix = None  # Clean up
 
@@ -335,33 +309,18 @@ class SimpleOCRService:
     def get_supported_languages(self) -> List[str]:
         """Get list of supported OCR languages"""
         try:
-            # Ensure EasyOCR is initialized if available
+            # Ensure EasyOCR is initialized
             self._ensure_easyocr_initialized()
 
-            supported = []
-
-            # Check EasyOCR first (preferred)
+            # EasyOCR supports Vietnamese and English
             if self.easyocr_reader:
-                supported.extend(['vietnamese', 'english', 'vietnamese_easyocr'])
-                return supported
-
-            # Fallback to Tesseract
-            try:
-                langs = pytesseract.get_languages()
-                if 'vie' in langs:
-                    supported.append('vietnamese')
-                if 'eng' in langs:
-                    supported.append('english')
-            except Exception as tesseract_error:
-                logger.warning(f"Tesseract not available: {tesseract_error}")
-                # If both EasyOCR and Tesseract fail, return basic support
-                supported = ['english']
-
-            return supported if supported else ['english']
+                return ['vietnamese', 'english', 'vietnamese_easyocr']
+            else:
+                raise RuntimeError("EasyOCR reader not initialized")
 
         except Exception as e:
             logger.error(f"Failed to get supported languages: {e}")
-            return ['english']  # Fallback
+            raise RuntimeError(f"Failed to get supported languages: {e}")
 
 # Factory function để tạo SimpleOCRService instance
 def get_simple_ocr_service() -> SimpleOCRService:
