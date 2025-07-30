@@ -22,6 +22,7 @@ from app.api.endpoints import (
 from app.services.kafka_service import kafka_service
 from app.core.kafka_config import get_responses_topic
 from app.constants.kafka_message_types import RESPONSE_TYPE, RESULT_TYPE
+from app.constants.took_code_type import ToolCodeEnum
 from app.api.endpoints import auto_grading
 
 # Initialize FastAPI app
@@ -157,21 +158,13 @@ async def handle_incoming_message(data: dict):
         print(f"  - Timestamp: {timestamp}")
         print(f"  - Data: {message_payload}")
 
-        # Process message based on type
-        if message_type == "lesson_plan_request":
-            await handle_lesson_plan_request(message_payload)
-        elif message_type == "Tạo giáo án":
+
+        if message_type == ToolCodeEnum.LESSON_PLAN:
             await handle_lesson_plan_content_generation_request(message_payload)
-        elif message_type == "Tạo Slide":
+        elif message_type == ToolCodeEnum.SLIDE_GENERATOR:
             await handle_slide_generation_request(message_payload)
-        elif message_type == "Tạo đề thi thông minh":
+        elif message_type == ToolCodeEnum.EXAM_CREATOR:
             await handle_smart_exam_generation_request(message_payload)
-        elif message_type == "exam_generation_request":
-            await handle_exam_generation_request(message_payload)
-        elif message_type == "grading_request":
-            await handle_grading_request(message_payload)
-        elif message_type == "textbook_processing_request":
-            await handle_textbook_processing_request(message_payload)
         else:
             print(f"[KAFKA] ⚠️ Unknown message type: {message_type}")
 
