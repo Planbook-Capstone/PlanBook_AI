@@ -207,105 +207,102 @@ class EnhancedTextbookService:
 
 
     def clean_text_content(self, text: str) -> str:
-        """Làm sạch nội dung text - loại bỏ ký tự đặc biệt, format không cần thiết"""
+        """Làm sạch nội dung text - format đơn giản, dễ đọc"""
         if not text:
             return ""
 
         logger.info("🧹 Cleaning text content...")
 
-        # Loại bỏ các ký tự đặc biệt và format markdown
-        cleaned_text = text
-
-        # Loại bỏ dấu * (markdown bold/italic)
+        # Loại bỏ markdown và ký tự đặc biệt
+        cleaned_text = text.strip()
         cleaned_text = re.sub(r'\*+', '', cleaned_text)
-
-        # Loại bỏ dấu # (markdown headers)
         cleaned_text = re.sub(r'#+\s*', '', cleaned_text)
-
-        # Loại bỏ dấu _ (markdown underline)
         cleaned_text = re.sub(r'_+', '', cleaned_text)
-
-        # Loại bỏ dấu ` (markdown code)
         cleaned_text = re.sub(r'`+', '', cleaned_text)
-
-        # Loại bỏ dấu [] và () (markdown links)
         cleaned_text = re.sub(r'\[([^\]]*)\]\([^\)]*\)', r'\1', cleaned_text)
+        cleaned_text = cleaned_text.replace('\b', '').replace('\r', '')
 
-        # Loại bỏ ký tự \b (backspace)
-        cleaned_text = cleaned_text.replace('\b', '')
+        # Loại bỏ các tham chiếu SGK và hướng dẫn tham khảo
+        sgk_patterns = [
+            r'SGK\s+trang\s+\d+',  # SGK trang X
+            r'Xem\s+bảng\s+\d+\.\d+\s*\([^)]*SGK[^)]*\)',  # Xem bảng X.X (SGK trang Y)
+            r'Quan\s+sát\s+hình\s+\d+\.\d+\s*\([^)]*SGK[^)]*\)',  # Quan sát hình X.X (SGK trang Y)
+            r'Tìm\s+hiểu\s+về[^.]*\([^)]*SGK[^)]*\)',  # Tìm hiểu về... (SGK trang Y)
+            r'Xem\s+bảng\s+\d+\.\d+[^.]*',  # Xem bảng X.X về...
+            r'Quan\s+sát\s+hình\s+\d+\.\d+[^.]*',  # Quan sát hình X.X về...
+            r'\([^)]*SGK\s+trang[^)]*\)',  # (SGK trang X)
+            r'- Xem bảng[^.]*\.',  # - Xem bảng...
+            r'- Quan sát[^.]*\.',  # - Quan sát...
+            r'- Tìm hiểu[^.]*\.',  # - Tìm hiểu...
+        ]
 
-        # Loại bỏ ký tự \r
-        cleaned_text = cleaned_text.replace('\r', '')
+        for pattern in sgk_patterns:
+            cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE)
 
-        # Thay thế nhiều dấu xuống dòng liên tiếp bằng 1 dấu xuống dòng
-        cleaned_text = re.sub(r'\n\s*\n\s*\n+', '\n\n', cleaned_text)
+        # Loại bỏ các dòng chỉ chứa tham chiếu hoặc hướng dẫn
+        lines = cleaned_text.split('\n')
+        filtered_lines = []
+        for line in lines:
+            line_stripped = line.strip()
+            # Bỏ qua các dòng chỉ chứa tham chiếu
+            if (line_stripped.lower().startswith(('xem ', 'quan sát ', 'tìm hiểu ')) and
+                len(line_stripped) < 100):  # Các câu hướng dẫn thường ngắn
+                continue
+            if line_stripped:  # Chỉ giữ các dòng có nội dung
+                filtered_lines.append(line)
+        cleaned_text = '\n'.join(filtered_lines)
 
-        # Chuẩn hóa định dạng hóa học trước tiên để tránh xung đột với dấu -
+        # Loại bỏ bảng markdown (xử lý sau khi đã lọc tham chiếu SGK)
+        lines = cleaned_text.split('\n')
+        final_filtered_lines = []
+        for line in lines:
+            line_stripped = line.strip()
+            if (line_stripped.count('|') >= 2 or
+                (line_stripped.count('-') >= 3 and '|' in line_stripped)):
+                continue
+            final_filtered_lines.append(line)
+        cleaned_text = '\n'.join(final_filtered_lines)
+
+        # Chuẩn hóa định dạng hóa học
         cleaned_text = self._normalize_chemistry_format(cleaned_text)
 
-        # Bước 1: Chuẩn hóa format cơ bản
-        # Thêm khoảng cách sau dấu : nếu thiếu
-        cleaned_text = re.sub(r':([A-ZÀÁẠẢÃÂẦẤẬẨẪĂẰẮẶẲẴÈÉẸẺẼÊỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕÔỒỐỘỔỖƠỜỚỢỞỠÙÚỤỦŨƯỪỨỰỬỮỲÝỴỶỸĐ])', r': \1', cleaned_text)
+        # Thay thế xuống dòng bằng <br/>
+        cleaned_text = cleaned_text.replace('\n', '<br/>')
 
-        # Bước 2: Xử lý các tiêu đề phần học tập (in nghiêng)
-        learning_sections = ['Nhận biết', 'Trình bày', 'Vận dụng', 'Phân tích', 'Đánh giá', 'Tổng hợp']
-        for title in learning_sections:
-            # Loại bỏ dấu - trước tiêu đề phần
-            cleaned_text = re.sub(rf'- {title}:', f'{title}:', cleaned_text)
-            # Format in nghiêng cho tiêu đề phần học tập
-            cleaned_text = re.sub(rf'([^<br/>]){title}:', rf'\1<br/><em>{title}:</em>', cleaned_text)
-            cleaned_text = re.sub(rf'^{title}:', f'<em>{title}:</em>', cleaned_text)
+        # FORMAT MỚI: Đơn giản và dễ đọc
+        # 1. Định nghĩa: Giữ nguyên trên 1 dòng
+        cleaned_text = re.sub(r'Định nghĩa:\s*<br/>', 'Định nghĩa: ', cleaned_text)
 
-        # Bước 3: Xử lý các tiêu đề năng lực (in nghiêng)
-        capacity_sections = ['Năng lực chung', 'Năng lực đặc thù', 'Năng lực giao tiếp và hợp tác', 'Năng lực giải quyết vấn đề và sáng tạo', 'Năng lực vận dụng kiến thức, kĩ năng đã học']
-        for title in capacity_sections:
-            # Format in nghiêng cho tiêu đề năng lực
-            cleaned_text = re.sub(rf'([^<br/>]){title}:', rf'\1<br/><em>{title}:</em>', cleaned_text)
-            cleaned_text = re.sub(rf'^{title}:', f'<em>{title}:</em>', cleaned_text)
+        # 2. Các tiêu đề chính: In đậm, không thụt lề
+        main_sections = ['Biểu hiện', 'Ví dụ', 'Ý nghĩa', 'Nhận biết', 'Trình bày', 'Vận dụng', 'Phân tích', 'Đánh giá']
+        for section in main_sections:
+            cleaned_text = cleaned_text.replace(f'<br/>{section}:', f'<br/><strong>{section}:</strong>')
+            if cleaned_text.startswith(f'{section}:'):
+                cleaned_text = cleaned_text.replace(f'{section}:', f'<strong>{section}:</strong>', 1)
 
-        # Bước 4: Xử lý danh sách - thêm dấu - cho mục con (không thụt lùi)
-        # Xử lý sau dấu chấm
-        cleaned_text = re.sub(r'\.(\s*)([A-ZÀÁẠẢÃÂẦẤẬẨẪĂẰẮẶẲẴÈÉẸẺẼÊỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕÔỒỐỘỔỖƠỜỚỢỞỠÙÚỤỦŨƯỪỨỰỬỮỲÝỴỶỸĐ])', r'.<br/>- \2', cleaned_text)
+        # 3. Các mục con: Dùng bullet point (•) thay vì thụt lề nhiều
+        lines = cleaned_text.split('<br/>')
+        result_lines = []
 
-        # Xử lý sau dấu hai chấm (không phải tiêu đề)
-        cleaned_text = re.sub(r':(\s*)([A-ZÀÁẠẢÃÂẦẤẬẨẪĂẰẮẶẲẴÈÉẸẺẼÊỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕÔỒỐỘỔỖƠỜỚỢỞỠÙÚỤỦŨƯỪỨỰỬỮỲÝỴỶỸĐ])(?![^<]*</em>)', r':<br/>- \2', cleaned_text)
+        for line in lines:
+            line = line.strip()
+            if line:
+                # Chỉ thêm bullet cho các mục con (không phải tiêu đề)
+                if (re.match(r'^[A-ZÀÁẠẢÃÂẦẤẬẨẪĂẰẮẶẲẴÈÉẸẺẼÊỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕÔỒỐỘỔỖƠỜỚỢỞỠÙÚỤỦŨƯỪỨỰỬỮỲÝỴỶỸĐ]', line)
+                    and '<strong>' not in line
+                    and not line.startswith('Định nghĩa:')):
+                    result_lines.append('• ' + line)
+                else:
+                    result_lines.append(line)
 
-        # Xử lý sau <br/> (chưa có dấu -)
-        cleaned_text = re.sub(r'<br/>(\s*)([A-ZÀÁẠẢÃÂẦẤẬẨẪĂẰẮẶẲẴÈÉẸẺẼÊỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕÔỒỐỘỔỖƠỜỚỢỞỠÙÚỤỦŨƯỪỨỰỬỮỲÝỴỶỸĐ])(?![^<]*</em>)', r'<br/>- \2', cleaned_text)
+        cleaned_text = '<br/>'.join(result_lines)
 
-        # Bước 5: Xử lý các trường hợp đặc biệt
-        # Thay thế ". - " bằng ".<br/>- "
-        cleaned_text = re.sub(r'\.\s*-\s*', '.<br/>- ', cleaned_text)
+        # Loại bỏ khoảng trắng thừa và <br/> liên tiếp
+        cleaned_text = re.sub(r'[ \t]+', ' ', cleaned_text).strip()
+        cleaned_text = re.sub(r'(<br/>){2,}', '<br/>', cleaned_text)
 
-        # Xử lý ký hiệu + thành -
-        cleaned_text = re.sub(r'<br/>\+([A-ZÀÁẠẢÃÂẦẤẬẨẪĂẰẮẶẲẴÈÉẸẺẼÊỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕÔỒỐỘỔỖƠỜỚỢỞỠÙÚỤỦŨƯỪỨỰỬỮỲÝỴỶỸĐ])', r'<br/>- \1', cleaned_text)
-
-        # Bước 6: Loại bỏ thụt lùi không nhất quán - chuẩn hóa tất cả về dạng không thụt lùi
-        cleaned_text = re.sub(r'<br/>&nbsp;&nbsp;&nbsp;&nbsp;-\s*', '<br/>- ', cleaned_text)
-        cleaned_text = re.sub(r'&nbsp;&nbsp;&nbsp;&nbsp;-\s*', '- ', cleaned_text)
-
-        # Loại bỏ khoảng trắng thừa ở đầu và cuối mỗi dòng nhưng giữ lại cấu trúc xuống hàng
-        lines = cleaned_text.split('\n')
-        cleaned_lines = [line.strip() for line in lines]
-
-        # Ghép lại với việc giữ nguyên các dòng trống (xuống hàng)
-        final_text = '\n'.join(cleaned_lines)
-
-        # Loại bỏ khoảng trắng thừa trong mỗi dòng nhưng giữ lại xuống hàng
-        final_text = re.sub(r'[ \t]+', ' ', final_text).strip()
-
-        # Thay thế ký tự xuống hàng bằng thẻ <br/> để frontend hiển thị đúng
-        final_text = final_text.replace('\n', '<br/>')
-
-        # Xử lý thêm trường hợp có <br/> liên tiếp
-        # Thay thế 2 hoặc nhiều <br/> liên tiếp bằng chỉ 1 <br/>
-        final_text = re.sub(r'(<br/>){2,}', '<br/>', final_text)
-
-        # Xử lý trường hợp đặc biệt: sau dấu : cần có <br/> để tách phần
-        final_text = re.sub(r':(\s*)<br/>', ':<br/>', final_text)
-
-        logger.info(f"🧹 Text cleaned: {len(text)} → {len(final_text)} chars")
-        return final_text
+        logger.info(f"🧹 Text cleaned: {len(text)} → {len(cleaned_text)} chars")
+        return cleaned_text
 
     def _normalize_chemistry_format(self, text: str) -> str:
         """
@@ -362,25 +359,28 @@ Bạn là chuyên gia giáo dục, hãy lọc và cấu trúc lại nội dung s
 YÊU CẦU CẤU TRÚC:
 1. ĐỊNH NGHĨA: Bắt đầu bằng "Định nghĩa:" hoặc sử dụng cấu trúc "X là..." rõ ràng
 2. BÀI TẬP/VÍ DỤ: Đánh số rõ ràng "Bài 1.", "Ví dụ 1:", "Hãy cho biết..."
-3. BẢNG BIỂU: Bắt đầu bằng "Bảng X:" và giữ nguyên cấu trúc bảng
-4. TIỂU MỤC: Sử dụng "I.", "II.", "1.", "2." cho các phần chính
+3. TIỂU MỤC: Sử dụng "I.", "II.", "1.", "2." cho các phần chính
 
 YÊU CẦU NỘI DUNG:
 - Giữ lại toàn bộ khái niệm, định nghĩa, công thức, ví dụ quan trọng
 - Loại bỏ header, footer, số trang, watermark không liên quan
+- LOẠI BỎ HOÀN TOÀN tất cả các bảng dạng markdown (| col1 | col2 |) vì khó hiển thị trên UI
+- LOẠI BỎ HOÀN TOÀN các tham chiếu sách giáo khoa như "SGK trang X", "Xem bảng X.X (SGK trang Y)", "Quan sát hình X.X (SGK trang Y)" vì chúng ảnh hưởng đến chất lượng lesson plan
+- LOẠI BỎ các câu chỉ dẫn tham chiếu như "Tìm hiểu về...", "Xem bảng...", "Quan sát hình..." mà không có nội dung cụ thể
 - Giữ nguyên thuật ngữ khoa học và công thức (H2O, 1.672 x 10^-27, etc.)
 - Đảm bảo mỗi bài tập/ví dụ có đầy đủ đề bài và lời giải
-- Bảng phải hoàn chỉnh với tiêu đề và nội dung
+- Tập trung vào nội dung kiến thức cốt lõi, không cần các phần hướng dẫn tham khảo
 
 ĐỊNH DẠNG XUẤT:
-- Text thuần túy, không markdown
+- Text thuần túy, không markdown, KHÔNG có bảng
 - Mỗi phần cách nhau bằng dòng trống
 - Giữ nguyên ký hiệu khoa học (^, ², ³, →, ←, etc.)
+- Nội dung phải độc lập, không cần tham chiếu external
 
 NỘI DUNG CẦN CHỈNH SỬA:
 {raw_text[:8000]}
 
-Trả về nội dung đã được cấu trúc lại theo yêu cầu:"""
+Trả về nội dung đã được cấu trúc lại theo yêu cầu (KHÔNG bao gồm bảng và tham chiếu SGK):"""
 
             result = await openrouter_service.generate_content(
                 prompt=prompt,
