@@ -29,108 +29,6 @@ class JsonTemplateService:
             self.textbook_service is not None
         )
 
-    async def process_json_template(
-        self,
-        lesson_id: str,
-        template_json: Dict[str, Any],
-        config_prompt: Optional[str] = None,
-        book_id: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Xử lý JSON template với workflow tối ưu hóa 3 bước:
-        1. Xây dựng khung slide
-        2. Chi tiết hóa từng slide
-        3. Gắn placeholder
-
-        Args:
-            lesson_id: ID của bài học
-            template_json: JSON template từ frontend đã được phân tích sẵn
-            config_prompt: Prompt cấu hình tùy chỉnh
-            book_id: ID của sách giáo khoa (optional)
-
-        Returns:
-            Dict chứa template đã được xử lý
-        """
-        try:
-            logger.info(f"🔄 Starting optimized workflow for lesson: {lesson_id}")
-            logger.info(f"🔍 Template JSON type: {type(template_json)}")
-            logger.info(f"🔍 Config prompt: {config_prompt}")
-
-            # Validation: Kiểm tra input rỗng hoặc thiếu dữ liệu quan trọng
-            if not lesson_id or not lesson_id.strip():
-                raise ValueError("lesson_id is empty or missing")
-
-            if not template_json or not isinstance(template_json, dict):
-                raise ValueError("template_json is empty or invalid")
-
-            if not template_json.get("slides") or len(template_json.get("slides", [])) == 0:
-                raise ValueError("template_json has no slides")
-
-            # Bước 1: Lấy nội dung bài học
-            lesson_content = await self._get_lesson_content(lesson_id, book_id)
-            logger.info(f"🔍 Lesson content result type: {type(lesson_content)}")
-
-            if not lesson_content.get("success", False):
-                error_msg = lesson_content.get("error", "Unknown error in lesson content")
-                raise Exception(error_msg)
-
-            content_text = lesson_content.get("content", "")
-            if not content_text or not content_text.strip():
-                raise ValueError("lesson content is empty")
-
-            # Bước 2: Sử dụng trực tiếp JSON đã được phân tích từ input
-            # Input đã có sẵn description trong slides nên không cần phân tích thêm
-            logger.info(f"📊 Using pre-analyzed template: {len(template_json['slides'])} slides")
-            # Sử dụng trực tiếp template_json với format mới
-            analyzed_template = template_json
-
-            # Workflow tối ưu hóa 3 bước
-            result = await self._execute_optimized_workflow(
-                content_text,
-                config_prompt,
-                template_json,
-                analyzed_template
-            )
-
-            # Format nội dung cho frontend (xuống dòng đẹp)
-            formatted_result = self._format_content_for_frontend(result)
-
-            # Trả về kết quả với success flag
-            return {
-                "success": True,
-                "lesson_id": lesson_id,
-                "processed_template": formatted_result,
-                "slides_created": len(formatted_result.get("slides", []))
-            }
-
-        except ValueError as ve:
-            logger.error(f"❌ Validation error: {ve}")
-            return {
-                "success": False,
-                "error": f"Input validation failed: {str(ve)}",
-                "lesson_id": lesson_id,
-                "processed_template": {
-                    "version": "1.0",
-                    "createdAt": datetime.now().isoformat(),
-                    "slideFormat": "16:9",
-                    "slides": []
-                },
-                "slides_created": 0
-            }
-        except Exception as e:
-            logger.error(f"❌ Error processing JSON template: {e}")
-            return {
-                "success": False,
-                "error": f"Failed to process JSON template: {str(e)}",
-                "lesson_id": lesson_id,
-                "processed_template": {
-                    "version": "1.0",
-                    "createdAt": datetime.now().isoformat(),
-                    "slideFormat": "16:9",
-                    "slides": []
-                },
-                "slides_created": 0
-            }
 
     async def process_json_template_with_progress(
         self,
@@ -346,139 +244,6 @@ class JsonTemplateService:
             # Trả về text gốc nếu lỗi
             return text.replace("\\n", "\n")
 
-
-
-    async def _execute_optimized_workflow(
-        self,
-        lesson_content: str,
-        config_prompt: Optional[str],
-        template_json: Dict[str, Any],
-        analyzed_template: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Thực hiện workflow tối ưu hóa 3 bước:
-        1. Xây dựng khung slide
-        2. Chi tiết hóa từng slide
-        3. Gắn placeholder
-        """
-        try:
-            logger.info("🚀 Starting optimized 3-step workflow...")
-
-            # Bước 1: Xây dựng khung slide
-            logger.info("📋 Step 1: Generating slide framework...")
-            slide_framework = await self._generate_slide_framework(
-                lesson_content,
-                config_prompt
-            )
-
-            if not slide_framework.get("success", False):
-                raise Exception(f"Step 1 failed: {slide_framework.get('error', 'Unknown error')}")
-
-            framework_slides = slide_framework.get("slides", [])
-            logger.info(f"✅ Step 1 complete: Generated {len(framework_slides)} slide frameworks")
-            logger.info(f"---------slide: {framework_slides}")
-
-            # Bước 2 & 3: Chi tiết hóa từng slide, gắn placeholder và map ngay lập tức
-            final_template = {
-                "version": template_json.get("version", "1.0"),
-                "createdAt": datetime.now().isoformat(),
-                "slideFormat": template_json.get("slideFormat", "16:9"),
-                "slides": []
-            }
-
-            # Content index để track việc sử dụng content
-            all_parsed_data = {
-                "LessonName": [],
-                "LessonDescription": [],
-                "CreatedDate": [],
-                "TitleName": [],
-                "TitleContent": [],
-                "SubtitleName": [],
-                "SubtitleContent": [],
-                "ImageName": [],
-                "ImageContent": []
-            }
-
-            content_index = {
-                "LessonName": 0,
-                "LessonDescription": 0,
-                "CreatedDate": 0,
-                "TitleName": 0,
-                "TitleContent": 0,
-                "SubtitleName": 0,
-                "SubtitleContent": 0,
-                "ImageName": 0,
-                "ImageContent": 0
-            }
-
-            # Track used slides để tránh duplicate
-            used_slide_ids = set()
-            # analyzed_template bây giờ chính là input JSON với format mới
-            template_slides = analyzed_template.get("slides", [])
-
-            for i, framework_slide in enumerate(framework_slides):
-                slide_num = i + 1
-                logger.info(f"🔄 Processing slide {slide_num}/{len(framework_slides)}")
-
-                # Bước 2: Chi tiết hóa slide (bỏ qua slide đầu - slide giới thiệu)
-                if slide_num == 1:
-                    logger.info(f"⏭️ Skipping detailed processing for slide {slide_num} (introduction slide)")
-                    # Sử dụng trực tiếp framework_slide content cho slide giới thiệu
-                    detailed_slide = {
-                        "success": True,
-                        "content": framework_slide
-                    }
-                else:
-                    detailed_slide = await self._detail_slide_content(
-                        framework_slide,
-                        lesson_content,
-                        config_prompt,
-                        slide_num
-                    )
-
-                    if not detailed_slide.get("success", False):
-                        logger.error(f"❌ Step 2 failed for slide {slide_num}: {detailed_slide.get('error', 'Unknown error')}")
-                        continue  # Skip slide này
-
-                logger.info(f"---------detailed_slide: {detailed_slide}")
-
-                # Bước 3: Gắn placeholder
-                slide_with_placeholders = await self._map_placeholders(
-                    detailed_slide.get("content", ""),
-                    slide_num
-                )
-
-                if not slide_with_placeholders.get("success", False):
-                    logger.error(f"❌ Step 3 failed for slide {slide_num}: {slide_with_placeholders.get('error', 'Unknown error')}")
-                    continue  # Skip slide này
-
-                slide_data = slide_with_placeholders.get("slide_data", {})
-                logger.info(f"✅ Slide {slide_num} content processed successfully")
-
-                # Bước 4: Map ngay lập tức vào template
-                mapped_slide = await self._map_single_slide_to_template(
-                    slide_data,
-                    template_slides,
-                    used_slide_ids,
-                    all_parsed_data,
-                    content_index,
-                    slide_num
-                )
-
-                if mapped_slide:
-                    final_template["slides"].append(mapped_slide)
-                    logger.info(f"✅ Slide {slide_num} mapped to template successfully")
-                else:
-                    logger.error(f"❌ Failed to map slide {slide_num} to template")
-                    continue
-
-            logger.info(f"🎉 Optimized workflow complete: {len(final_template.get('slides', []))} slides created")
-            return final_template
-
-        except Exception as e:
-            logger.error(f"❌ Error in optimized workflow: {e}")
-            raise
-
     async def _execute_optimized_workflow_with_progress(
         self,
         lesson_content: str,
@@ -531,24 +296,13 @@ class JsonTemplateService:
                 "LessonDescription": [],
                 "CreatedDate": [],
                 "TitleName": [],
-                "TitleContent": [],
-                "SubtitleName": [],
-                "SubtitleContent": [],
+                "MainPointName": [],
+                "MainPointContent": [],
                 "ImageName": [],
                 "ImageContent": []
             }
 
-            content_index = {
-                "LessonName": 0,
-                "LessonDescription": 0,
-                "CreatedDate": 0,
-                "TitleName": 0,
-                "TitleContent": 0,
-                "SubtitleName": 0,
-                "SubtitleContent": 0,
-                "ImageName": 0,
-                "ImageContent": 0
-            }
+
 
             # Track used slides
             used_slide_ids = set()
@@ -572,13 +326,22 @@ class JsonTemplateService:
                         message=f"🤖 Đang xử lý slide {slide_num}/{total_slides}..."
                     )
 
-                # Bước 2: Chi tiết hóa slide (bỏ qua slide đầu - slide giới thiệu)
-                if slide_num == 1:
-                    logger.info(f"⏭️ Skipping detailed processing for slide {slide_num} (introduction slide)")
-                    # Sử dụng trực tiếp framework_slide content cho slide giới thiệu
+                # Bước 2: Chi tiết hóa slide (bỏ qua slide intro)
+                if framework_slide.get("type") == "intro":
+                    logger.info(f"⏭️ Skipping detailed processing for slide {slide_num} (intro slide type)")
+                    # Tạo detailed_json cho slide intro từ framework_slide
+                    intro_detailed_json = {
+                        "slideId": framework_slide.get("slide_id", f"slide{slide_num}"),
+                        "type": "intro",
+                        "title": framework_slide.get("title", ""),
+                        "description": framework_slide.get("description", ""),
+                        "date": framework_slide.get("date", "")
+                    }
+
                     detailed_slide = {
                         "success": True,
-                        "content": framework_slide
+                        "content": framework_slide,
+                        "detailed_json": intro_detailed_json
                     }
                 else:
                     detailed_slide = await self._detail_slide_content(
@@ -591,12 +354,18 @@ class JsonTemplateService:
                     if not detailed_slide.get("success", False):
                         logger.error(f"❌ Step 2 failed for slide {slide_num}: {detailed_slide.get('error', 'Unknown error')}")
                         continue
-
+                    logger.info(f"======= Detailed slide {slide_num}: {detailed_slide.get('detailed_json', {})}")
                 # Bước 3: Gắn placeholder
-                slide_with_placeholders = await self._map_placeholders(
-                    detailed_slide.get("content", ""),
-                    slide_num
-                )
+                detailed_json = detailed_slide.get("detailed_json")
+                if detailed_json:
+                    # Use JSON-based placeholder mapping
+                    slide_with_placeholders = self._map_placeholders_from_json(
+                        detailed_json,
+                        slide_num
+                    )
+                else:
+                    logger.error(f"❌ No detailed_json found for slide {slide_num}")
+                    continue
 
                 if not slide_with_placeholders.get("success", False):
                     logger.error(f"❌ Step 3 failed for slide {slide_num}: {slide_with_placeholders.get('error', 'Unknown error')}")
@@ -610,7 +379,6 @@ class JsonTemplateService:
                     template_slides,
                     used_slide_ids,
                     all_parsed_data,
-                    content_index,
                     slide_num
                 )
 
@@ -703,7 +471,6 @@ class JsonTemplateService:
         template_slides: List[Dict[str, Any]],
         used_slide_ids: set,
         all_parsed_data: Dict[str, List[Dict[str, Any]]],
-        content_index: Dict[str, int],
         slide_number: int
     ) -> Dict[str, Any]:
         """
@@ -725,28 +492,41 @@ class JsonTemplateService:
             for placeholder_type, items in parsed_data.items():
                 all_parsed_data[placeholder_type].extend(items)
 
-            # Tìm template phù hợp CHÍNH XÁC
-            best_template = self._find_exact_matching_template(
-                required_placeholders,
-                placeholder_counts,
-                template_slides,
-                used_slide_ids
-            )
+            # Tìm template phù hợp với exact matching requirements
+            slide_description = slide_data.get("description", [])
 
-            # Nếu không tìm thấy template chưa sử dụng, cho phép reuse template
-            if not best_template:
-                logger.info(f"🔄 No unused template found for slide {slide_number}, trying to reuse...")
-                best_template = self._find_exact_matching_template_with_reuse(
-                    required_placeholders,
-                    placeholder_counts,
-                    template_slides
+            best_template = None
+            try:
+                best_template = self._find_best_matching_template_with_max_length(
+                    slide_description,
+                    template_slides,
+                    used_slide_ids
                 )
+            except (ValueError, Exception) as e:
+                # Nếu không tìm thấy template chưa sử dụng, thử reuse template
+                logger.info(f"🔄 No unused exact template found for slide {slide_number}, trying to reuse...")
+                logger.info(f"   Original error: {e}")
+                try:
+                    best_template = self._find_best_matching_template_with_max_length(
+                        slide_description,
+                        template_slides,
+                        set()  # Allow reuse by passing empty used_slide_ids
+                    )
+                except (ValueError, Exception) as reuse_error:
+                    logger.error(f"❌ No exact matching template found for slide {slide_number} (even with reuse)")
+                    logger.error(f"   Reuse error: {reuse_error}")
+                    return None
 
-            if not best_template:
-                logger.error(f"❌ No matching template found for slide {slide_number}")
+            # Kiểm tra best_template có hợp lệ không
+            if not best_template or not isinstance(best_template, dict):
+                logger.error(f"❌ Invalid template returned for slide {slide_number}: {best_template}")
                 return None
 
-            template_id = best_template['id']  # Format mới sử dụng 'id' thay vì 'slideId'
+            template_id = best_template.get('id')
+            if not template_id:
+                logger.error(f"❌ Template missing 'id' field for slide {slide_number}: {best_template}")
+                return None
+
             is_reused = template_id in used_slide_ids
 
             if is_reused:
@@ -754,13 +534,17 @@ class JsonTemplateService:
             else:
                 logger.info(f"✅ Found exact matching template (NEW): {template_id}")
 
+            # Get template requirements for max_length handling
+            template_description = best_template.get("description", "")
+            template_requirements = self._parse_template_description(template_description)
+
             # Tạo processed slide từ template
             processed_slide = await self._create_processed_slide_from_template(
                 best_template,
                 all_parsed_data,
-                content_index,
                 slide_number,
-                is_reused
+                is_reused,
+                template_requirements
             )
 
             if processed_slide:
@@ -808,22 +592,57 @@ class JsonTemplateService:
 
             framework_content = llm_response.get("text", "").strip()
             logger.info(f"✅ Framework content generated: {len(framework_content)} characters")
+            logger.info(f"======================================  Framework content: {framework_content}")
+            # Parse JSON framework content directly
+            import json
+            try:
+                # Extract JSON from the response
+                json_start = framework_content.find('{')
+                json_end = framework_content.rfind('}') + 1
 
-            # Parse framework content thành danh sách slides
-            slides = self._parse_framework_content(framework_content)
+                if json_start != -1 and json_end > json_start:
+                    json_content = framework_content[json_start:json_end]
+                    parsed_json = json.loads(json_content)
 
-            if not slides:
+                    # Extract slides from JSON
+                    slides = parsed_json.get("slides", [])
+
+                    if not slides:
+                        return {
+                            "success": False,
+                            "error": "No slides found in JSON framework content"
+                        }
+
+                    logger.info(f"✅ JSON Framework parsing complete: {len(slides)} slides")
+                    return {
+                        "success": True,
+                        "slides": slides,
+                        "raw_content": framework_content
+                    }
+                else:
+                    logger.error("❌ No valid JSON found in framework content")
+                    return {
+                        "success": False,
+                        "error": "No valid JSON found in framework content"
+                    }
+
+            except json.JSONDecodeError as je:
+                logger.error(f"❌ JSON decode error in framework: {je}")
+                # Fallback to old parsing method
+                slides = self._parse_framework_content(framework_content)
+
+                if not slides:
+                    return {
+                        "success": False,
+                        "error": "No slides found in framework content (fallback parsing also failed)"
+                    }
+
+                logger.info(f"✅ Fallback framework parsing complete: {len(slides)} slides")
                 return {
-                    "success": False,
-                    "error": "No slides found in framework content"
+                    "success": True,
+                    "slides": slides,
+                    "raw_content": framework_content
                 }
-
-            logger.info(f"✅ Framework parsing complete: {len(slides)} slides")
-            return {
-                "success": True,
-                "slides": slides,
-                "raw_content": framework_content
-            }
 
         except Exception as e:
             logger.error(f"❌ Error generating slide framework: {e}")
@@ -839,65 +658,141 @@ class JsonTemplateService:
     ) -> str:
         """Tạo prompt cho việc xây dựng khung slide"""
 
-        default_config = config_prompt if config_prompt else """
-Bạn là chuyên gia thiết kế nội dung giáo dục. Hãy phân tích nội dung bài học và tạo khung slide logic, dễ theo dõi.
-"""
+        # Get current date
+        current_date = datetime.now().strftime("%d-%m-%Y")
 
-        prompt = f"""
-{default_config}
+        prompt = f"""Đóng vai trò người thiết kế bài thuyết trình giáo dục kinh nghiệm chuyên sâu.
 
-NHIỆM VỤ: Phân tích nội dung bài học và tạo KHUNG SLIDE tổng quát
+NHIỆM VỤ:
+- Hãy đọc JSON yêu cầu bên dưới và tạo danh sách các slide tổng quát dựa trên nội dung bài học.
+- Chỉ sinh kết quả dưới dạng JSON theo định dạng đầu ra mẫu ở cuối .
 
 NỘI DUNG BÀI HỌC:
 {lesson_content}
 
-YÊU CẦU KHUNG SLIDE:
-1. Tách lesson_content thành các slide với mục đích và nội dung chính rõ ràng
-2. Đảm bảo khung slide có tính logic, hợp lý và dễ theo dõi
-3. Mỗi slide thể hiện một chủ đề chính, ý định và kiến thức cần truyền đạt
-4. Không cần chi tiết, chỉ cần khung tổng quát
-5. Slide đầu tiên bắt buộc là slide giới thiệu với ĐÚNG 3 dòng: tên bài học, mô tả ngắn và ngày tạo bài thuyết trình.
+JSON YÊU CẦU:
+{{
+  "instruction": "Phân tích nội dung bài học và tạo khung slide logic, dễ theo dõi.",
+  "task":  "Phân tích nội dung bài học và chia thành các slide tổng quát, có mục đích rõ ràng và các ý chính phù hợp để trình bày.",
+  "rules": [
+    "Tách lesson_content thành các slide với tiêu đề, mục đích và các ý chính rõ ràng.",
+    "Mỗi slide thể hiện một chủ đề lớn, với mục đích cụ thể và nội dung cốt lõi.",
+    "Mỗi slide chứa tối đa 4 ý lớn. Linh hoạt trong 1-4 ý chính, không cố định.",
+    "Nếu nội dung cần hơn 4 ý lớn, hãy tạo slide mới nhưng giữ tiêu đề tương tự (ví dụ: Phần 1, Phần 2) và đảm bảo sự liên kết giữa các phần",
+    "Các ý chính cần được mô tả rõ ràng, không sơ sài.",
+    "Sau mỗi ý chính, thêm một note thể hiện liệu có cần ví dụ minh họa, hình ảnh hỗ trợ hoặc giải thích thêm không.",
+    "Slide đầu tiên phải là slide giới thiệu, gồm đúng 3 dòng: tên bài học, mô tả ngắn và ngày tạo bài thuyết trình.",
+    "Đảm bảo trình tự các slide có tính logic, mạch lạc, dễ theo dõi.",
+    "Tùy chỉnh kết quả theo personalize trong config bên dưới, ví dụ: điều chỉnh độ khó, văn phong, nội dung trình bày cho phù hợp đối tượng người học."
+  ],
+  "config": {{
+    "language": "vi",
+    "maxSlides": 20,
+    "minSlides": 10,
+    "outputFormat": "json",
+    "date": "{current_date}",
+    "personalize": "{config_prompt if config_prompt else 'Phân tích nội dung bài học và tạo khung slide logic, dễ theo dõi.'}"
+  }}
+}}
 
-FORMAT OUTPUT:
-
-SLIDE 1: [Tên bài thuyết trình]
-Mô tả ngắn bài thuyết trình
-Ngày thuyết trình: 12-07-2025
----
-
-SLIDE 2: [Tiêu đề slide]
-Mục đích: [Mục đích của slide này]
-Nội dung chính: 
-- [Nội dung chính 1 cần truyền đạt]
-- [Nội dung chính 2 cần truyền đạt]
-- ....
----
-
-SLIDE 3: [Tiêu đề slide]
-Mục đích: [Mục đích của slide này]
-Nội dung chính:
-- [Nội dung chính 1 cần truyền đạt]
-- [Nội dung chính 2 cần truyền đạt]
-- ....
----
-
-... (tiếp tục cho các slide khác)
-
-LƯU Ý:
-- Chỉ tạo khung tổng quát, không chi tiết hóa
-- Đảm bảo logic từ slide này sang slide khác
-- Mỗi slide có mục đích rõ ràng trong chuỗi kiến thức
-- Slide đầu tiên bắt buộc là slide giới thiệu với ĐÚNG 3 dòng: tên bài học, mô tả ngắn và ngày tạo bài thuyết trình.
-"""
+JSON ĐẦU RA:
+{{
+    "slides": [
+      {{
+        "slideId": "slide1",
+        "type": "intro",
+        "title": "[Tên bài học]",
+        "description": "[Mô tả ngắn bài học]",
+        "date": "{current_date}"
+      }},
+      {{
+        "slideId": "slide2",
+        "type": "content",
+        "title": "[Tiêu đề slide]",
+        "mainPoints": [
+          {{
+            "point": "[Ý chính 1]",
+            "note": "[Có cần ví dụ minh họa / hình ảnh / cần giải thích thêm hay chi tiết gì không?]"
+          }},
+          {{
+            "point": "[Ý chính 2]",
+            "note": "[Gợi ý nếu cần hỗ trợ trực quan hoặc mở rộng nội dung]"
+          }}
+        ]  
+      }}
+    ]
+  }},
+  "_hint": {{
+    "slideId": "Đặt ID duy nhất cho mỗi slide, dạng s2_abc",
+    "type": "intro hoặc content",
+    "title": "Tiêu đề chính của slide",
+    "purpose": "Mục tiêu truyền đạt của slide",
+    "mainPoints": "Tối đa 4 mục chính mỗi slide, mỗi mục có ghi chú đi kèm",
+    "user_config": "Tùy chỉnh đầu ra theo đối tượng, phong cách, độ khó và yêu cầu trực quan"
+  }}
+}}"""
 
         return prompt
 
     def _parse_framework_content(self, framework_content: str) -> List[Dict[str, Any]]:
-        """Parse framework content thành danh sách slides"""
+        """Parse framework content thành danh sách slides từ JSON format mới"""
         try:
+            import json
             slides = []
 
-            # Split theo dấu --- để tách các slide
+            # Try to parse as JSON first
+            try:
+                # Clean the content to extract JSON
+                json_start = framework_content.find('{')
+                json_end = framework_content.rfind('}') + 1
+
+                if json_start != -1 and json_end > json_start:
+                    json_content = framework_content[json_start:json_end]
+                    parsed_json = json.loads(json_content)
+
+                    # Extract slides from JSON
+                    json_slides = parsed_json.get("slides", [])
+
+                    for i, slide in enumerate(json_slides):
+                        slide_data = {
+                            "slide_number": i + 1,
+                            "title": slide.get("title", ""),
+                            "purpose": "",  # Will be derived from mainPoints
+                            "main_content": "",  # Will be derived from mainPoints
+                            "raw_block": json.dumps(slide, ensure_ascii=False),
+                            "slide_id": slide.get("slideId", f"slide{i+1}"),
+                            "type": slide.get("type", "content"),
+                            "description": slide.get("description", ""),
+                            "date": slide.get("date", ""),
+                            "main_points": slide.get("mainPoints", []),
+                            "lesson_content_used": slide.get("lessonContentUsed", "")
+                        }
+
+                        # For intro slides, use description as main_content
+                        if slide_data["type"] == "intro":
+                            slide_data["main_content"] = f"{slide_data['description']}\n{slide_data['date']}"
+                        else:
+                            # For content slides, combine main points
+                            if slide_data["main_points"]:
+                                points_text = []
+                                for point in slide_data["main_points"]:
+                                    point_text = point.get("point", "")
+                                    note_text = point.get("note", "")
+                                    if point_text:
+                                        points_text.append(f"- {point_text}")
+                                        if note_text:
+                                            points_text.append(f"  Note: {note_text}")
+                                slide_data["main_content"] = "\n".join(points_text)
+
+                        slides.append(slide_data)
+
+                    logger.info(f"✅ Successfully parsed JSON format: {len(slides)} slides")
+                    return slides
+
+            except json.JSONDecodeError as je:
+                logger.warning(f"⚠️ JSON parsing failed, trying fallback parsing: {je}")
+
+            # Fallback to old parsing method if JSON parsing fails
             slide_blocks = framework_content.split('---')
 
             for i, block in enumerate(slide_blocks):
@@ -934,7 +829,7 @@ LƯU Ý:
                 if slide_data["title"] or slide_data["purpose"] or slide_data["main_content"]:
                     slides.append(slide_data)
 
-            logger.info(f"📋 Parsed {len(slides)} slides from framework")
+            logger.info(f"📋 Parsed {len(slides)} slides from framework (fallback method)")
             return slides
 
         except Exception as e:
@@ -956,7 +851,7 @@ LƯU Ý:
         """
         try:
             logger.info(f"📝 Detailing slide {slide_number}: {framework_slide.get('title', 'Untitled')}")
-
+            logger.info(f"📋 Framework slide: {framework_slide}")
             # Tạo prompt cho việc chi tiết hóa slide
             detail_prompt = self._create_detail_prompt(
                 framework_slide,
@@ -974,39 +869,44 @@ LƯU Ý:
                     max_tokens=30000,
                     temperature=0.1
                 )
-
+                logger.info(f"LLM response detail slide: {llm_response}")
                 if llm_response.get("success", False):
                     detailed_content = llm_response.get("text", "").strip()
 
                     if detailed_content:
-                        logger.info(f"✅ Slide {slide_number} detailed successfully: {len(detailed_content)} characters")
-                        return {
-                            "success": True,
-                            "content": detailed_content,
-                            "slide_number": slide_number,
-                            "framework": framework_slide
-                        }
+                        # Try to parse JSON response
+                        parsed_detail = self._parse_detailed_json_response(detailed_content, slide_number)
+
+                        if parsed_detail.get("success", False):
+                            logger.info(f"✅ Slide {slide_number} detailed successfully with JSON format")
+                            return {
+                                "success": True,
+                                "content": parsed_detail.get("content", detailed_content),
+                                "slide_number": slide_number,
+                                "framework": framework_slide,
+                                "detailed_json": parsed_detail.get("detailed_json", {})
+                            }
+                        else:
+                            # JSON parsing failed - this should not happen with new logic
+                            logger.error(f"❌ JSON parsing failed for slide {slide_number} - this should not happen")
+                            return {
+                                "success": False,
+                                "error": "JSON parsing failed",
+                                "slide_number": slide_number,
+                                "framework": framework_slide
+                            }
                     else:
                         logger.warning(f"⚠️ Empty content for slide {slide_number}, attempt {attempt + 1}")
                 else:
                     logger.warning(f"⚠️ LLM failed for slide {slide_number}, attempt {attempt + 1}: {llm_response.get('error', 'Unknown error')}")
 
-            # Fallback: Trả về content gốc nếu không thể chi tiết hóa
+            # No fallback - must have detailed_json for new logic
             logger.error(f"❌ Failed to detail slide {slide_number} after {max_retries} attempts")
-            fallback_content = f"""
-{framework_slide.get('title', 'Slide Content')}
-
-{framework_slide.get('purpose', '')}
-
-{framework_slide.get('main_content', '')}
-"""
-
             return {
-                "success": True,
-                "content": fallback_content.strip(),
+                "success": False,
+                "error": f"Failed to detail slide after {max_retries} attempts",
                 "slide_number": slide_number,
-                "framework": framework_slide,
-                "fallback_used": True
+                "framework": framework_slide
             }
 
         except Exception as e:
@@ -1024,230 +924,331 @@ LƯU Ý:
         config_prompt: Optional[str],
         slide_number: int
     ) -> str:
-        """Tạo prompt cho việc chi tiết hóa slide"""
+        """Tạo prompt cho việc chi tiết hóa slide với JSON format mới"""
 
-        default_config = config_prompt if config_prompt else """
+        import json
+
+        # Get current date
+        current_date = datetime.now().strftime("%d-%m-%Y")
+
+        # Create framework slide JSON for the prompt
+        khung_slide_json = {
+            "slideId": framework_slide.get("slide_id", f"slide{slide_number}"),
+            "type": framework_slide.get("type", "content"),
+            "title": framework_slide.get("title", ""),
+            "mainPoints": []
+        }
+
+        # Handle different slide types
+        if framework_slide.get("type") == "intro":
+            khung_slide_json["description"] = framework_slide.get("description", "")
+            khung_slide_json["date"] = framework_slide.get("date", current_date)
+        else:
+            # For content slides, use main_points if available, otherwise parse from main_content
+            main_points = framework_slide.get("main_points", [])
+            if main_points:
+                khung_slide_json["mainPoints"] = main_points
+            else:
+                # Parse from main_content if main_points not available
+                main_content = framework_slide.get("main_content", "")
+                if main_content:
+                    # Simple parsing of main content into points
+                    lines = main_content.split('\n')
+                    points = []
+                    for line in lines:
+                        line = line.strip()
+                        if line and line.startswith('- '):
+                            point_text = line[2:].strip()
+                            if point_text:
+                                points.append({
+                                    "point": point_text,
+                                    "note": "Cần chi tiết hóa nội dung"
+                                })
+                    khung_slide_json["mainPoints"] = points
+
+        khung_slide_str = json.dumps(khung_slide_json, ensure_ascii=False, indent=2)
+
+        default_config = """
 Bạn là chuyên gia thiết kế nội dung slide giáo dục chuyên nghiệp. Hãy chi tiết hóa nội dung slide theo yêu cầu.
 """
 
-        prompt = f"""
+        prompt = f"""Đóng vai trò người thiết kế bài thuyết trình giáo dục kinh nghiệm chuyên sâu.
 
-YÊU CẦU CỦA NGƯỜI DÙNG:
-{default_config}
+NHIỆM VỤ:
+Đọc JSON yêu cầu bên dưới và chi tiết hóa nội dung slide cụ thể dựa trên khung slide, nội dung bài học.
+Chỉ sinh kết quả dưới dạng JSON theo định dạng đầu ra mẫu ở cuối .
 
-NHIỆM VỤ: Chi tiết hóa nội dung cho slide cụ thể
-
-THÔNG TIN SLIDE CẦN CHI TIẾT HÓA:
-- Số slide: {slide_number}
-- Tiêu đề: {framework_slide.get('title', 'Không có tiêu đề')}
-- Mục đích: {framework_slide.get('purpose', 'Không có mục đích')}
-- Nội dung chính: {framework_slide.get('main_content', 'Không có nội dung chính')}
+KHUNG SLIDE:
+{khung_slide_str}
 
 NỘI DUNG BÀI HỌC THAM KHẢO:
 {lesson_content}
 
-YÊU CẦU CHI TIẾT HÓA:
-1. Chi tiết hóa nội dung cho slide cụ thể dựa trên nội dung bài học 
-2. Điều chỉnh ngữ điệu, độ khó, độ chi tiết hoặc nâng cao sao cho phù hợp với đối tượng và bối cảnh thuyết trình theo mục YÊU CẦU CỦA NGƯỜI DÙNG
-3. Tạo nội dung đầy đủ, chi tiết
-4. Bao gồm định nghĩa, giải thích, ví dụ minh họa nếu cần
-5. Đảm bảo nội dung phù hợp với mục đích của slide
-6. 🚨 QUAN TRỌNG: Nếu có nhiều mục con, hãy GỘP CHÚNG LẠI để không vượt quá 6 mục
+JSON YÊU CẦU:
+{{
+  "instruction": "Viết nội dung chi tiết (viết vào field pointContent) cho mỗi ý chính \"point\" trong (`mainPoints`) từ khung slide dựa vào bài học",
+  "rules": [
+    "Mỗi ý phải trình bày rõ ràng, đúng kiến thức, có thể bao gồm định nghĩa, giải thích, công thức, ví dụ cụ thể.",
+    "Kiến thức bám sát nội dung bài học, chi tiết, đầy đủ.",
+    "Các dạng bảng có trong NỘI DUNG BÀI HỌC phải thay đổi thành dạng chữ",
+    "Viết đúng số mainPoints trong khung slide, TUYỆT ĐỐI KHÔNG tạo thêm mainPoints mới.",
+    "Tùy chỉnh kết quả theo personalize trong config bên dưới, ví dụ: điều chỉnh độ khó, văn phong, nội dung trình bày cho phù hợp đối tượng người học."
+  ],
+  "avoid": [
+     "Tạo thêm mainPoints mới",
+     "Lời chào hỏi hoặc mở đầu như: 'Chào mừng các em'",
+     "Câu kết thúc như: 'Chúc các em học tốt'",
+     "Ngôn ngữ hội thoại: 'Chúng ta hãy cùng nhau tìm hiểu...'",
+     "Emoji hoặc ký tự đặc biệt như *, •, |",
+     "Định dạng bằng | hoặc markdown"
+    ],
+  "config": {{
+    "language": "vi",
+    "outputFormat": "json",
+    "date": "{current_date}",
+    "personalize": "{config_prompt if config_prompt else 'Nội dung slide logic, dễ theo dõi, chuyên nghiệp.'}"
+  }}
+}}
 
-🚨 TUYỆT ĐỐI TRÁNH:
-- KHÔNG sử dụng lời chào hỏi: "Chào mừng các em", "Xin chào", "Hôm nay chúng ta sẽ"
-- KHÔNG sử dụng lời kết thúc: "Hãy cùng nhau bắt đầu", "Chúc các em học tốt"
-- KHÔNG sử dụng ngôn ngữ nói chuyện: "Các em có biết không?", "Chúng ta hãy cùng tìm hiểu"
-- KHÔNG sử dụng câu mở đầu dài dòng không cần thiết
-- KHÔNG sử dụng emoji hoặc ký tự đặc biệt như **, *, •, -, etc.
-- TUYỆT ĐỐI KHÔNG tạo bảng (table) với dấu | hoặc format bảng - chỉ viết text thuần túy
-- 🚨 TUYỆT ĐỐI KHÔNG tạo quá 6 mục con trong 1 slide - hãy gộp nội dung nếu cần
+JSON ĐẦU RA:
 
-✅ NỘI DUNG SLIDE PHẢI:
-- Đi thẳng vào nội dung chính, tránh nội dung lan man hoặc không liên quan tới bài học
-- Sử dụng ngôn ngữ khoa học, chính xác
-- Trình bày thông tin một cách súc tích, rõ ràng
-- Tập trung vào kiến thức cốt lõi
-- Sử dụng định nghĩa, công thức, ví dụ cụ thể
-
-FORMAT OUTPUT:
-Trả về nội dung chi tiết cho slide này dưới dạng text thuần túy, không format đặc biệt.
-Nội dung phải đầy đủ, chi tiết và phù hợp với mục đích của slide.
-
-VÍ DỤ ĐÚNG:
-"Nguyên tố hóa học là tập hợp các nguyên tử có cùng số proton trong hạt nhân. Số hiệu nguyên tử Z chính là số proton, xác định tính chất hóa học của nguyên tố. Ví dụ: Hydrogen có Z=1, Helium có Z=2. Các nguyên tố được sắp xếp trong bảng tuần hoàn theo thứ tự tăng dần của số hiệu nguyên tử."
-
-VÍ DỤ SAI (TUYỆT ĐỐI KHÔNG LÀM):
-"Chào mừng các em đến với bài học mới! Hôm nay chúng ta sẽ cùng nhau khám phá nguyên tố hóa học. **Nguyên tố hóa học** là một khái niệm rất quan trọng..."
-
-VÍ DỤ SAI VỀ BẢNG (TUYỆT ĐỐI KHÔNG LÀM):
-"| Kí hiệu | Số hiệu nguyên tử | Số khối |
-|---|---|---|
-| ⁴⁰₁₈Ar |  |  |
-| ³⁹₁₉K |  |  |"
-
-VÍ DỤ ĐÚNG THAY THẾ BẢNG:
-"Phân tích các nguyên tử: Argon (⁴⁰₁₈Ar) có số hiệu nguyên tử ?, số khối ?, chứa ? proton, ? electron và ? neutron."
-
-VÍ DỤ GỘP MỤC (TRÁNH VƯỢT QUÁ 6 MỤC):
-❌ SAI (8 mục - vượt quá):
-"Mục 1: Định nghĩa
-Mục 2: Tính chất vật lý
-Mục 3: Tính chất hóa học
-Mục 4: Ứng dụng trong công nghiệp
-Mục 5: Ứng dụng trong y học
-Mục 6: Ứng dụng trong nông nghiệp
-Mục 7: Tác hại với môi trường
-Mục 8: Biện pháp bảo vệ"
-
-✅ ĐÚNG (6 mục - đã gộp):
-"Mục 1: Định nghĩa và cấu trúc
-Mục 2: Tính chất vật lý và hóa học
-Mục 3: Ứng dụng trong công nghiệp và y học
-Mục 4: Ứng dụng trong nông nghiệp và đời sống
-Mục 5: Tác động môi trường và sức khỏe
-Mục 6: Biện pháp an toàn và bảo vệ"
-
-LƯU Ý:
-- Chỉ tập trung vào slide này, không đề cập đến slide khác
-- Nội dung phải chi tiết và đầy đủ
-- Sử dụng ngôn ngữ khoa học chính xác
-- Có thể bao gồm ví dụ minh họa cụ thể
-- 🚨 QUAN TRỌNG NHẤT: Nếu có nhiều hơn 6 mục con, hãy GỘP CHÚNG LẠI thành tối đa 6 mục
-"""
+[
+    {{
+        "slideId": "{khung_slide_json.get('slideId', f'slide{slide_number}')}",
+        "type": "{khung_slide_json.get('type', 'content')}",
+        "title": "[Tiêu đề slide]",
+        "mainPoints": [
+          {{
+            "point": "[Ý chính 1]",
+            "number": 1,
+            "pointContent": "[Nội dung cho Ý chính 1]"
+          }},
+          {{
+            "point": "[Ý chính 2]",
+            "number": 2,
+            "pointContent": "[Nội dung cho Ý chính 2]"
+          }}
+        ]
+    }}
+]"""
 
         return prompt
 
-    async def _map_placeholders(
+    def _parse_detailed_json_response(self, detailed_content: str, slide_number: int) -> Dict[str, Any]:
+        """Parse detailed JSON response from LLM"""
+        try:
+            import json
+
+            # Try to extract JSON from the response
+            json_start = detailed_content.find('[')
+            json_end = detailed_content.rfind(']') + 1
+
+            if json_start != -1 and json_end > json_start:
+                json_content = detailed_content[json_start:json_end]
+                parsed_json = json.loads(json_content)
+
+                if isinstance(parsed_json, list) and len(parsed_json) > 0:
+                    slide_data = parsed_json[0]  # Get first slide from array
+
+                    # Convert detailed JSON to text content for backward compatibility
+                    text_content = self._convert_detailed_json_to_text(slide_data)
+
+                    logger.info(f"✅ Successfully parsed detailed JSON for slide {slide_number}")
+                    return {
+                        "success": True,
+                        "content": text_content,
+                        "detailed_json": slide_data
+                    }
+                else:
+                    logger.warning(f"⚠️ Invalid JSON structure for slide {slide_number}")
+                    return {"success": False, "error": "Invalid JSON structure"}
+            else:
+                logger.warning(f"⚠️ No JSON found in response for slide {slide_number}")
+                return {"success": False, "error": "No JSON found"}
+
+        except json.JSONDecodeError as je:
+            logger.warning(f"⚠️ JSON decode error for slide {slide_number}: {je}")
+            return {"success": False, "error": f"JSON decode error: {str(je)}"}
+        except Exception as e:
+            logger.error(f"❌ Error parsing detailed JSON for slide {slide_number}: {e}")
+            return {"success": False, "error": f"Parsing error: {str(e)}"}
+
+    def _convert_detailed_json_to_text(self, slide_data: Dict[str, Any]) -> str:
+        """Convert detailed JSON slide data to text format for backward compatibility"""
+        try:
+            text_parts = []
+
+            # Add title
+            title = slide_data.get("title", "")
+            if title:
+                text_parts.append(title)
+                text_parts.append("")  # Empty line
+
+            # Process main points
+            main_points = slide_data.get("mainPoints", [])
+            for main_point in main_points:
+                point_text = main_point.get("point", "")
+                if point_text:
+                    text_parts.append(point_text)
+
+                # Process point contents
+                point_contents = main_point.get("pointContents", [])
+                for content in point_contents:
+                    sub_point = content.get("subPoint", "")
+                    sub_content = content.get("subContent", "")
+
+                    if sub_point and sub_content:
+                        text_parts.append(f"{sub_point}: {sub_content}")
+                    elif sub_content:
+                        text_parts.append(sub_content)
+                    elif sub_point:
+                        text_parts.append(sub_point)
+
+                text_parts.append("")  # Empty line between main points
+
+            # Join all parts
+            result = "\n".join(text_parts).strip()
+
+            # Remove multiple consecutive empty lines
+            while "\n\n\n" in result:
+                result = result.replace("\n\n\n", "\n\n")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ Error converting detailed JSON to text: {e}")
+            return str(slide_data)  # Fallback to string representation
+
+    def _map_placeholders_from_json(
         self,
-        detailed_content: str,
+        detailed_json: Dict[str, Any],
         slide_number: int
     ) -> Dict[str, Any]:
         """
-        Bước 3: Gắn placeholder cho từng slide chi tiết
-        Input: slide_chi_tiet, default_prompt
-        Output: Slide với placeholder được gắn theo quy tắc hiện tại
+        Bước 3: Gắn placeholder trực tiếp từ JSON chi tiết (không gọi LLM)
+        Input: detailed_json từ bước chi tiết hóa
+        Output: Slide với placeholder được gắn theo quy tắc
         """
         try:
-            logger.info(f"🏷️ Mapping placeholders for slide {slide_number}")
+            logger.info(f"🏷️ Mapping placeholders from JSON for slide {slide_number}")
 
-            # Tạo prompt cho việc gắn placeholder
-            placeholder_prompt = self._create_placeholder_prompt(detailed_content, slide_number)
-
-            # Gọi LLM để gắn placeholder
-            llm_response = await self.llm_service.generate_content(
-                prompt=placeholder_prompt,
-                max_tokens=20000,
-                temperature=0.1
-            )
-
-            if not llm_response.get("success", False):
-                return {
-                    "success": False,
-                    "error": f"LLM placeholder mapping failed: {llm_response.get('error', 'Unknown error')}"
-                }
-
-            placeholder_content = llm_response.get("text", "").strip()
-            logger.info(f"Placeholder content generated: {placeholder_content}")
-
-            if not placeholder_content:
-                return {
-                    "success": False,
-                    "error": "Empty placeholder content"
-                }
-
-            # Parse placeholder content để tạo slide data
-            slide_data = self._parse_placeholder_content(placeholder_content, slide_number)
+            # Tạo slide data trực tiếp từ JSON
+            slide_data = self._create_slide_data_from_json(detailed_json, slide_number)
 
             # Validate và fix 1:1 mapping
             validated_slide_data = self._validate_and_fix_mapping(slide_data, slide_number)
 
-            logger.info(f"✅ Placeholders mapped for slide {slide_number}")
+            logger.info(f"✅ Placeholders mapped from JSON for slide {slide_number}")
             logger.info(f"📋 Placeholder summary: {validated_slide_data}")
 
             return {
                 "success": True,
                 "slide_data": validated_slide_data,
-                "raw_content": placeholder_content
+                "raw_content": str(detailed_json)
             }
 
         except Exception as e:
-            logger.error(f"❌ Error mapping placeholders for slide {slide_number}: {e}")
+            logger.error(f"❌ Error mapping placeholders from JSON for slide {slide_number}: {e}")
             return {
                 "success": False,
-                "error": f"Failed to map placeholders: {str(e)}"
+                "error": f"Failed to map placeholders from JSON: {str(e)}"
             }
 
-    def _create_placeholder_prompt(self, detailed_content: str, slide_number: int) -> str:
-        """Tạo prompt cho việc gắn placeholder"""
+    def _create_slide_data_from_json(
+        self,
+        detailed_json: Dict[str, Any],
+        slide_number: int
+    ) -> Dict[str, Any]:
+        """Tạo slide data với placeholder từ detailed JSON theo format mới"""
+        try:
+            slide_type = detailed_json.get("type", "content")
 
-        prompt = f"""
-NHIỆM VỤ: Gắn placeholder cho slide chi tiết theo quy tắc 1:1 MAPPING NGHIÊM NGẶT
+            # Initialize slide data structure
+            slide_data = {
+                "parsed_data": {
+                    "LessonName": [],
+                    "LessonDescription": [],
+                    "CreatedDate": [],
+                    "TitleName": [],
+                    "MainPointName": [],
+                    "MainPointContent": [],
+                    "ImageName": [],
+                    "ImageContent": []
+                },
+                "placeholder_counts": {},
+                "description": []  # New field for placeholder descriptions
+            }
 
-SLIDE CHI TIẾT CẦN GẮN PLACEHOLDER:
-{detailed_content}
+            if slide_type == "intro":
+                # Handle intro slide
+                title = detailed_json.get("title", "")
+                description = detailed_json.get("description", "")
+                date = detailed_json.get("date", "")
 
-🚨 QUY TẮC 1:1 MAPPING BẮT BUỘC - CỰC KỲ QUAN TRỌNG:
-1. MỖI TitleName CHỈ CÓ ĐÚNG 1 TitleContent duy nhất
-2. MỖI SubtitleName CHỈ CÓ ĐÚNG 1 SubtitleContent duy nhất
-3. TUYỆT ĐỐI KHÔNG tạo nhiều TitleContent riêng biệt cho 1 TitleName
-4. TUYỆT ĐỐI KHÔNG tạo nhiều SubtitleContent riêng biệt cho 1 SubtitleName
-5. Nếu có nhiều ý trong cùng 1 mục, hãy GỘP TẤT CẢ thành 1 khối duy nhất
-6. Sử dụng \\n để xuống dòng giữa các ý trong cùng 1 khối content
-7. GIỚI HẠN: Tối đa 6 SubtitleName mỗi slide (không được vượt quá) 
-8. Hãy gộp nội dung nếu cần thiết để tránh vượt quá 
+                if title:
+                    slide_data["parsed_data"]["LessonName"].append({"content": title})
+                    slide_data["placeholder_counts"]["LessonName"] = 1
+                    # Add description without number since there's only one
+                    slide_data["description"].append(f"LessonName_{len(title)}")
 
-PLACEHOLDER TYPES:
-- LessonName: Tên bài học (chỉ slide đầu tiên)
-- LessonDescription: Mô tả bài học (chỉ slide đầu tiên)
-- CreatedDate: Ngày tạo (chỉ slide đầu tiên)
-- TitleName: Tiêu đề chính của slide
-- TitleContent: Nội dung giải thích chi tiết cho TitleName (CHỈ 1 KHỐI)
-- SubtitleName: Tiêu đề các mục con (TỐI ĐA 6 MỤC MỖI SLIDE)
-- SubtitleContent: Nội dung chi tiết cho từng SubtitleName (CHỈ 1 KHỐI)
-- ImageName: Tên hình ảnh minh họa
-- ImageContent: Mô tả nội dung hình ảnh
+                if description:
+                    slide_data["parsed_data"]["LessonDescription"].append({"content": description})
+                    slide_data["placeholder_counts"]["LessonDescription"] = 1
+                    slide_data["description"].append(f"LessonDescription_{len(description)}")
 
-SLIDE HIỆN TẠI: {slide_number}
+                if date:
+                    slide_data["parsed_data"]["CreatedDate"].append({"content": date})
+                    slide_data["placeholder_counts"]["CreatedDate"] = 1
+                    slide_data["description"].append(f"CreatedDate_{len(date)}")
 
-🔥 VÍ DỤ SAI (TUYỆT ĐỐI KHÔNG LÀM):
-Cấu trúc nguyên tử #*(TitleName)*#
-Nguyên tử gồm hạt nhân và electron. #*(TitleContent)*#
-Hạt nhân ở trung tâm. #*(TitleContent)*#  ❌ SAI - Có 2 TitleContent riêng biệt
-Electron chuyển động xung quanh. #*(TitleContent)*#  ❌ SAI - Có 3 TitleContent riêng biệt
+            else:
+                # Handle content slide - logic đơn giản với format mới
+                title = detailed_json.get("title", "")
+                main_points = detailed_json.get("mainPoints", [])
 
-✅ VÍ DỤ ĐÚNG (BẮT BUỘC LÀM THEO):
-Cấu trúc nguyên tử #*(TitleName)*#
-Nguyên tử gồm hạt nhân và electron.\\nHạt nhân ở trung tâm, chứa proton và neutron.\\nElectron chuyển động xung quanh hạt nhân trong các orbital.\\nLực tĩnh điện giữ electron gần hạt nhân. #*(TitleContent)*#
+                # Add title -> TitleName
+                if title:
+                    slide_data["parsed_data"]["TitleName"].append({"content": title})
+                    slide_data["placeholder_counts"]["TitleName"] = 1
+                    slide_data["description"].append(f"TitleName_{len(title)}")
 
-✅ VÍ DỤ ĐÚNG VỚI SUBTITLE:
-Bài toán tính toán #*(SubtitleName)*#
-Gọi x là phần trăm số nguyên tử của ⁶³Cu và y là phần trăm số nguyên tử của ⁶⁵Cu.\\nTa có hệ phương trình: x + y = 100 (Tổng phần trăm là 100%).\\nVà (63x + 65y) / 100 = 63,54 (Công thức nguyên tử khối trung bình).\\nTừ (1), ta có y = 100 - x.\\nThay vào (2): (63x + 65(100 - x)) / 100 = 63,54.\\nGiải phương trình: 63x + 6500 - 65x = 6354, -2x = -146, x = 73.\\nVậy phần trăm số nguyên tử của ⁶³Cu là 73% và ⁶⁵Cu là 27%. #*(SubtitleContent)*#
+                # Process main points với format mới
+                for main_point_idx, main_point in enumerate(main_points, 1):
+                    point_text = main_point.get("point", "")
+                    point_content = main_point.get("pointContent", "")
 
-FORMAT OUTPUT:
-Trả về nội dung đã được gắn placeholder với \\n để xuống dòng:
-content #*(PlaceholderType)*#
+                    # point -> MainPointName
+                    if point_text:
+                        slide_data["parsed_data"]["MainPointName"].append({
+                            "content": point_text,
+                            "main_point": main_point_idx,
+                            "position_key": f"MainPointName_{main_point_idx}"
+                        })
+                        slide_data["description"].append(f"MainPointName_{main_point_idx}_{len(point_text)}")
 
-🔥 NHẮC NHỞ CUỐI CÙNG - CỰC KỲ QUAN TRỌNG:
-- CHỈ 1 TitleContent cho mỗi TitleName (KHÔNG BAO GIỜ NHIỀU HỠN 1)
-- CHỈ 1 SubtitleContent cho mỗi SubtitleName (KHÔNG BAO GIỜ NHIỀU HỠN 1)
-- TỐI ĐA 6 SubtitleName mỗi slide (KHÔNG ĐƯỢC VƯỢT QUÁ)
-- Hãy gộp nội dung nếu cần thiết để tránh vượt quá 
-- Sử dụng \\n để xuống dòng trong cùng 1 khối content
-- TUYỆT ĐỐI TUÂN THỦ QUY TẮC 1:1 MAPPING
-- NẾU CÓ NHIỀU Ý TRONG CÙNG MỤC, HÃY GỘP TẤT CẢ THÀNH 1 KHỐI DUY NHẤT
-- KIỂM TRA LẠI TRƯỚC KHI TRẢ VỀ: Mỗi TitleName chỉ có 1 TitleContent, mỗi SubtitleName chỉ có 1 SubtitleContent, tối đa 6 SubtitleName
+                    # pointContent -> MainPointContent
+                    if point_content:
+                        slide_data["parsed_data"]["MainPointContent"].append({
+                            "content": point_content,
+                            "main_point": main_point_idx,
+                            "position_key": f"MainPointContent_{main_point_idx}"
+                        })
+                        slide_data["description"].append(f"MainPointContent_{main_point_idx}_{len(point_content)}")
 
-🚨 VÍ DỤ CUỐI CÙNG - ĐÚNG 100%:
-Cấu trúc nguyên tử #*(TitleName)*#
-Nguyên tử gồm hạt nhân và electron.\\nHạt nhân ở trung tâm.\\nElectron chuyển động xung quanh. #*(TitleContent)*#
-Proton #*(SubtitleName)*#
-Proton mang điện dương.\\nCó khối lượng 1,67×10^-27 kg.\\nQuyết định nguyên tố hóa học. #*(SubtitleContent)*#
-Neutron #*(SubtitleName)*#
-Neutron không mang điện.\\nCó khối lượng gần bằng proton.\\nTạo thành đồng vị. #*(SubtitleContent)*#
-"""
+                # Update placeholder counts
+                slide_data["placeholder_counts"]["MainPointName"] = len(slide_data["parsed_data"]["MainPointName"])
+                slide_data["placeholder_counts"]["MainPointContent"] = len(slide_data["parsed_data"]["MainPointContent"])
 
-        return prompt
+            logger.info(f"📊 Created slide data for slide {slide_number}:")
+            logger.info(f"   Placeholder counts: {slide_data['placeholder_counts']}")
+            logger.info(f"   Description: {slide_data['description']}")
+            return slide_data
+
+        except Exception as e:
+            logger.error(f"❌ Error creating slide data from JSON for slide {slide_number}: {e}")
+            raise
+
+
 
     def _parse_placeholder_content(self, placeholder_content: str, slide_number: int) -> Dict[str, Any]:
         """Parse placeholder content thành slide data"""
@@ -1258,9 +1259,9 @@ Neutron không mang điện.\\nCó khối lượng gần bằng proton.\\nTạo 
                 "LessonDescription": [],
                 "CreatedDate": [],
                 "TitleName": [],
-                "TitleContent": [],
-                "SubtitleName": [],
-                "SubtitleContent": [],
+                "MainPointName": [],
+                "SubPointName": [],
+                "SubPointContent": [],
                 "ImageName": [],
                 "ImageContent": []
             }
@@ -1307,91 +1308,16 @@ Neutron không mang điện.\\nCó khối lượng gần bằng proton.\\nTạo 
 
     def _validate_and_fix_mapping(self, slide_data: Dict[str, Any], slide_number: int) -> Dict[str, Any]:
         """
-        Validate và fix 1:1 mapping violations
+        Validate slide data - logic đơn giản
         """
         try:
-            logger.info(f"🔍 Validating 1:1 mapping for slide {slide_number}")
+            logger.info(f"🔍 Validating slide data for slide {slide_number}")
 
-            parsed_data = slide_data.get("parsed_data", {})
             placeholder_counts = slide_data.get("placeholder_counts", {})
 
-            # Log original counts
-            logger.info(f"📋 Original placeholder counts: {placeholder_counts}")
-
-            violations_fixed = []
-
-            # Fix TitleName vs TitleContent mapping
-            title_name_count = placeholder_counts.get('TitleName', 0)
-            title_content_count = placeholder_counts.get('TitleContent', 0)
-
-            if title_name_count > 0 and title_content_count != title_name_count:
-                logger.warning(f"⚠️ TitleName={title_name_count} but TitleContent={title_content_count}")
-
-                if title_content_count > title_name_count:
-                    # Gộp multiple TitleContent thành 1
-                    title_contents = parsed_data.get('TitleContent', [])
-                    if len(title_contents) > 1:
-                        combined_content = "\\n".join([item['content'] for item in title_contents])
-                        parsed_data['TitleContent'] = [{
-                            "content": combined_content,
-                            "length": len(combined_content)
-                        }]
-                        placeholder_counts['TitleContent'] = 1
-                        violations_fixed.append(f"Combined {title_content_count} TitleContent into 1")
-                        logger.info(f"🔧 Fixed: Combined {title_content_count} TitleContent into 1")
-
-            # Fix SubtitleName vs SubtitleContent mapping
-            subtitle_name_count = placeholder_counts.get('SubtitleName', 0)
-            subtitle_content_count = placeholder_counts.get('SubtitleContent', 0)
-
-            if subtitle_name_count > 0 and subtitle_content_count != subtitle_name_count:
-                logger.warning(f"⚠️ SubtitleName={subtitle_name_count} but SubtitleContent={subtitle_content_count}")
-
-                if subtitle_content_count > subtitle_name_count:
-                    # Gộp SubtitleContent theo tỷ lệ
-                    subtitle_contents = parsed_data.get('SubtitleContent', [])
-                    subtitle_names = parsed_data.get('SubtitleName', [])
-
-                    if len(subtitle_contents) > len(subtitle_names) and len(subtitle_names) > 0:
-                        # Chia đều SubtitleContent cho SubtitleName
-                        contents_per_name = len(subtitle_contents) // len(subtitle_names)
-                        remainder = len(subtitle_contents) % len(subtitle_names)
-
-                        new_subtitle_contents = []
-                        content_index = 0
-
-                        for i in range(len(subtitle_names)):
-                            # Số content cho subtitle này
-                            num_contents = contents_per_name + (1 if i < remainder else 0)
-
-                            # Gộp contents
-                            contents_to_combine = subtitle_contents[content_index:content_index + num_contents]
-                            combined_content = "\\n".join([item['content'] for item in contents_to_combine])
-
-                            new_subtitle_contents.append({
-                                "content": combined_content,
-                                "length": len(combined_content)
-                            })
-
-                            content_index += num_contents
-
-                        parsed_data['SubtitleContent'] = new_subtitle_contents
-                        placeholder_counts['SubtitleContent'] = len(new_subtitle_contents)
-                        violations_fixed.append(f"Redistributed {subtitle_content_count} SubtitleContent to match {subtitle_name_count} SubtitleName")
-                        logger.info(f"🔧 Fixed: Redistributed SubtitleContent to match SubtitleName")
-
-            # Update slide data
-            slide_data["parsed_data"] = parsed_data
-            slide_data["placeholder_counts"] = placeholder_counts
-
-            # Log final counts
-            logger.info(f"📋 Final placeholder counts: {placeholder_counts}")
-
-            if violations_fixed:
-                logger.info(f"🔧 Violations fixed: {violations_fixed}")
-                slide_data["violations_fixed"] = violations_fixed
-            else:
-                logger.info(f"✅ No violations found for slide {slide_number}")
+            # Logic đơn giản - chỉ log placeholder counts
+            logger.info(f"� Placeholder counts: {placeholder_counts}")
+            logger.info(f"✅ Slide {slide_number} validation complete")
 
             return slide_data
 
@@ -1441,8 +1367,9 @@ Neutron không mang điện.\\nCó khối lượng gần bằng proton.\\nTạo 
             return "Slide không xác định"
     def _parse_description_to_counts(self, description: str) -> Dict[str, int]:
         """
-        Parse description có sẵn thành placeholder counts
-        Ví dụ: "1 TitleName, 1 TitleContent, 1 SubtitleName" -> {"TitleName": 1, "TitleContent": 1, "SubtitleName": 1}
+        Parse description từ Kafka format mới thành placeholder counts
+        Ví dụ: "MainPointName_1_80, MainPointName_2_80, SubPointContent_1_1_80"
+        -> {"MainPointName": 2, "SubPointContent": 1}
         """
         try:
             placeholder_counts = {}
@@ -1450,23 +1377,29 @@ Neutron không mang điện.\\nCó khối lượng gần bằng proton.\\nTạo 
             if not description or not description.strip():
                 return placeholder_counts
 
-            # Pattern để match "số PlaceholderType"
-            import re
-            pattern = r'(\d+)\s+(\w+)'
-            matches = re.findall(pattern, description)
+            # Split by comma để lấy từng placeholder
+            placeholders = [p.strip() for p in description.split(',')]
 
-            for count_str, placeholder_type in matches:
-                try:
-                    count = int(count_str)
-                    placeholder_counts[placeholder_type] = count
-                except ValueError:
+            for placeholder in placeholders:
+                if not placeholder:
                     continue
 
-            logger.info(f"📋 Parsed description '{description}' -> {placeholder_counts}")
+                # Extract placeholder type từ format: PlaceholderType_numbers_maxlength
+                parts = placeholder.split('_')
+                if len(parts) >= 2:
+                    placeholder_type = parts[0]
+
+                    # Count occurrences of each placeholder type
+                    if placeholder_type in placeholder_counts:
+                        placeholder_counts[placeholder_type] += 1
+                    else:
+                        placeholder_counts[placeholder_type] = 1
+
+            logger.info(f"📋 Parsed Kafka description '{description}' -> {placeholder_counts}")
             return placeholder_counts
 
         except Exception as e:
-            logger.error(f"❌ Error parsing description '{description}': {e}")
+            logger.error(f"❌ Error parsing Kafka description '{description}': {e}")
             return {}
 
 
@@ -1522,6 +1455,251 @@ SHORTENED CONTENT:"""
         except Exception as e:
             logger.error(f"❌ Error handling max_length content: {e}")
             return content  # Trả về content gốc, không truncate
+
+    def _find_best_matching_template_with_max_length(
+        self,
+        slide_description: List[str],
+        template_slides: List[Dict[str, Any]],
+        used_slide_ids: set
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Tìm template slide phù hợp nhất dựa trên description và max_length requirements
+
+        QUY TẮC CHỌN SLIDE MỚI:
+        1. Bắt buộc chọn đúng placeholder không dư không thiếu
+        2. Nếu có trên 2 slide phù hợp -> chọn ra cái nào có max_length nhiều hơn
+        3. Nếu max_length của slide nhiều hơn vẫn chưa đáp ứng được thì bỏ vào LLM làm ngắn
+        4. Có thể dùng lại slide đã dùng
+
+        Args:
+            slide_description: List các placeholder descriptions từ slide (e.g., ["MainPointName_1_120", "TitleName_100"])
+            template_slides: List các template slides
+            used_slide_ids: Set các slide IDs đã sử dụng
+
+        Returns:
+            Dict slide template phù hợp nhất hoặc None
+        """
+        try:
+            logger.info(f"🔍 Finding best template for description: {slide_description}")
+
+            # Parse slide requirements from description
+            slide_requirements = self._parse_slide_description(slide_description)
+
+            matching_templates = []
+
+            for template in template_slides:
+                template_id = template.get("id")
+
+                # Skip used templates (chỉ khi tìm lần đầu)
+                if template_id in used_slide_ids:
+                    continue
+
+                # Parse template description (from Kafka format)
+                template_description = template.get("description", "")
+                template_requirements = self._parse_template_description(template_description)
+
+                # Check if template matches slide requirements (EXACT MATCH - không dư không thiếu)
+                match_score = self._calculate_template_match_score(
+                    slide_requirements,
+                    template_requirements
+                )
+
+                if match_score > 0:
+                    # Tính tổng max_length của template để ưu tiên template có max_length lớn hơn
+                    total_max_length = sum(req.get("max_length", 0) for req in template_requirements.values())
+
+                    matching_templates.append({
+                        "template": template,
+                        "score": match_score,
+                        "requirements": template_requirements,
+                        "total_max_length": total_max_length
+                    })
+
+            if not matching_templates:
+                logger.error(f"❌ No exact matching templates found for slide requirements!")
+                logger.error(f"   Slide description: {slide_description}")
+                logger.error(f"   Slide requirements: {slide_requirements}")
+                logger.error(f"   Available templates checked: {len(template_slides)}")
+
+                # Log all available templates for debugging
+                for i, template in enumerate(template_slides):
+                    template_desc = template.get("description", "")
+                    template_id = template.get("id", "unknown")
+                    logger.error(f"   Template {i+1}: {template_id} - {template_desc}")
+
+                raise ValueError(f"No exact matching template found for slide requirements: {list(slide_requirements.keys())}")
+
+            # QUY TẮC CHỌN SLIDE MỚI:
+            # 1. Nếu có trên 2 slide phù hợp -> chọn ra cái nào có max_length nhiều hơn
+            # 2. Nếu max_length bằng nhau thì chọn theo match_score cao hơn
+            if len(matching_templates) >= 2:
+                logger.info(f"🔍 Found {len(matching_templates)} matching templates, selecting by max_length priority")
+
+                # Sort theo thứ tự ưu tiên:
+                # 1. total_max_length (cao hơn = tốt hơn)
+                # 2. match_score (cao hơn = tốt hơn)
+                matching_templates.sort(key=lambda x: (x["total_max_length"], x["score"]), reverse=True)
+
+                # Log thông tin các template để debug
+                for i, match in enumerate(matching_templates[:3]):  # Log top 3
+                    template_id = match["template"].get("id", "unknown")
+                    logger.info(f"   Rank {i+1}: {template_id} - max_length: {match['total_max_length']}, score: {match['score']:.2f}")
+            else:
+                # Chỉ có 1 template phù hợp, sort theo score
+                matching_templates.sort(key=lambda x: x["score"], reverse=True)
+
+            best_match = matching_templates[0]
+            template_id = best_match['template'].get('id', 'unknown')
+
+            logger.info(f"✅ Selected best template: {template_id}")
+            logger.info(f"   Total max_length: {best_match['total_max_length']}")
+            logger.info(f"   Match score: {best_match['score']:.2f}")
+
+            return best_match["template"]
+
+        except ValueError as ve:
+            # Re-raise ValueError để logic reuse có thể catch được
+            logger.debug(f"🔍 ValueError in template matching: {ve}")
+            raise ve
+        except Exception as e:
+            logger.error(f"❌ Unexpected error finding best matching template: {e}")
+            raise ValueError(f"Unexpected error in template matching: {str(e)}")
+
+    def _parse_slide_description(self, slide_description: List[str]) -> Dict[str, Any]:
+        """Parse slide description into structured requirements"""
+        try:
+            requirements = {}
+
+            for desc in slide_description:
+                parts = desc.split('_')
+                if len(parts) >= 2:
+                    placeholder_type = parts[0]
+                    content_length = int(parts[-1])  # Last part is always length
+
+                    # Handle numbered placeholders (e.g., MainPointName_1_120)
+                    if len(parts) == 3 and parts[1].isdigit():
+                        number = int(parts[1])
+                        key = f"{placeholder_type}_{number}"
+                    # Handle double-numbered placeholders (e.g., SubPointName_1_1_120)
+                    elif len(parts) == 4 and parts[1].isdigit() and parts[2].isdigit():
+                        main_num = int(parts[1])
+                        sub_num = int(parts[2])
+                        key = f"{placeholder_type}_{main_num}_{sub_num}"
+                    # Handle non-numbered placeholders (e.g., TitleName_100)
+                    else:
+                        key = placeholder_type
+
+                    requirements[key] = {
+                        "type": placeholder_type,
+                        "length": content_length
+                    }
+
+            return requirements
+
+        except Exception as e:
+            logger.error(f"❌ Error parsing slide description: {e}")
+            return {}
+
+    def _parse_template_description(self, template_description: str) -> Dict[str, Any]:
+        """Parse template description from Kafka format"""
+        try:
+            requirements = {}
+
+            if not template_description:
+                return requirements
+
+            # Split by comma and parse each placeholder
+            placeholders = [p.strip() for p in template_description.split(',')]
+
+            for placeholder in placeholders:
+                if not placeholder:
+                    continue
+
+                parts = placeholder.split('_')
+                if len(parts) >= 2:
+                    placeholder_type = parts[0]
+                    max_length = int(parts[-1])  # Last part is max_length
+
+                    # Handle numbered placeholders
+                    if len(parts) == 3 and parts[1].isdigit():
+                        number = int(parts[1])
+                        key = f"{placeholder_type}_{number}"
+                    # Handle double-numbered placeholders
+                    elif len(parts) == 4 and parts[1].isdigit() and parts[2].isdigit():
+                        main_num = int(parts[1])
+                        sub_num = int(parts[2])
+                        key = f"{placeholder_type}_{main_num}_{sub_num}"
+                    # Handle non-numbered placeholders
+                    else:
+                        key = placeholder_type
+
+                    requirements[key] = {
+                        "type": placeholder_type,
+                        "max_length": max_length
+                    }
+
+            return requirements
+
+        except Exception as e:
+            logger.error(f"❌ Error parsing template description: {e}")
+            return {}
+
+    def _calculate_template_match_score(
+        self,
+        slide_requirements: Dict[str, Any],
+        template_requirements: Dict[str, Any]
+    ) -> float:
+        """Calculate match score between slide and template requirements"""
+        try:
+            if not slide_requirements or not template_requirements:
+                return 0.0
+
+            # Check for EXACT placeholder match - no more, no less
+            slide_keys = set(slide_requirements.keys())
+            template_keys = set(template_requirements.keys())
+
+            # Must have EXACT match - same placeholders, same count
+            if slide_keys != template_keys:
+                logger.debug(f"❌ Template placeholders don't match exactly:")
+                logger.debug(f"   Slide needs: {slide_keys}")
+                logger.debug(f"   Template has: {template_keys}")
+                if slide_keys - template_keys:
+                    logger.debug(f"   Template missing: {slide_keys - template_keys}")
+                if template_keys - slide_keys:
+                    logger.debug(f"   Template has extra: {template_keys - slide_keys}")
+                return 0.0
+
+            total_score = 0.0
+            total_placeholders = len(slide_keys)
+
+            for key in slide_keys:
+                slide_req = slide_requirements[key]
+                template_req = template_requirements[key]
+
+                slide_length = slide_req["length"]
+                template_max_length = template_req["max_length"]
+
+                # Calculate score based on how well template accommodates content
+                if slide_length <= template_max_length:
+                    # Perfect fit or template has more space - good score
+                    score = 1.0
+                else:
+                    # Content exceeds template max_length - lower score but still possible
+                    # Score decreases as the excess increases
+                    excess_ratio = (slide_length - template_max_length) / template_max_length
+                    score = max(0.1, 1.0 - excess_ratio)  # Minimum score of 0.1
+
+                total_score += score
+
+            # Average score across all placeholders (exact match only)
+            final_score = total_score / total_placeholders if total_placeholders > 0 else 0.0
+
+            logger.debug(f"📊 Template match score: {final_score:.2f}")
+            return final_score
+
+        except Exception as e:
+            logger.error(f"❌ Error calculating template match score: {e}")
+            return 0.0
 
     def _find_exact_matching_template(
         self,
@@ -1651,13 +1829,24 @@ SHORTENED CONTENT:"""
             logger.error(f"Error finding exact matching template with reuse: {e}")
             return None
 
+
+
+    def _create_placeholder_key(self, placeholder_type: str, index: int) -> str:
+        """Create placeholder key for template lookup"""
+        # For numbered placeholders like MainPointName_1, MainPointContent_1
+        if placeholder_type in ["MainPointName", "MainPointContent"]:
+            return f"{placeholder_type}_{index}"
+        else:
+            # For non-numbered placeholders like TitleName
+            return placeholder_type
+
     async def _create_processed_slide_from_template(
         self,
         template_slide: Dict[str, Any],
         parsed_data: Dict[str, List[Dict[str, Any]]],
-        content_index: Dict[str, int],
         slide_number: int,
-        is_reused: bool = False
+        is_reused: bool = False,
+        template_requirements: Dict[str, Any] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Tạo processed slide từ template slide với content mapping
@@ -1695,18 +1884,21 @@ SHORTENED CONTENT:"""
             processed_slide["slideData"]["title"] = f"Slide {slide_number}"
             processed_slide["slideData"]["elements"] = []  # Reset elements để fill content mới
 
-            # Placeholder patterns để detect từ text elements
+            # New placeholder patterns for the updated format
             placeholder_patterns = {
                 "LessonName": r"LessonName\s+(\d+)",
                 "LessonDescription": r"LessonDescription\s+(\d+)",
                 "CreatedDate": r"CreatedDate\s+(\d+)",
                 "TitleName": r"TitleName\s+(\d+)",
-                "TitleContent": r"TitleContent\s+(\d+)",
-                "SubtitleName": r"SubtitleName\s+(\d+)",
-                "SubtitleContent": r"SubtitleContent\s+(\d+)",
+                "MainPointName": r"MainPointName\s+(\d+)",
+                "MainPointContent": r"MainPointContent\s+(\d+)",
                 "ImageName": r"ImageName\s+(\d+)",
                 "ImageContent": r"ImageContent\s+(\d+)"
             }
+
+            # Initialize template requirements if not provided
+            if template_requirements is None:
+                template_requirements = {}
 
             # Map content vào từng element (format mới)
             for element in template_elements:
@@ -1718,52 +1910,58 @@ SHORTENED CONTENT:"""
                     placeholder_result = self._detect_placeholder_type_from_text(text, placeholder_patterns)
 
                     if placeholder_result:
-                        placeholder_type, max_length = placeholder_result
-
-                        # Get content for this placeholder type
-                        content_list = parsed_data.get(placeholder_type, [])
-                        current_index = content_index.get(placeholder_type, 0)
+                        placeholder_type, detected_max_length = placeholder_result
 
                         logger.info(f"🔍 Mapping content for {placeholder_type}:")
-                        logger.info(f"   Available content items: {len(content_list)}")
-                        logger.info(f"   Current index: {current_index}")
                         logger.info(f"   Element ID: {element_id}")
 
-                        if current_index < len(content_list):
-                            content_item = content_list[current_index]
+                        try:
+                            # Extract position info from element text for precise mapping
+                            placeholder_key = self._extract_placeholder_key_from_text(text, placeholder_type)
+                            template_max_length = None
+
+                            # Try to find max_length from template requirements using exact key
+                            if placeholder_key in template_requirements:
+                                template_max_length = template_requirements[placeholder_key].get("max_length")
+                            elif placeholder_type in template_requirements:
+                                template_max_length = template_requirements[placeholder_type].get("max_length")
+
+                            # Use template max_length if available, otherwise use detected max_length
+                            final_max_length = template_max_length if template_max_length is not None else detected_max_length
+
+                            # Get content with precise position mapping
+                            content_item = self._get_content_by_position(
+                                parsed_data, placeholder_type, placeholder_key
+                            )
+
+                            if not content_item:
+                                logger.warning(f"❌ No content found for {placeholder_key}")
+                                return None  # Skip slide if missing positioned content
+
                             raw_content = content_item.get("content", "")
-                            logger.info(f"   Raw content: {raw_content[:100]}...")
+                            logger.info(f"   Raw content for {placeholder_key}: {raw_content[:100]}...")
+                            logger.info(f"   Max length: {final_max_length} (template: {template_max_length}, detected: {detected_max_length})")
 
-                            try:
-                                # Check max_length and handle if needed
-                                final_content = await self._handle_max_length_content(
-                                    raw_content,
-                                    max_length,
-                                    placeholder_type
-                                )
+                            # Use existing _handle_max_length_content method
+                            final_content = await self._handle_max_length_content(
+                                raw_content,
+                                final_max_length,
+                                placeholder_type
+                            )
 
-                                # Copy element và update content (format mới)
-                                processed_element = copy.deepcopy(element)
-                                processed_element["text"] = final_content  # Update content
+                            # Copy element và update content (format mới)
+                            processed_element = copy.deepcopy(element)
+                            processed_element["text"] = final_content  # Update content
 
-                                processed_slide["slideData"]["elements"].append(processed_element)
+                            processed_slide["slideData"]["elements"].append(processed_element)
 
-                                # Increment content index
-                                content_index[placeholder_type] = current_index + 1
+                            logger.info(f"✅ Mapped {placeholder_key} to {element_id}: {final_content[:100]}...")
+                            logger.info(f"   Final content length: {len(final_content)}")
 
-                                logger.info(f"✅ Mapped {placeholder_type} to {element_id}: {final_content[:100]}...")
-                                logger.info(f"   Final content length: {len(final_content)}")
-
-                            except Exception as e:
-                                logger.error(f"❌ Failed to handle content for {placeholder_type} in slide {slide_number}: {e}")
-                                logger.error(f"   Content length: {len(raw_content)}, Max length: {max_length}")
-                                logger.error(f"   SKIPPING this slide due to content length issue - NO FALLBACK")
-                                return None  # Skip entire slide if any content fails
-                        else:
-                            logger.warning(f"❌ No more content available for {placeholder_type} in slide {slide_number}")
-                            logger.warning(f"   Available content items: {len(content_list)}")
-                            logger.warning(f"   Current index: {current_index}")
-                            return None  # Skip slide if missing content
+                        except Exception as e:
+                            logger.error(f"❌ Failed to handle content for {placeholder_type} in slide {slide_number}: {e}")
+                            logger.error(f"   SKIPPING this slide due to content length issue - NO FALLBACK")
+                            return None  # Skip entire slide if any content fails
                     else:
                         # Copy element không phải placeholder (image, etc.)
                         processed_element = copy.deepcopy(element)
@@ -1803,6 +2001,72 @@ SHORTENED CONTENT:"""
 
         except Exception as e:
             logger.error(f"❌ Error detecting placeholder type from text '{text}': {e}")
+            return None
+
+    def _extract_placeholder_key_from_text(self, text: str, placeholder_type: str) -> str:
+        """
+        Extract exact placeholder key from element text
+        Ví dụ: "MainPointName 1 80" -> "MainPointName_1"
+        """
+        try:
+            import re
+
+            # Pattern để extract numbers từ text - chỉ single numbering
+            pattern = rf'{placeholder_type}\s+(\d+)\s+\d+'
+            match = re.search(pattern, text)
+
+            if match:
+                main_num = match.group(1)
+                # Single numbered: MainPointName_1, MainPointContent_1
+                return f"{placeholder_type}_{main_num}"
+            else:
+                # Non-numbered: TitleName
+                return placeholder_type
+
+        except Exception as e:
+            logger.error(f"❌ Error extracting placeholder key from text '{text}': {e}")
+            return placeholder_type
+
+    def _get_content_by_position(
+        self,
+        parsed_data: Dict[str, List[Dict[str, Any]]],
+        placeholder_type: str,
+        placeholder_key: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get content by exact position based on placeholder key
+        """
+        try:
+            content_list = parsed_data.get(placeholder_type, [])
+
+            if not content_list:
+                return None
+
+            # For positioned placeholders, find by exact position_key match
+            if placeholder_type in ["MainPointName", "MainPointContent"]:
+                for item in content_list:
+                    if item.get("position_key") == placeholder_key:
+                        logger.info(f"✅ Found exact position match for {placeholder_key}")
+                        return item
+
+                # Fallback: try to find by position parsing
+                logger.warning(f"⚠️ No exact position match for {placeholder_key}, using fallback")
+                parts = placeholder_key.split('_')
+
+                if placeholder_type in ["MainPointName", "MainPointContent"] and len(parts) >= 2:
+                    target_main = int(parts[1])
+                    for item in content_list:
+                        if item.get("main_point") == target_main:
+                            return item
+            else:
+                # Non-numbered placeholders: TitleName, LessonName, etc.
+                if len(content_list) > 0:
+                    return content_list[0]
+
+            return None
+
+        except Exception as e:
+            logger.error(f"❌ Error getting content by position for {placeholder_key}: {e}")
             return None
 
 
