@@ -1884,16 +1884,16 @@ SHORTENED CONTENT:"""
             processed_slide["slideData"]["title"] = f"Slide {slide_number}"
             processed_slide["slideData"]["elements"] = []  # Reset elements để fill content mới
 
-            # New placeholder patterns for the updated format
+            # New placeholder patterns for the updated format - match both space and underscore formats
             placeholder_patterns = {
-                "LessonName": r"LessonName\s+(\d+)",
-                "LessonDescription": r"LessonDescription\s+(\d+)",
-                "CreatedDate": r"CreatedDate\s+(\d+)",
-                "TitleName": r"TitleName\s+(\d+)",
-                "MainPointName": r"MainPointName\s+(\d+)",
-                "MainPointContent": r"MainPointContent\s+(\d+)",
-                "ImageName": r"ImageName\s+(\d+)",
-                "ImageContent": r"ImageContent\s+(\d+)"
+                "LessonName": r"LessonName[_\s]+(\d+)",
+                "LessonDescription": r"LessonDescription[_\s]+(\d+)",
+                "CreatedDate": r"CreatedDate[_\s]+(\d+)",
+                "TitleName": r"TitleName[_\s]+(\d+)",
+                "MainPointName": r"MainPointName[_\s]+(\d+)",
+                "MainPointContent": r"MainPointContent[_\s]+(\d+)",
+                "ImageName": r"ImageName[_\s]+(\d+)",
+                "ImageContent": r"ImageContent[_\s]+(\d+)"
             }
 
             # Initialize template requirements if not provided
@@ -1907,7 +1907,9 @@ SHORTENED CONTENT:"""
                     element_id = element.get("id")
 
                     # Detect placeholder type từ text
+                    logger.info(f"🔍 Checking element text for placeholder: '{text}'")
                     placeholder_result = self._detect_placeholder_type_from_text(text, placeholder_patterns)
+                    logger.info(f"🎯 Placeholder detection result: {placeholder_result}")
 
                     if placeholder_result:
                         placeholder_type, detected_max_length = placeholder_result
@@ -2006,22 +2008,30 @@ SHORTENED CONTENT:"""
     def _extract_placeholder_key_from_text(self, text: str, placeholder_type: str) -> str:
         """
         Extract exact placeholder key from element text
-        Ví dụ: "MainPointName 1 80" -> "MainPointName_1"
+        Ví dụ: "MainPointName 1 80" -> "MainPointName_1" hoặc "MainPointName_1" -> "MainPointName_1"
         """
         try:
             import re
 
-            # Pattern để extract numbers từ text - chỉ single numbering
-            pattern = rf'{placeholder_type}\s+(\d+)\s+\d+'
-            match = re.search(pattern, text)
+            # Pattern để extract numbers từ text - support both space and underscore formats
+            # Format 1: "MainPointName 1 80" (space separated)
+            pattern1 = rf'{placeholder_type}\s+(\d+)\s+\d+'
+            match1 = re.search(pattern1, text)
 
-            if match:
-                main_num = match.group(1)
-                # Single numbered: MainPointName_1, MainPointContent_1
+            if match1:
+                main_num = match1.group(1)
                 return f"{placeholder_type}_{main_num}"
-            else:
-                # Non-numbered: TitleName
-                return placeholder_type
+
+            # Format 2: "MainPointName_1" (underscore format)
+            pattern2 = rf'{placeholder_type}_(\d+)'
+            match2 = re.search(pattern2, text)
+
+            if match2:
+                main_num = match2.group(1)
+                return f"{placeholder_type}_{main_num}"
+
+            # Non-numbered: TitleName
+            return placeholder_type
 
         except Exception as e:
             logger.error(f"❌ Error extracting placeholder key from text '{text}': {e}")
