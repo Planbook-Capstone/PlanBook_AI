@@ -300,7 +300,6 @@ class SlideInfoResponse(BaseModel):
     last_modified_time: Optional[str] = Field(None, description="Thời gian chỉnh sửa cuối cùng")
     error: Optional[str] = Field(None, description="Thông báo lỗi nếu có")
 
-
 # Error codes constants
 class SlideGenerationErrorCodes:
     """Constants cho error codes"""
