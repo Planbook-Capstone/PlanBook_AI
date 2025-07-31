@@ -1279,7 +1279,7 @@ LƯU Ý QUAN TRỌNG:
             enhanced_requirements.append("9. Phù hợp với trình độ học sinh")
 
         elif "bài tập" in node_title or "luyện tập" in node_title:
-            enhanced_requirements.append("8. Nêu rõ số trang, bài tập cụ thể trong SGK/SBT")
+            enhanced_requirements.append("8. Nêu rõ loại bài tập và mức độ khó")
             enhanced_requirements.append("9. Ước tính thời gian làm bài")
 
         elif "đánh giá" in node_title or "kiểm tra" in node_title:

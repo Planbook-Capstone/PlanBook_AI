@@ -207,51 +207,143 @@ class EnhancedTextbookService:
 
 
     def clean_text_content(self, text: str) -> str:
-        """Làm sạch nội dung text - loại bỏ ký tự đặc biệt, format không cần thiết"""
+        """Làm sạch nội dung text - format đơn giản, dễ đọc"""
         if not text:
             return ""
 
         logger.info("🧹 Cleaning text content...")
 
-        # Loại bỏ các ký tự đặc biệt và format markdown
-        cleaned_text = text
-
-        # Loại bỏ dấu * (markdown bold/italic)
+        # Loại bỏ markdown và ký tự đặc biệt
+        cleaned_text = text.strip()
         cleaned_text = re.sub(r'\*+', '', cleaned_text)
-
-        # Loại bỏ dấu # (markdown headers)
         cleaned_text = re.sub(r'#+\s*', '', cleaned_text)
-
-        # Loại bỏ dấu _ (markdown underline)
         cleaned_text = re.sub(r'_+', '', cleaned_text)
-
-        # Loại bỏ dấu ` (markdown code)
         cleaned_text = re.sub(r'`+', '', cleaned_text)
-
-        # Loại bỏ dấu [] và () (markdown links)
         cleaned_text = re.sub(r'\[([^\]]*)\]\([^\)]*\)', r'\1', cleaned_text)
+        cleaned_text = cleaned_text.replace('\b', '').replace('\r', '')
 
-        # Loại bỏ ký tự \b (backspace)
-        cleaned_text = cleaned_text.replace('\b', '')
+        # Loại bỏ các tham chiếu SGK và hướng dẫn tham khảo
+        sgk_patterns = [
+            r'SGK\s+trang\s+\d+',  # SGK trang X
+            r'Xem\s+bảng\s+\d+\.\d+\s*\([^)]*SGK[^)]*\)',  # Xem bảng X.X (SGK trang Y)
+            r'Quan\s+sát\s+hình\s+\d+\.\d+\s*\([^)]*SGK[^)]*\)',  # Quan sát hình X.X (SGK trang Y)
+            r'Tìm\s+hiểu\s+về[^.]*\([^)]*SGK[^)]*\)',  # Tìm hiểu về... (SGK trang Y)
+            r'Xem\s+bảng\s+\d+\.\d+[^.]*',  # Xem bảng X.X về...
+            r'Quan\s+sát\s+hình\s+\d+\.\d+[^.]*',  # Quan sát hình X.X về...
+            r'\([^)]*SGK\s+trang[^)]*\)',  # (SGK trang X)
+            r'- Xem bảng[^.]*\.',  # - Xem bảng...
+            r'- Quan sát[^.]*\.',  # - Quan sát...
+            r'- Tìm hiểu[^.]*\.',  # - Tìm hiểu...
+        ]
 
-        # Loại bỏ ký tự \r
-        cleaned_text = cleaned_text.replace('\r', '')
+        for pattern in sgk_patterns:
+            cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE)
 
-        # Thay thế nhiều dấu xuống dòng liên tiếp bằng 1 dấu xuống dòng
-        cleaned_text = re.sub(r'\n\s*\n\s*\n+', '\n\n', cleaned_text)
-
-        # Loại bỏ khoảng trắng thừa ở đầu và cuối mỗi dòng
+        # Loại bỏ các dòng chỉ chứa tham chiếu hoặc hướng dẫn
         lines = cleaned_text.split('\n')
-        cleaned_lines = [line.strip() for line in lines if line.strip()]
+        filtered_lines = []
+        for line in lines:
+            line_stripped = line.strip()
+            # Bỏ qua các dòng chỉ chứa tham chiếu
+            if (line_stripped.lower().startswith(('xem ', 'quan sát ', 'tìm hiểu ')) and
+                len(line_stripped) < 100):  # Các câu hướng dẫn thường ngắn
+                continue
+            if line_stripped:  # Chỉ giữ các dòng có nội dung
+                filtered_lines.append(line)
+        cleaned_text = '\n'.join(filtered_lines)
 
-        # Ghép lại thành một đoạn text liên tục
-        final_text = ' '.join(cleaned_lines)
+        # Loại bỏ bảng markdown (xử lý sau khi đã lọc tham chiếu SGK)
+        lines = cleaned_text.split('\n')
+        final_filtered_lines = []
+        for line in lines:
+            line_stripped = line.strip()
+            if (line_stripped.count('|') >= 2 or
+                (line_stripped.count('-') >= 3 and '|' in line_stripped)):
+                continue
+            final_filtered_lines.append(line)
+        cleaned_text = '\n'.join(final_filtered_lines)
 
-        # Loại bỏ khoảng trắng thừa
-        final_text = re.sub(r'\s+', ' ', final_text).strip()
+        # Chuẩn hóa định dạng hóa học
+        cleaned_text = self._normalize_chemistry_format(cleaned_text)
 
-        logger.info(f"🧹 Text cleaned: {len(text)} → {len(final_text)} chars")
-        return final_text
+        # Thay thế xuống dòng bằng <br/>
+        cleaned_text = cleaned_text.replace('\n', '<br/>')
+
+        # FORMAT MỚI: Đơn giản và dễ đọc
+        # 1. Định nghĩa: Giữ nguyên trên 1 dòng
+        cleaned_text = re.sub(r'Định nghĩa:\s*<br/>', 'Định nghĩa: ', cleaned_text)
+
+        # 2. Các tiêu đề chính: In đậm, không thụt lề
+        main_sections = ['Biểu hiện', 'Ví dụ', 'Ý nghĩa', 'Nhận biết', 'Trình bày', 'Vận dụng', 'Phân tích', 'Đánh giá']
+        for section in main_sections:
+            cleaned_text = cleaned_text.replace(f'<br/>{section}:', f'<br/><strong>{section}:</strong>')
+            if cleaned_text.startswith(f'{section}:'):
+                cleaned_text = cleaned_text.replace(f'{section}:', f'<strong>{section}:</strong>', 1)
+
+        # 3. Các mục con: Dùng bullet point (•) thay vì thụt lề nhiều
+        lines = cleaned_text.split('<br/>')
+        result_lines = []
+
+        for line in lines:
+            line = line.strip()
+            if line:
+                # Chỉ thêm bullet cho các mục con (không phải tiêu đề)
+                if (re.match(r'^[A-ZÀÁẠẢÃÂẦẤẬẨẪĂẰẮẶẲẴÈÉẸẺẼÊỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕÔỒỐỘỔỖƠỜỚỢỞỠÙÚỤỦŨƯỪỨỰỬỮỲÝỴỶỸĐ]', line)
+                    and '<strong>' not in line
+                    and not line.startswith('Định nghĩa:')):
+                    result_lines.append('• ' + line)
+                else:
+                    result_lines.append(line)
+
+        cleaned_text = '<br/>'.join(result_lines)
+
+        # Loại bỏ khoảng trắng thừa và <br/> liên tiếp
+        cleaned_text = re.sub(r'[ \t]+', ' ', cleaned_text).strip()
+        cleaned_text = re.sub(r'(<br/>){2,}', '<br/>', cleaned_text)
+
+        logger.info(f"🧹 Text cleaned: {len(text)} → {len(cleaned_text)} chars")
+        return cleaned_text
+
+    def _normalize_chemistry_format(self, text: str) -> str:
+        """
+        Chuyển đổi định dạng hóa học từ HTML sang định dạng chuẩn
+        VD: <sup>6</sup>Li -> ⁶Li, S<sub>8</sub> -> S₈, Fe<sup>2+</sup> -> Fe²⁺
+        """
+        if not text:
+            return text
+
+        # Chuyển đổi superscript với số và ký hiệu (chỉ số trên)
+        # Chỉ xử lý dấu + và - khi chúng nằm trong thẻ <sup>
+        sup_pattern = r'<sup>([^<]+)</sup>'
+
+        def replace_sup(match):
+            content = match.group(1)
+            result = ''
+            superscript_map = {
+                '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+                '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+                '+': '⁺', '-': '⁻'
+            }
+            for char in content:
+                result += superscript_map.get(char, char)
+            return result
+
+        text = re.sub(sup_pattern, replace_sup, text)
+
+        # Chuyển đổi subscript (chỉ số dưới)
+        sub_pattern = r'<sub>(\d+)</sub>'
+        subscript_map = {
+            '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
+            '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉'
+        }
+
+        def replace_sub(match):
+            number = match.group(1)
+            return ''.join(subscript_map.get(digit, digit) for digit in number)
+
+        text = re.sub(sub_pattern, replace_sub, text)
+
+        return text
 
     async def refine_raw_content_with_llm(self, raw_text: str) -> str:
         """Gửi text thô trực tiếp đến OpenRouter LLM để lọc và chỉnh sửa nội dung"""
@@ -267,25 +359,28 @@ Bạn là chuyên gia giáo dục, hãy lọc và cấu trúc lại nội dung s
 YÊU CẦU CẤU TRÚC:
 1. ĐỊNH NGHĨA: Bắt đầu bằng "Định nghĩa:" hoặc sử dụng cấu trúc "X là..." rõ ràng
 2. BÀI TẬP/VÍ DỤ: Đánh số rõ ràng "Bài 1.", "Ví dụ 1:", "Hãy cho biết..."
-3. BẢNG BIỂU: Bắt đầu bằng "Bảng X:" và giữ nguyên cấu trúc bảng
-4. TIỂU MỤC: Sử dụng "I.", "II.", "1.", "2." cho các phần chính
+3. TIỂU MỤC: Sử dụng "I.", "II.", "1.", "2." cho các phần chính
 
 YÊU CẦU NỘI DUNG:
 - Giữ lại toàn bộ khái niệm, định nghĩa, công thức, ví dụ quan trọng
 - Loại bỏ header, footer, số trang, watermark không liên quan
+- LOẠI BỎ HOÀN TOÀN tất cả các bảng dạng markdown (| col1 | col2 |) vì khó hiển thị trên UI
+- LOẠI BỎ HOÀN TOÀN các tham chiếu sách giáo khoa như "SGK trang X", "Xem bảng X.X (SGK trang Y)", "Quan sát hình X.X (SGK trang Y)" vì chúng ảnh hưởng đến chất lượng lesson plan
+- LOẠI BỎ các câu chỉ dẫn tham chiếu như "Tìm hiểu về...", "Xem bảng...", "Quan sát hình..." mà không có nội dung cụ thể
 - Giữ nguyên thuật ngữ khoa học và công thức (H2O, 1.672 x 10^-27, etc.)
 - Đảm bảo mỗi bài tập/ví dụ có đầy đủ đề bài và lời giải
-- Bảng phải hoàn chỉnh với tiêu đề và nội dung
+- Tập trung vào nội dung kiến thức cốt lõi, không cần các phần hướng dẫn tham khảo
 
 ĐỊNH DẠNG XUẤT:
-- Text thuần túy, không markdown
+- Text thuần túy, không markdown, KHÔNG có bảng
 - Mỗi phần cách nhau bằng dòng trống
 - Giữ nguyên ký hiệu khoa học (^, ², ³, →, ←, etc.)
+- Nội dung phải độc lập, không cần tham chiếu external
 
 NỘI DUNG CẦN CHỈNH SỬA:
 {raw_text[:8000]}
 
-Trả về nội dung đã được cấu trúc lại theo yêu cầu:"""
+Trả về nội dung đã được cấu trúc lại theo yêu cầu (KHÔNG bao gồm bảng và tham chiếu SGK):"""
 
             result = await openrouter_service.generate_content(
                 prompt=prompt,
