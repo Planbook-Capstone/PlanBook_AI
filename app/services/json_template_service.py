@@ -290,17 +290,7 @@ class JsonTemplateService:
                 "slides": []
             }
 
-            # Content tracking
-            all_parsed_data = {
-                "LessonName": [],
-                "LessonDescription": [],
-                "CreatedDate": [],
-                "TitleName": [],
-                "MainPointName": [],
-                "MainPointContent": [],
-                "ImageName": [],
-                "ImageContent": []
-            }
+            # Content tracking không còn cần thiết vì mỗi slide sử dụng data riêng
 
 
 
@@ -378,7 +368,6 @@ class JsonTemplateService:
                     slide_data,
                     template_slides,
                     used_slide_ids,
-                    all_parsed_data,
                     slide_num
                 )
 
@@ -470,7 +459,6 @@ class JsonTemplateService:
         slide_data: Dict[str, Any],
         template_slides: List[Dict[str, Any]],
         used_slide_ids: set,
-        all_parsed_data: Dict[str, List[Dict[str, Any]]],
         slide_number: int
     ) -> Dict[str, Any]:
         """
@@ -488,9 +476,9 @@ class JsonTemplateService:
             logger.info(f"   Required placeholders: {required_placeholders}")
             logger.info(f"   Required counts: {placeholder_counts}")
 
-            # Thêm parsed data vào all_parsed_data
-            for placeholder_type, items in parsed_data.items():
-                all_parsed_data[placeholder_type].extend(items)
+            # Sử dụng parsed_data riêng của slide này thay vì all_parsed_data chung
+            # để tránh việc các slide sử dụng content của nhau
+            slide_parsed_data = parsed_data
 
             # Tìm template phù hợp với exact matching requirements
             slide_description = slide_data.get("description", [])
@@ -538,10 +526,10 @@ class JsonTemplateService:
             template_description = best_template.get("description", "")
             template_requirements = self._parse_template_description(template_description)
 
-            # Tạo processed slide từ template
+            # Tạo processed slide từ template với parsed_data riêng của slide này
             processed_slide = await self._create_processed_slide_from_template(
                 best_template,
-                all_parsed_data,
+                slide_parsed_data,  # Sử dụng data riêng của slide này
                 slide_number,
                 is_reused,
                 template_requirements
@@ -967,10 +955,6 @@ JSON ĐẦU RA:
                     khung_slide_json["mainPoints"] = points
 
         khung_slide_str = json.dumps(khung_slide_json, ensure_ascii=False, indent=2)
-
-        default_config = """
-Bạn là chuyên gia thiết kế nội dung slide giáo dục chuyên nghiệp. Hãy chi tiết hóa nội dung slide theo yêu cầu.
-"""
 
         prompt = f"""Đóng vai trò người thiết kế bài thuyết trình giáo dục kinh nghiệm chuyên sâu.
 
