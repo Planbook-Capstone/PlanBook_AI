@@ -568,8 +568,8 @@ class JsonTemplateService:
             # Gọi LLM để tạo khung slide
             llm_response = await self.llm_service.generate_content(
                 prompt=framework_prompt,
-                max_tokens=30000,
-                temperature=0.1
+                max_tokens=45000,
+                temperature=0.07
             )
 
             if not llm_response.get("success", False):
@@ -671,10 +671,12 @@ JSON YÊU CẦU:
     "Sau mỗi ý chính, thêm một note thể hiện liệu có cần ví dụ minh họa, hình ảnh hỗ trợ hoặc giải thích thêm không.",
     "Slide đầu tiên phải là slide giới thiệu, gồm đúng 3 dòng: tên bài học, mô tả ngắn và ngày tạo bài thuyết trình.",
     "Đảm bảo trình tự các slide có tính logic, mạch lạc, dễ theo dõi.",
+    "\"title\" tuyệt đối không chứa các phân cấp như I, 1., a), ...",
+    "Kí hiệu hóa học phải chính xác với chỉ số dưới, trên hoặc cả hai, ví dụ: H₂O (không phải H2O), CO₂ (không phải CO2), Na⁺ (ion natri), Cl⁻ (ion clorua), CaCO₃, H₂SO₄, CH₄, ¹²₆C, etc.",
     "Tùy chỉnh kết quả theo personalize trong config bên dưới, ví dụ: điều chỉnh độ khó, văn phong, nội dung trình bày cho phù hợp đối tượng người học."
   ],
   "config": {{
-    "language": "vi",
+    "language": "vietnamese",
     "maxSlides": 20,
     "minSlides": 10,
     "outputFormat": "json",
@@ -854,8 +856,8 @@ JSON ĐẦU RA:
 
                 llm_response = await self.llm_service.generate_content(
                     prompt=detail_prompt,
-                    max_tokens=35000,
-                    temperature=0.1
+                    max_tokens=45000,
+                    temperature=0.07
                 )
                 logger.info(f"LLM response detail slide: {llm_response}")
                 if llm_response.get("success", False):
@@ -970,8 +972,10 @@ NỘI DUNG BÀI HỌC THAM KHẢO:
 
 JSON YÊU CẦU:
 {{
-  "instruction": "Viết nội dung chi tiết (viết vào field pointContent) cho mỗi ý chính \"point\" trong (`mainPoints`) từ khung slide dựa vào bài học",
+  "instruction": "Viết nội dung chi tiết (viết vào field pointContent) cho mỗi ý chính \"point\" trong (`mainPoints`)",
   "rules": [
+    "Kí hiệu hóa học phải chính xác với chỉ số dưới, trên hoặc cả hai, ví dụ: H₂O (không phải H2O), CO₂ (không phải CO2), Na⁺ (ion natri), Cl⁻ (ion clorua), CaCO₃, H₂SO₄, CH₄, ¹²₆C, etc.",
+    "\"pointContent\" phải được viết dưới dạng danh sách các ý con, mỗi ý bắt đầu bằng '-'",
     "Mỗi ý phải trình bày rõ ràng, đúng kiến thức, có thể bao gồm định nghĩa, giải thích, công thức, ví dụ cụ thể.",
     "Kiến thức bám sát nội dung bài học, chi tiết và đầy đủ.",
     "Các dạng bảng có trong NỘI DUNG BÀI HỌC phải thay đổi thành dạng chữ",
@@ -988,7 +992,7 @@ JSON YÊU CẦU:
      "Định dạng bằng | hoặc markdown"
     ],
   "config": {{
-    "language": "vi",
+    "language": "vietnamese",
     "outputFormat": "json",
     "date": "{current_date}",
     "personalize": "{config_prompt if config_prompt else 'Nội dung slide logic, dễ theo dõi, chuyên nghiệp.'}"
@@ -1006,12 +1010,19 @@ JSON ĐẦU RA:
           {{
             "point": "[Ý chính 1]",
             "number": 1,
-            "pointContent": "[Nội dung cho Ý chính 1]"
+            "pointContent": [
+              "[Nội dung cho Ý chính 1]",
+              "[Nội dung cho Ý chính 1]",
+              "[Nội dung cho Ý chính 1]"
+            ]
           }},
           {{
             "point": "[Ý chính 2]",
             "number": 2,
-            "pointContent": "[Nội dung cho Ý chính 2]"
+            "pointContent": [
+              "[Nội dung cho Ý chính 2]",
+              "[Nội dung cho Ý chính 2]"
+            ]
           }}
         ]
     }}
@@ -1076,18 +1087,16 @@ JSON ĐẦU RA:
                 if point_text:
                     text_parts.append(point_text)
 
-                # Process point contents
-                point_contents = main_point.get("pointContents", [])
-                for content in point_contents:
-                    sub_point = content.get("subPoint", "")
-                    sub_content = content.get("subContent", "")
-
-                    if sub_point and sub_content:
-                        text_parts.append(f"{sub_point}: {sub_content}")
-                    elif sub_content:
-                        text_parts.append(sub_content)
-                    elif sub_point:
-                        text_parts.append(sub_point)
+                # Process point contents (format mới với pointContent là array)
+                point_content = main_point.get("pointContent", [])
+                if isinstance(point_content, list):
+                    # pointContent là array, thêm từng item với dấu gạch đầu dòng
+                    for content_item in point_content:
+                        if content_item and content_item.strip():
+                            text_parts.append(f"- {content_item.strip()}")
+                elif point_content:
+                    # Fallback cho format cũ (pointContent là string)
+                    text_parts.append(f"- {point_content}")
 
                 text_parts.append("")  # Empty line between main points
 
@@ -1200,25 +1209,30 @@ JSON ĐẦU RA:
                 # Process main points với format mới
                 for main_point_idx, main_point in enumerate(main_points, 1):
                     point_text = main_point.get("point", "")
-                    point_content = main_point.get("pointContent", "")
+                    point_content = main_point.get("pointContent", [])  # Bây giờ là array
 
                     # point -> MainPointName
                     if point_text:
                         slide_data["parsed_data"]["MainPointName"].append({
-                            "content": point_text,
+                            "content": {0: point_text},  # Trả về dạng map với key là index
                             "main_point": main_point_idx,
                             "position_key": f"MainPointName_{main_point_idx}"
                         })
                         slide_data["description"].append(f"MainPointName_{main_point_idx}_{len(point_text)}")
 
-                    # pointContent -> MainPointContent
-                    if point_content:
-                        slide_data["parsed_data"]["MainPointContent"].append({
-                            "content": point_content,
-                            "main_point": main_point_idx,
-                            "position_key": f"MainPointContent_{main_point_idx}"
-                        })
-                        slide_data["description"].append(f"MainPointContent_{main_point_idx}_{len(point_content)}")
+                    # pointContent -> MainPointContent (xử lý array)
+                    if point_content and isinstance(point_content, list):
+                        # Chuyển array thành map với key là index
+                        content_map = {i: content for i, content in enumerate(point_content) if content.strip()}
+
+                        if content_map:  # Chỉ thêm nếu có nội dung
+                            slide_data["parsed_data"]["MainPointContent"].append({
+                                "content": content_map,  # Trả về dạng map với key là index
+                                "main_point": main_point_idx,
+                                "position_key": f"MainPointContent_{main_point_idx}"
+                            })
+                            total_content_length = sum(len(str(content)) for content in content_map.values())
+                            slide_data["description"].append(f"MainPointContent_{main_point_idx}_{total_content_length}")
 
                 # Update placeholder counts
                 slide_data["placeholder_counts"]["MainPointName"] = len(slide_data["parsed_data"]["MainPointName"])
@@ -1232,64 +1246,6 @@ JSON ĐẦU RA:
         except Exception as e:
             logger.error(f"❌ Error creating slide data from JSON for slide {slide_number}: {e}")
             raise
-
-
-
-    def _parse_placeholder_content(self, placeholder_content: str, slide_number: int) -> Dict[str, Any]:
-        """Parse placeholder content thành slide data"""
-        try:
-            # Parse content theo annotation format
-            parsed_data = {
-                "LessonName": [],
-                "LessonDescription": [],
-                "CreatedDate": [],
-                "TitleName": [],
-                "MainPointName": [],
-                "SubPointName": [],
-                "SubPointContent": [],
-                "ImageName": [],
-                "ImageContent": []
-            }
-
-            # Pattern để match: "content #*(PlaceholderType)*#"
-            valid_placeholders = '|'.join(parsed_data.keys())
-            pattern = rf'(.+?)\s*#\*\(({valid_placeholders})\)\*#'
-
-            matches = re.findall(pattern, placeholder_content, re.IGNORECASE | re.DOTALL)
-
-            for content, placeholder_type in matches:
-                clean_content = content.strip()
-                if clean_content:
-                    parsed_data[placeholder_type].append({
-                        "content": clean_content,
-                        "length": len(clean_content)
-                    })
-
-            # Tạo slide summary
-            placeholder_counts = {}
-            for placeholder_type, items in parsed_data.items():
-                if items:
-                    placeholder_counts[placeholder_type] = len(items)
-
-            slide_data = {
-                "slide_number": slide_number,
-                "parsed_data": parsed_data,
-                "placeholder_counts": placeholder_counts,
-                "raw_content": placeholder_content
-            }
-
-            logger.info(f"📋 Slide {slide_number} placeholder summary: {placeholder_counts}")
-            return slide_data
-
-        except Exception as e:
-            logger.error(f"❌ Error parsing placeholder content: {e}")
-            return {
-                "slide_number": slide_number,
-                "parsed_data": {},
-                "placeholder_counts": {},
-                "raw_content": placeholder_content,
-                "error": str(e)
-            }
 
     def _validate_and_fix_mapping(self, slide_data: Dict[str, Any], slide_number: int) -> Dict[str, Any]:
         """
@@ -1310,15 +1266,6 @@ JSON ĐẦU RA:
             logger.error(f"❌ Error validating mapping for slide {slide_number}: {e}")
             # Return original data if validation fails
             return slide_data
-
-
-
-
-
-
-
-
-
 
     def _generate_slide_description(self, placeholder_counts: Dict[str, int]) -> str:
         """
@@ -1387,10 +1334,6 @@ JSON ĐẦU RA:
             logger.error(f"❌ Error parsing Kafka description '{description}': {e}")
             return {}
 
-
-
-
-
     async def _handle_max_length_content(
         self,
         content: str,
@@ -1409,7 +1352,8 @@ JSON ĐẦU RA:
             for attempt in range(max_retries):
                 logger.info(f"🔄 Retry {attempt + 1}/{max_retries} to shorten content...")
 
-                shorten_prompt = f"""Hãy rút gọn nội dung sau để không vượt quá {max_length} ký tự, giữ nguyên ý nghĩa chính:
+                shorten_prompt = f"""
+Hãy rút gọn nội dung sau để không vượt quá {max_length} ký tự, giữ nguyên ý nghĩa chính:
 
 ORIGINAL CONTENT:
 {content}
@@ -1418,12 +1362,13 @@ REQUIREMENTS:
 - Tối đa {max_length} ký tự
 - Giữ nguyên ý nghĩa chính
 - Phù hợp với {placeholder_type}
+- Kí hiệu hóa học phải chính xác với chỉ số dưới, trên hoặc cả hai, ví dụ: H₂O (không phải H2O), CO₂ (không phải CO2), Na⁺ (ion natri), Cl⁻ (ion clorua), CaCO₃, H₂SO₄, CH₄, ¹²₆C, etc.
 
 SHORTENED CONTENT:"""
 
                 llm_response = await self.llm_service.generate_content(
                     prompt=shorten_prompt,
-                    max_tokens=15000,
+                    max_tokens=20000,
                     temperature=0.1
                 )
 
@@ -1926,12 +1871,24 @@ SHORTENED CONTENT:"""
                                 return None  # Skip slide if missing positioned content
 
                             raw_content = content_item.get("content", "")
-                            logger.info(f"   Raw content for {placeholder_key}: {raw_content[:100]}...")
+
+                            # Xử lý content dạng map (format mới)
+                            if isinstance(raw_content, dict):
+                                # Nếu content là map, ghép các value lại thành string
+                                content_parts = []
+                                for key in sorted(raw_content.keys()):
+                                    content_parts.append(f"- {raw_content[key]}")
+                                processed_raw_content = "\n".join(content_parts)
+                            else:
+                                # Nếu content là string (format cũ), giữ nguyên
+                                processed_raw_content = str(raw_content)
+
+                            logger.info(f"   Raw content for {placeholder_key}: {processed_raw_content[:100]}...")
                             logger.info(f"   Max length: {final_max_length} (template: {template_max_length}, detected: {detected_max_length})")
 
                             # Use existing _handle_max_length_content method
                             final_content = await self._handle_max_length_content(
-                                raw_content,
+                                processed_raw_content,
                                 final_max_length,
                                 placeholder_type
                             )
@@ -2063,9 +2020,6 @@ SHORTENED CONTENT:"""
         except Exception as e:
             logger.error(f"❌ Error getting content by position for {placeholder_key}: {e}")
             return None
-
-
-
 
 # Singleton instance
 _json_template_service = None
