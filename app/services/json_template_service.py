@@ -568,7 +568,7 @@ class JsonTemplateService:
             # Gọi LLM để tạo khung slide
             llm_response = await self.llm_service.generate_content(
                 prompt=framework_prompt,
-                max_tokens=20000,
+                max_tokens=30000,
                 temperature=0.1
             )
 
@@ -854,7 +854,7 @@ JSON ĐẦU RA:
 
                 llm_response = await self.llm_service.generate_content(
                     prompt=detail_prompt,
-                    max_tokens=30000,
+                    max_tokens=35000,
                     temperature=0.1
                 )
                 logger.info(f"LLM response detail slide: {llm_response}")
@@ -973,10 +973,11 @@ JSON YÊU CẦU:
   "instruction": "Viết nội dung chi tiết (viết vào field pointContent) cho mỗi ý chính \"point\" trong (`mainPoints`) từ khung slide dựa vào bài học",
   "rules": [
     "Mỗi ý phải trình bày rõ ràng, đúng kiến thức, có thể bao gồm định nghĩa, giải thích, công thức, ví dụ cụ thể.",
-    "Kiến thức bám sát nội dung bài học, chi tiết, đầy đủ.",
+    "Kiến thức bám sát nội dung bài học, chi tiết và đầy đủ.",
     "Các dạng bảng có trong NỘI DUNG BÀI HỌC phải thay đổi thành dạng chữ",
-    "Viết đúng số mainPoints trong khung slide, TUYỆT ĐỐI KHÔNG tạo thêm mainPoints mới.",
-    "Tùy chỉnh kết quả theo personalize trong config bên dưới, ví dụ: điều chỉnh độ khó, văn phong, nội dung trình bày cho phù hợp đối tượng người học."
+    "Viết đúng và đủ các \"mainPoints\" trong KHUNG SLIDE",
+    "TUYỆT ĐỐI KHÔNG tạo hay xóa \"mainPoints\" nào trong KHUNG SLIDE.",
+    "Tùy chỉnh kết quả theo \"personalize\" trong \"config\" bên dưới, ví dụ: điều chỉnh độ khó, văn phong, nội dung trình bày cho phù hợp đối tượng người học."
   ],
   "avoid": [
      "Tạo thêm mainPoints mới",
@@ -1422,7 +1423,7 @@ SHORTENED CONTENT:"""
 
                 llm_response = await self.llm_service.generate_content(
                     prompt=shorten_prompt,
-                    max_tokens=12000,
+                    max_tokens=15000,
                     temperature=0.1
                 )
 
