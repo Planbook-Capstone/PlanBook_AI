@@ -1386,6 +1386,89 @@ SHORTENED CONTENT:"""
             logger.error(f"❌ Error handling max_length content: {e}")
             return content  # Trả về content gốc, không truncate
 
+    async def _handle_max_length_content_map(
+        self,
+        content_map: any,
+        max_length: int,
+        placeholder_type: str,
+        max_retries: int = 3
+    ) -> Dict[str, str]:
+        """Xử lý content map vượt quá max_length bằng LLM"""
+        try:
+            # Nếu không phải dict, chuyển thành dict với key "0"
+            if not isinstance(content_map, dict):
+                content_map = {"0": str(content_map)}
+            # Tính tổng độ dài hiện tại
+            current_total_length = sum(len(str(value)) for value in content_map.values())
+
+            if current_total_length <= max_length:
+                return content_map
+
+            logger.info(f"⚠️ Content map too long for {placeholder_type}: {current_total_length} > {max_length}")
+
+            # Retry với LLM để rút gọn từng phần tử
+            for attempt in range(max_retries):
+                logger.info(f"🔄 Retry {attempt + 1}/{max_retries} to shorten content map...")
+
+                import json
+                content_map_json = json.dumps(content_map, ensure_ascii=False, indent=2)
+
+                shorten_prompt = f"""
+Hãy rút gọn nội dung trong JSON map sau để tổng số ký tự không vượt quá {max_length} ký tự, giữ nguyên ý nghĩa chính:
+
+ORIGINAL CONTENT MAP:
+{content_map_json}
+
+REQUIREMENTS:
+- Tổng số ký tự của tất cả values không vượt quá {max_length} ký tự
+- Giữ nguyên ý nghĩa chính của từng phần tử
+- Giữ nguyên cấu trúc JSON map với các key như ban đầu
+- Phù hợp với {placeholder_type}
+- Kí hiệu hóa học phải chính xác với chỉ số dưới, trên hoặc cả hai, ví dụ: H₂O (không phải H2O), CO₂ (không phải CO2), Na⁺ (ion natri), Cl⁻ (ion clorua), CaCO₃, H₂SO₄, CH₄, ¹²₆C, etc.
+- Chỉ trả về JSON map, không có text giải thích thêm
+
+SHORTENED CONTENT MAP:"""
+
+                llm_response = await self.llm_service.generate_content(
+                    prompt=shorten_prompt,
+                    max_tokens=20000,
+                    temperature=0.1
+                )
+
+                if llm_response.get("success", False):
+                    shortened_content = llm_response.get("text", "").strip()
+
+                    try:
+                        # Parse JSON response
+                        json_start = shortened_content.find('{')
+                        json_end = shortened_content.rfind('}') + 1
+
+                        if json_start != -1 and json_end > json_start:
+                            json_content = shortened_content[json_start:json_end]
+                            shortened_map = json.loads(json_content)
+
+                            # Kiểm tra tổng độ dài
+                            new_total_length = sum(len(str(value)) for value in shortened_map.values())
+
+                            if new_total_length <= max_length:
+                                logger.info(f"✅ Content map shortened: {new_total_length} chars (was {current_total_length})")
+                                return shortened_map
+                            else:
+                                logger.warning(f"⚠️ Shortened map still too long: {new_total_length} > {max_length}")
+                        else:
+                            logger.warning(f"⚠️ No valid JSON found in LLM response")
+
+                    except json.JSONDecodeError as je:
+                        logger.warning(f"⚠️ JSON decode error: {je}")
+
+            # Không sử dụng fallback truncation
+            logger.error(f"❌ Failed to shorten content map for {placeholder_type} after {max_retries} retries")
+            return content_map  # Trả về content gốc, để frontend xử lý
+
+        except Exception as e:
+            logger.error(f"❌ Error handling max_length content map: {e}")
+            return content_map  # Trả về content gốc
+
     def _find_best_matching_template_with_max_length(
         self,
         slide_description: List[str],
@@ -1872,35 +1955,25 @@ SHORTENED CONTENT:"""
 
                             raw_content = content_item.get("content", "")
 
-                            # Xử lý content dạng map (format mới)
-                            if isinstance(raw_content, dict):
-                                # Nếu content là map, ghép các value lại thành string
-                                content_parts = []
-                                for key in sorted(raw_content.keys()):
-                                    content_parts.append(f"- {raw_content[key]}")
-                                processed_raw_content = "\n".join(content_parts)
-                            else:
-                                # Nếu content là string (format cũ), giữ nguyên
-                                processed_raw_content = str(raw_content)
-
-                            logger.info(f"   Raw content for {placeholder_key}: {processed_raw_content[:100]}...")
+                            logger.info(f"   Raw content for {placeholder_key}: {str(raw_content)[:100]}...")
                             logger.info(f"   Max length: {final_max_length} (template: {template_max_length}, detected: {detected_max_length})")
 
-                            # Use existing _handle_max_length_content method
-                            final_content = await self._handle_max_length_content(
-                                processed_raw_content,
+                            # Xử lý content với format mới - truyền nguyên map cho LLM xử lý
+                            # Truyền nguyên map cho LLM để làm ngắn từng phần tử
+                            processed_content_map = await self._handle_max_length_content_map(
+                                raw_content,
                                 final_max_length,
                                 placeholder_type
                             )
 
-                            # Copy element và update content (format mới)
+                            # Copy element và update content với map đã được làm ngắn
                             processed_element = copy.deepcopy(element)
-                            processed_element["text"] = final_content  # Update content
+                            processed_element["text"] = processed_content_map  # Trực tiếp gán map
 
                             processed_slide["slideData"]["elements"].append(processed_element)
 
-                            logger.info(f"✅ Mapped {placeholder_key} to {element_id}: {final_content[:100]}...")
-                            logger.info(f"   Final content length: {len(final_content)}")
+                            logger.info(f"✅ Mapped {placeholder_key} to {element_id}: {str(processed_content_map)[:100]}...")
+                            logger.info(f"   Final content type: {type(processed_content_map)}, items: {len(processed_content_map) if isinstance(processed_content_map, dict) else 'N/A'}")
 
                         except Exception as e:
                             logger.error(f"❌ Failed to handle content for {placeholder_type} in slide {slide_number}: {e}")
