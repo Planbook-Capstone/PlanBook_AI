@@ -568,7 +568,7 @@ class JsonTemplateService:
             # Gọi LLM để tạo khung slide
             llm_response = await self.llm_service.generate_content(
                 prompt=framework_prompt,
-                max_tokens=45000,
+                max_tokens=50000,
                 temperature=0.07
             )
 
@@ -856,7 +856,7 @@ JSON ĐẦU RA:
 
                 llm_response = await self.llm_service.generate_content(
                     prompt=detail_prompt,
-                    max_tokens=45000,
+                    max_tokens=50000,
                     temperature=0.07
                 )
                 logger.info(f"LLM response detail slide: {llm_response}")
@@ -1431,7 +1431,7 @@ SHORTENED CONTENT MAP:"""
 
                 llm_response = await self.llm_service.generate_content(
                     prompt=shorten_prompt,
-                    max_tokens=20000,
+                    max_tokens=45000,
                     temperature=0.1
                 )
 
