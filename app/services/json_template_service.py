@@ -665,12 +665,12 @@ JSON YÊU CẦU:
   "rules": [
     "Tách lesson_content thành các slide với tiêu đề, mục đích và các ý chính rõ ràng.",
     "Mỗi slide thể hiện một chủ đề lớn, với mục đích cụ thể và nội dung cốt lõi.",
-    "Mỗi slide chứa tối đa 4 ý lớn. Linh hoạt trong 1-4 ý chính, không cố định.",
-    "Nếu nội dung cần hơn 4 ý lớn, hãy tạo slide mới nhưng giữ tiêu đề tương tự (ví dụ: Phần 1, Phần 2) và đảm bảo sự liên kết giữa các phần",
+    "Mỗi slide chứa tối đa 2 ý lớn. Linh hoạt trong 1-2 ý lớn.",
     "Các ý chính cần được mô tả rõ ràng, không sơ sài.",
-    "Sau mỗi ý chính, thêm một note thể hiện liệu có cần ví dụ minh họa, hình ảnh hỗ trợ hoặc giải thích thêm không.",
+    "Sau mỗi ý chính, thêm một \"note\" thể hiện liệu có cần ví dụ minh họa hoặc giải thích thêm không.",
+    "\"images\" thể hiện liệu có cần hình ảnh hỗ trợ thêm không (nên có), nếu không hãy để là \"không cần hình ảnh"\.",
     "Slide đầu tiên phải là slide giới thiệu, gồm đúng 3 dòng: tên bài học, mô tả ngắn và ngày tạo bài thuyết trình.",
-    "Đảm bảo trình tự các slide có tính logic, mạch lạc, dễ theo dõi.",
+    "Đảm bảo trình tự các slide có tính logic, mạch lạc, dễ theo dõi, đảm bảo sự liên kết giữa các phần.",
     "\"title\" tuyệt đối không chứa các phân cấp như I, 1., a), ...",
     "Kí hiệu hóa học phải chính xác với chỉ số dưới, trên hoặc cả hai, ví dụ: H₂O (không phải H2O), CO₂ (không phải CO2), Na⁺ (ion natri), Cl⁻ (ion clorua), CaCO₃, H₂SO₄, CH₄, ¹²₆C, etc.",
     "Tùy chỉnh kết quả theo personalize trong config bên dưới, ví dụ: điều chỉnh độ khó, văn phong, nội dung trình bày cho phù hợp đối tượng người học."
@@ -702,11 +702,13 @@ JSON ĐẦU RA:
         "mainPoints": [
           {{
             "point": "[Ý chính 1]",
-            "note": "[Có cần ví dụ minh họa / hình ảnh / cần giải thích thêm hay chi tiết gì không?]"
+            "note": "[Có cần ví dụ minh họa / cần giải thích thêm hay chi tiết gì không?]",
+            "images": "[Cần hình ảnh gì không?]"
           }},
           {{
             "point": "[Ý chính 2]",
-            "note": "[Gợi ý nếu cần hỗ trợ trực quan hoặc mở rộng nội dung]"
+            "note": "[Có cần ví dụ minh họa / cần giải thích thêm hay chi tiết gì không?]",
+            "images": "[Cần hình ảnh gì không?]"
           }}
         ]  
       }}
@@ -717,7 +719,7 @@ JSON ĐẦU RA:
     "type": "intro hoặc content",
     "title": "Tiêu đề chính của slide",
     "purpose": "Mục tiêu truyền đạt của slide",
-    "mainPoints": "Tối đa 4 mục chính mỗi slide, mỗi mục có ghi chú đi kèm",
+    "mainPoints": "Tối đa 2 mục chính mỗi slide, mỗi mục có ghi chú đi kèm",
     "user_config": "Tùy chỉnh đầu ra theo đối tượng, phong cách, độ khó và yêu cầu trực quan"
   }}
 }}"""
@@ -979,8 +981,9 @@ JSON YÊU CẦU:
     "Mỗi ý phải trình bày rõ ràng, đúng kiến thức, có thể bao gồm định nghĩa, giải thích, công thức, ví dụ cụ thể.",
     "Kiến thức bám sát nội dung bài học, chi tiết và đầy đủ.",
     "Các dạng bảng có trong NỘI DUNG BÀI HỌC phải thay đổi thành dạng chữ",
-    "Viết đúng và đủ các \"mainPoints\" trong KHUNG SLIDE",
-    "TUYỆT ĐỐI KHÔNG tạo hay xóa \"mainPoints\" nào trong KHUNG SLIDE.",
+    "\"images\" không bắt buộc nhưng nên có, tham khảo field \"images\" trong KHUNG SLIDE, đặc biệt để đúng ý chính.",
+    "Viết đúng và đủ các point trong \"mainPoints\" của KHUNG SLIDE",
+    "TUYỆT ĐỐI KHÔNG thêm mới hay xóa point nào trong \"mainPoints\" của KHUNG SLIDE.",
     "Tùy chỉnh kết quả theo \"personalize\" trong \"config\" bên dưới, ví dụ: điều chỉnh độ khó, văn phong, nội dung trình bày cho phù hợp đối tượng người học."
   ],
   "avoid": [
@@ -1014,7 +1017,11 @@ JSON ĐẦU RA:
               "[Nội dung cho Ý chính 1]",
               "[Nội dung cho Ý chính 1]",
               "[Nội dung cho Ý chính 1]"
-            ]
+            ],
+            "images": {{
+              "name": "[Tên hình ảnh]",
+              "content": "[Mô tả hình ảnh hỗ trợ cho nội dung bằng chữ ]"
+            }}
           }},
           {{
             "point": "[Ý chính 2]",
@@ -1022,7 +1029,11 @@ JSON ĐẦU RA:
             "pointContent": [
               "[Nội dung cho Ý chính 2]",
               "[Nội dung cho Ý chính 2]"
-            ]
+            ],
+            "images": {{
+              "name": "[Tên hình ảnh]",
+              "content": "[Mô tả hình ảnh hỗ trợ cho nội dung bằng chữ ]"
+            }}
           }}
         ]
     }}
@@ -1207,6 +1218,7 @@ JSON ĐẦU RA:
                     slide_data["description"].append(f"TitleName_{len(title)}")
 
                 # Process main points với format mới
+                image_counter = 0  # Counter cho images từ tất cả main points
                 for main_point_idx, main_point in enumerate(main_points, 1):
                     point_text = main_point.get("point", "")
                     point_content = main_point.get("pointContent", [])  # Bây giờ là array
@@ -1234,9 +1246,38 @@ JSON ĐẦU RA:
                             total_content_length = sum(len(str(content)) for content in content_map.values())
                             slide_data["description"].append(f"MainPointContent_{main_point_idx}_{total_content_length}")
 
+                    # Process images từ trong main point
+                    main_point_images = main_point.get("images", {})
+                    if main_point_images and isinstance(main_point_images, dict):
+                        image_counter += 1
+                        image_name = main_point_images.get("name", "")
+                        image_content = main_point_images.get("content", "")
+
+                        # name -> ImageName
+                        if image_name:
+                            slide_data["parsed_data"]["ImageName"].append({
+                                "content": {0: image_name},  # Map với key "0"
+                                "image": image_counter,
+                                "position_key": f"ImageName_{image_counter}"
+                            })
+                            slide_data["description"].append(f"ImageName_{image_counter}_{len(image_name)}")
+
+                        # content -> ImageContent (chỉ key "0")
+                        if image_content:
+                            slide_data["parsed_data"]["ImageContent"].append({
+                                "content": {0: image_content},  # Map với key "0"
+                                "image": image_counter,
+                                "position_key": f"ImageContent_{image_counter}"
+                            })
+                            slide_data["description"].append(f"ImageContent_{image_counter}_{len(image_content)}")
+
+
+
                 # Update placeholder counts
                 slide_data["placeholder_counts"]["MainPointName"] = len(slide_data["parsed_data"]["MainPointName"])
                 slide_data["placeholder_counts"]["MainPointContent"] = len(slide_data["parsed_data"]["MainPointContent"])
+                slide_data["placeholder_counts"]["ImageName"] = len(slide_data["parsed_data"]["ImageName"])
+                slide_data["placeholder_counts"]["ImageContent"] = len(slide_data["parsed_data"]["ImageContent"])
 
             logger.info(f"📊 Created slide data for slide {slide_number}:")
             logger.info(f"   Placeholder counts: {slide_data['placeholder_counts']}")
@@ -1348,15 +1389,19 @@ JSON ĐẦU RA:
 
             logger.info(f"⚠️ Content too long for {placeholder_type}: {len(content)} > {max_length}")
 
+            # Sử dụng biến working_content để lưu kết quả từ lần retry trước
+            working_content = content
+
             # Retry với LLM để rút gọn
             for attempt in range(max_retries):
                 logger.info(f"🔄 Retry {attempt + 1}/{max_retries} to shorten content...")
 
+                # Sử dụng working_content thay vì content gốc
                 shorten_prompt = f"""
 Hãy rút gọn nội dung sau để không vượt quá {max_length} ký tự, giữ nguyên ý nghĩa chính:
 
 ORIGINAL CONTENT:
-{content}
+{working_content}
 
 REQUIREMENTS:
 - Tối đa {max_length} ký tự
@@ -1377,6 +1422,10 @@ SHORTENED CONTENT:"""
                     if len(shortened_content) <= max_length:
                         logger.info(f"✅ Content shortened: {len(shortened_content)} chars")
                         return shortened_content
+                    else:
+                        # Cập nhật working_content với kết quả vừa được làm ngắn để sử dụng cho lần retry tiếp theo
+                        logger.warning(f"⚠️ Shortened content still too long: {len(shortened_content)} > {max_length}")
+                        working_content = shortened_content
 
             # Không sử dụng fallback truncation
             logger.error(f"❌ Failed to shorten content for {placeholder_type} after {max_retries} retries")
@@ -1406,12 +1455,16 @@ SHORTENED CONTENT:"""
 
             logger.info(f"⚠️ Content map too long for {placeholder_type}: {current_total_length} > {max_length}")
 
+            # Sử dụng biến working_content_map để lưu kết quả từ lần retry trước
+            working_content_map = content_map
+
             # Retry với LLM để rút gọn từng phần tử
             for attempt in range(max_retries):
                 logger.info(f"🔄 Retry {attempt + 1}/{max_retries} to shorten content map...")
 
                 import json
-                content_map_json = json.dumps(content_map, ensure_ascii=False, indent=2)
+                # Sử dụng working_content_map thay vì content_map gốc
+                content_map_json = json.dumps(working_content_map, ensure_ascii=False, indent=2)
 
                 shorten_prompt = f"""
 Hãy rút gọn nội dung trong JSON map sau để tổng số ký tự không vượt quá {max_length} ký tự, giữ nguyên ý nghĩa chính:
@@ -1423,7 +1476,6 @@ REQUIREMENTS:
 - Tổng số ký tự của tất cả values không vượt quá {max_length} ký tự
 - Giữ nguyên ý nghĩa chính của từng phần tử
 - Giữ nguyên cấu trúc JSON map với các key như ban đầu
-- Phù hợp với {placeholder_type}
 - Kí hiệu hóa học phải chính xác với chỉ số dưới, trên hoặc cả hai, ví dụ: H₂O (không phải H2O), CO₂ (không phải CO2), Na⁺ (ion natri), Cl⁻ (ion clorua), CaCO₃, H₂SO₄, CH₄, ¹²₆C, etc.
 - Chỉ trả về JSON map, không có text giải thích thêm
 
@@ -1455,19 +1507,23 @@ SHORTENED CONTENT MAP:"""
                                 return shortened_map
                             else:
                                 logger.warning(f"⚠️ Shortened map still too long: {new_total_length} > {max_length}")
+                                # Cập nhật working_content_map với kết quả vừa được làm ngắn để sử dụng cho lần retry tiếp theo
+                                working_content_map = shortened_map
+                                current_total_length = new_total_length
                         else:
                             logger.warning(f"⚠️ No valid JSON found in LLM response")
 
                     except json.JSONDecodeError as je:
                         logger.warning(f"⚠️ JSON decode error: {je}")
 
-            # Không sử dụng fallback truncation
-            logger.error(f"❌ Failed to shorten content map for {placeholder_type} after {max_retries} retries")
-            return content_map  # Trả về content gốc, để frontend xử lý
+            # Trả về kết quả của lần thử cuối cùng thay vì content gốc
+            final_length = sum(len(str(value)) for value in working_content_map.values())
+            logger.warning(f"⚠️ Using best shortened result after {max_retries} retries: {final_length} chars (target: {max_length})")
+            return working_content_map  # Trả về kết quả tốt nhất đã làm ngắn
 
         except Exception as e:
             logger.error(f"❌ Error handling max_length content map: {e}")
-            return content_map  # Trả về content gốc
+            return content_map  # Trả về content gốc nếu có lỗi exception
 
     def _find_best_matching_template_with_max_length(
         self,
@@ -1846,8 +1902,8 @@ SHORTENED CONTENT MAP:"""
 
     def _create_placeholder_key(self, placeholder_type: str, index: int) -> str:
         """Create placeholder key for template lookup"""
-        # For numbered placeholders like MainPointName_1, MainPointContent_1
-        if placeholder_type in ["MainPointName", "MainPointContent"]:
+        # For numbered placeholders like MainPointName_1, MainPointContent_1, ImageName_1, ImageContent_1
+        if placeholder_type in ["MainPointName", "MainPointContent", "ImageName", "ImageContent"]:
             return f"{placeholder_type}_{index}"
         else:
             # For non-numbered placeholders like TitleName
@@ -2068,7 +2124,7 @@ SHORTENED CONTENT MAP:"""
                 return None
 
             # For positioned placeholders, find by exact position_key match
-            if placeholder_type in ["MainPointName", "MainPointContent"]:
+            if placeholder_type in ["MainPointName", "MainPointContent", "ImageName", "ImageContent"]:
                 for item in content_list:
                     if item.get("position_key") == placeholder_key:
                         logger.info(f"✅ Found exact position match for {placeholder_key}")
@@ -2082,6 +2138,11 @@ SHORTENED CONTENT MAP:"""
                     target_main = int(parts[1])
                     for item in content_list:
                         if item.get("main_point") == target_main:
+                            return item
+                elif placeholder_type in ["ImageName", "ImageContent"] and len(parts) >= 2:
+                    target_image = int(parts[1])
+                    for item in content_list:
+                        if item.get("image") == target_image:
                             return item
             else:
                 # Non-numbered placeholders: TitleName, LessonName, etc.
