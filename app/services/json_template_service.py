@@ -668,7 +668,6 @@ JSON YÊU CẦU:
     "Mỗi slide chứa tối đa 2 ý lớn. Linh hoạt trong 1-2 ý lớn.",
     "Các ý chính cần được mô tả rõ ràng, không sơ sài.",
     "Sau mỗi ý chính, thêm một \"note\" thể hiện liệu có cần ví dụ minh họa hoặc giải thích thêm không.",
-    "\"images\" thể hiện liệu có cần hình ảnh hỗ trợ thêm không (nên có), nếu không hãy để là \"không cần hình ảnh"\.",
     "Slide đầu tiên phải là slide giới thiệu, gồm đúng 3 dòng: tên bài học, mô tả ngắn và ngày tạo bài thuyết trình.",
     "Đảm bảo trình tự các slide có tính logic, mạch lạc, dễ theo dõi, đảm bảo sự liên kết giữa các phần.",
     "\"title\" tuyệt đối không chứa các phân cấp như I, 1., a), ...",
@@ -702,13 +701,12 @@ JSON ĐẦU RA:
         "mainPoints": [
           {{
             "point": "[Ý chính 1]",
-            "note": "[Có cần ví dụ minh họa / cần giải thích thêm hay chi tiết gì không?]",
-            "images": "[Cần hình ảnh gì không?]"
+            "note": "[Có cần ví dụ minh họa / cần giải thích thêm hay chi tiết gì không?]"
+           
           }},
           {{
             "point": "[Ý chính 2]",
-            "note": "[Có cần ví dụ minh họa / cần giải thích thêm hay chi tiết gì không?]",
-            "images": "[Cần hình ảnh gì không?]"
+            "note": "[Có cần ví dụ minh họa / cần giải thích thêm hay chi tiết gì không?]"
           }}
         ]  
       }}
@@ -981,7 +979,6 @@ JSON YÊU CẦU:
     "Mỗi ý phải trình bày rõ ràng, đúng kiến thức, có thể bao gồm định nghĩa, giải thích, công thức, ví dụ cụ thể.",
     "Kiến thức bám sát nội dung bài học, chi tiết và đầy đủ.",
     "Các dạng bảng có trong NỘI DUNG BÀI HỌC phải thay đổi thành dạng chữ",
-    "\"images\" không bắt buộc nhưng nên có, tham khảo field \"images\" trong KHUNG SLIDE, đặc biệt để đúng ý chính.",
     "Viết đúng và đủ các point trong \"mainPoints\" của KHUNG SLIDE",
     "TUYỆT ĐỐI KHÔNG thêm mới hay xóa point nào trong \"mainPoints\" của KHUNG SLIDE.",
     "Tùy chỉnh kết quả theo \"personalize\" trong \"config\" bên dưới, ví dụ: điều chỉnh độ khó, văn phong, nội dung trình bày cho phù hợp đối tượng người học."
@@ -1017,11 +1014,7 @@ JSON ĐẦU RA:
               "[Nội dung cho Ý chính 1]",
               "[Nội dung cho Ý chính 1]",
               "[Nội dung cho Ý chính 1]"
-            ],
-            "images": {{
-              "name": "[Tên hình ảnh]",
-              "content": "[Mô tả hình ảnh hỗ trợ cho nội dung bằng chữ ]"
-            }}
+            ]
           }},
           {{
             "point": "[Ý chính 2]",
@@ -1029,11 +1022,7 @@ JSON ĐẦU RA:
             "pointContent": [
               "[Nội dung cho Ý chính 2]",
               "[Nội dung cho Ý chính 2]"
-            ],
-            "images": {{
-              "name": "[Tên hình ảnh]",
-              "content": "[Mô tả hình ảnh hỗ trợ cho nội dung bằng chữ ]"
-            }}
+            ]
           }}
         ]
     }}
@@ -1176,9 +1165,7 @@ JSON ĐẦU RA:
                     "CreatedDate": [],
                     "TitleName": [],
                     "MainPointName": [],
-                    "MainPointContent": [],
-                    "ImageName": [],
-                    "ImageContent": []
+                    "MainPointContent": []
                 },
                 "placeholder_counts": {},
                 "description": []  # New field for placeholder descriptions
@@ -1218,7 +1205,6 @@ JSON ĐẦU RA:
                     slide_data["description"].append(f"TitleName_{len(title)}")
 
                 # Process main points với format mới
-                image_counter = 0  # Counter cho images từ tất cả main points
                 for main_point_idx, main_point in enumerate(main_points, 1):
                     point_text = main_point.get("point", "")
                     point_content = main_point.get("pointContent", [])  # Bây giờ là array
@@ -1246,38 +1232,9 @@ JSON ĐẦU RA:
                             total_content_length = sum(len(str(content)) for content in content_map.values())
                             slide_data["description"].append(f"MainPointContent_{main_point_idx}_{total_content_length}")
 
-                    # Process images từ trong main point
-                    main_point_images = main_point.get("images", {})
-                    if main_point_images and isinstance(main_point_images, dict):
-                        image_counter += 1
-                        image_name = main_point_images.get("name", "")
-                        image_content = main_point_images.get("content", "")
-
-                        # name -> ImageName
-                        if image_name:
-                            slide_data["parsed_data"]["ImageName"].append({
-                                "content": {0: image_name},  # Map với key "0"
-                                "image": image_counter,
-                                "position_key": f"ImageName_{image_counter}"
-                            })
-                            slide_data["description"].append(f"ImageName_{image_counter}_{len(image_name)}")
-
-                        # content -> ImageContent (chỉ key "0")
-                        if image_content:
-                            slide_data["parsed_data"]["ImageContent"].append({
-                                "content": {0: image_content},  # Map với key "0"
-                                "image": image_counter,
-                                "position_key": f"ImageContent_{image_counter}"
-                            })
-                            slide_data["description"].append(f"ImageContent_{image_counter}_{len(image_content)}")
-
-
-
                 # Update placeholder counts
                 slide_data["placeholder_counts"]["MainPointName"] = len(slide_data["parsed_data"]["MainPointName"])
                 slide_data["placeholder_counts"]["MainPointContent"] = len(slide_data["parsed_data"]["MainPointContent"])
-                slide_data["placeholder_counts"]["ImageName"] = len(slide_data["parsed_data"]["ImageName"])
-                slide_data["placeholder_counts"]["ImageContent"] = len(slide_data["parsed_data"]["ImageContent"])
 
             logger.info(f"📊 Created slide data for slide {slide_number}:")
             logger.info(f"   Placeholder counts: {slide_data['placeholder_counts']}")
@@ -1902,8 +1859,8 @@ SHORTENED CONTENT MAP:"""
 
     def _create_placeholder_key(self, placeholder_type: str, index: int) -> str:
         """Create placeholder key for template lookup"""
-        # For numbered placeholders like MainPointName_1, MainPointContent_1, ImageName_1, ImageContent_1
-        if placeholder_type in ["MainPointName", "MainPointContent", "ImageName", "ImageContent"]:
+        # For numbered placeholders like MainPointName_1, MainPointContent_1
+        if placeholder_type in ["MainPointName", "MainPointContent"]:
             return f"{placeholder_type}_{index}"
         else:
             # For non-numbered placeholders like TitleName
@@ -1947,11 +1904,17 @@ SHORTENED CONTENT MAP:"""
             # Copy toàn bộ slide structure từ template (format mới)
             processed_slide = copy.deepcopy(template_slide)
 
-            # Update slide ID và reset elements để fill content mới
+            # Update slide ID và giữ lại elements không phải text
             processed_slide["id"] = new_slide_id
             processed_slide["slideData"]["id"] = new_slide_id
             processed_slide["slideData"]["title"] = f"Slide {slide_number}"
-            processed_slide["slideData"]["elements"] = []  # Reset elements để fill content mới
+
+            # Giữ lại các elements không phải text (images, shapes, etc.)
+            non_text_elements = [
+                element for element in template_elements
+                if element.get("type") != "text"
+            ]
+            processed_slide["slideData"]["elements"] = non_text_elements.copy()
 
             # New placeholder patterns for the updated format - match both space and underscore formats
             placeholder_patterns = {
@@ -1960,9 +1923,7 @@ SHORTENED CONTENT MAP:"""
                 "CreatedDate": r"CreatedDate[_\s]+(\d+)",
                 "TitleName": r"TitleName[_\s]+(\d+)",
                 "MainPointName": r"MainPointName[_\s]+(\d+)",
-                "MainPointContent": r"MainPointContent[_\s]+(\d+)",
-                "ImageName": r"ImageName[_\s]+(\d+)",
-                "ImageContent": r"ImageContent[_\s]+(\d+)"
+                "MainPointContent": r"MainPointContent[_\s]+(\d+)"
             }
 
             # Initialize template requirements if not provided
@@ -2124,7 +2085,7 @@ SHORTENED CONTENT MAP:"""
                 return None
 
             # For positioned placeholders, find by exact position_key match
-            if placeholder_type in ["MainPointName", "MainPointContent", "ImageName", "ImageContent"]:
+            if placeholder_type in ["MainPointName", "MainPointContent"]:
                 for item in content_list:
                     if item.get("position_key") == placeholder_key:
                         logger.info(f"✅ Found exact position match for {placeholder_key}")
@@ -2138,11 +2099,6 @@ SHORTENED CONTENT MAP:"""
                     target_main = int(parts[1])
                     for item in content_list:
                         if item.get("main_point") == target_main:
-                            return item
-                elif placeholder_type in ["ImageName", "ImageContent"] and len(parts) >= 2:
-                    target_image = int(parts[1])
-                    for item in content_list:
-                        if item.get("image") == target_image:
                             return item
             else:
                 # Non-numbered placeholders: TitleName, LessonName, etc.
