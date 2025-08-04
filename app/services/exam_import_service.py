@@ -7,7 +7,7 @@ import json
 import re
 import time
 import uuid
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from docx import Document
 import io
 from datetime import datetime
@@ -32,7 +32,7 @@ class ExamImportService:
         logger.info("🔄 ExamImportService: First-time initialization triggered")
 
     async def import_exam_from_docx_content(
-        self, file_content: bytes, filename: str = "exam.docx"
+        self, file_content: bytes, filename: str = "exam.docx", staff_import: bool = False
     ) -> Dict[str, Any]:
         """
         Import đề thi từ nội dung file DOCX
@@ -40,6 +40,7 @@ class ExamImportService:
         Args:
             file_content: Nội dung file DOCX dưới dạng bytes
             filename: Tên file gốc
+            staff_import: True nếu import cho staff (format SpringBoot), False cho frontend
 
         Returns:
             Dict chứa kết quả import
@@ -107,6 +108,9 @@ class ExamImportService:
 
             # 4. Validate và clean dữ liệu từ LLM
             logger.info("Validating and cleaning LLM data...")
+            logger.info(f"Exam data type: {type(exam_data)}")
+            logger.info(f"Exam data preview: {str(exam_data)[:500]}...")
+
             validation_result = self._validate_and_clean_exam_data(exam_data)
 
             if not validation_result["is_valid"]:
@@ -116,29 +120,37 @@ class ExamImportService:
                     "error": f"Dữ liệu từ LLM không hợp lệ: {validation_result['error']}",
                     "details": {
                         "filename": filename,
-                        "validation_details": validation_result["details"]
+                        "validation_details": validation_result["details"],
+                        "exam_data_type": str(type(exam_data)),
+                        "exam_data_preview": str(exam_data)[:200]
                     }
                 }
 
             # Sử dụng dữ liệu đã được clean
             exam_data = validation_result["cleaned_data"]
 
-            # 5. Chuyển đổi sang format FE mong muốn
-            fe_format_data = self._convert_to_fe_format(exam_data)
+            # 5. Chuyển đổi sang format phù hợp
+            if staff_import:
+                # Format cho SpringBoot staff
+                formatted_data = self._convert_to_staff_format(exam_data)
+                success_message = "Question bank data imported successfully"
+            else:
+                # Format cho Frontend
+                formatted_data = self._convert_to_fe_format(exam_data)
+                success_message = "Template updated successfully"
 
             # 6. Validate và tạo response
             processing_time = time.time() - start_time
 
             # Tạo message với thông tin về các phần thiếu
-            success_message = "Template updated successfully"
             if format_warnings:
                 success_message += f" (Lưu ý: {'; '.join(format_warnings)})"
 
-            # Tạo response theo format FE mong muốn
+            # Tạo response theo format phù hợp
             response_data = {
                 "statusCode": 200,
                 "message": success_message,
-                "data": fe_format_data
+                "data": formatted_data
             }
 
             return response_data
@@ -594,6 +606,16 @@ Hãy phân tích và trả về JSON:
         """
         try:
             logger.info("Starting exam data validation and cleaning...")
+
+            # Kiểm tra kiểu dữ liệu trước
+            if not isinstance(exam_data, dict):
+                return {
+                    "is_valid": False,
+                    "error": f"Exam data must be a dictionary, got {type(exam_data)}",
+                    "details": {"data_type": str(type(exam_data))},
+                    "cleaned_data": {}
+                }
+
             logger.info(f"Raw exam data from LLM: {json.dumps(exam_data, ensure_ascii=False, indent=2)}")
 
             result = {
@@ -613,12 +635,12 @@ Hãy phân tích và trả về JSON:
 
             # 2. Clean basic data
             cleaned_data = {
-                "subject": str(exam_data.get("subject", "")).strip(),
+                "subject": str(exam_data.get("subject") or "").strip(),
                 "grade": int(exam_data.get("grade", 12)),
                 "duration_minutes": int(exam_data.get("duration_minutes", 90)),
-                "school": str(exam_data.get("school", "")).strip(),
-                "exam_code": str(exam_data.get("exam_code", "")).strip() if exam_data.get("exam_code") else None,
-                "atomic_masses": str(exam_data.get("atomic_masses", "")).strip() if exam_data.get("atomic_masses") else None,
+                "school": str(exam_data.get("school") or "").strip(),
+                "exam_code": str(exam_data.get("exam_code") or "").strip() if exam_data.get("exam_code") else None,
+                "atomic_masses": str(exam_data.get("atomic_masses") or "").strip() if exam_data.get("atomic_masses") else None,
                 "parts": []
             }
 
@@ -626,23 +648,40 @@ Hãy phân tích và trả về JSON:
             parts = exam_data.get("parts", [])
             if not isinstance(parts, list):
                 result["is_valid"] = False
-                result["error"] = "Parts must be a list"
+                result["error"] = f"Parts must be a list, got {type(parts)}"
+                result["details"]["parts_type"] = str(type(parts))
                 return result
 
             cleaned_parts = []
             skipped_parts = []
 
             for i, part in enumerate(parts):
-                cleaned_part = self._clean_exam_part(part, i)
-                if cleaned_part["is_valid"]:
-                    cleaned_parts.append(cleaned_part["data"])
-                else:
-                    # Log warning và skip part này thay vì fail toàn bộ
-                    part_name = part.get("part", f"Part {i}")
-                    logger.warning(f"Skipping invalid part '{part_name}': {cleaned_part['error']}")
+                try:
+                    # Kiểm tra part có phải dict không
+                    if not isinstance(part, dict):
+                        logger.warning(f"Part {i} is not a dictionary, got {type(part)}: {part}")
+                        skipped_parts.append({
+                            "part_name": f"Part {i}",
+                            "error": f"Part must be a dictionary, got {type(part)}"
+                        })
+                        continue
+
+                    cleaned_part = self._clean_exam_part(part, i)
+                    if cleaned_part["is_valid"]:
+                        cleaned_parts.append(cleaned_part["data"])
+                    else:
+                        # Log warning và skip part này thay vì fail toàn bộ
+                        part_name = part.get("part", f"Part {i}")
+                        logger.warning(f"Skipping invalid part '{part_name}': {cleaned_part['error']}")
+                        skipped_parts.append({
+                            "part_name": part_name,
+                            "error": cleaned_part["error"]
+                        })
+                except Exception as e:
+                    logger.error(f"Error processing part {i}: {e}")
                     skipped_parts.append({
-                        "part_name": part_name,
-                        "error": cleaned_part["error"]
+                        "part_name": f"Part {i}",
+                        "error": f"Processing error: {str(e)}"
                     })
 
             # Chỉ fail nếu không có part nào hợp lệ
@@ -711,22 +750,38 @@ Hãy phân tích và trả về JSON:
             questions = part_data.get("questions", [])
             if not isinstance(questions, list):
                 result["is_valid"] = False
-                result["error"] = "Questions must be a list"
+                result["error"] = f"Questions must be a list, got {type(questions)}"
                 return result
 
             cleaned_questions = []
             invalid_questions = []
 
             for j, question in enumerate(questions):
-                cleaned_question = self._clean_question(question, cleaned_part["part"], j)
-                if cleaned_question["is_valid"]:
-                    cleaned_questions.append(cleaned_question["data"])
-                else:
-                    # Log invalid question nhưng không fail toàn bộ part
-                    logger.warning(f"Skipping invalid question {j} in {cleaned_part['part']}: {cleaned_question['error']}")
+                try:
+                    # Kiểm tra question có phải dict không
+                    if not isinstance(question, dict):
+                        logger.warning(f"Question {j} in {cleaned_part['part']} is not a dictionary, got {type(question)}: {question}")
+                        invalid_questions.append({
+                            "question_index": j,
+                            "error": f"Question must be a dictionary, got {type(question)}"
+                        })
+                        continue
+
+                    cleaned_question = self._clean_question(question, cleaned_part["part"], j)
+                    if cleaned_question["is_valid"]:
+                        cleaned_questions.append(cleaned_question["data"])
+                    else:
+                        # Log invalid question nhưng không fail toàn bộ part
+                        logger.warning(f"Skipping invalid question {j} in {cleaned_part['part']}: {cleaned_question['error']}")
+                        invalid_questions.append({
+                            "question_index": j,
+                            "error": cleaned_question["error"]
+                        })
+                except Exception as e:
+                    logger.error(f"Error processing question {j} in {cleaned_part['part']}: {e}")
                     invalid_questions.append({
                         "question_index": j,
-                        "error": cleaned_question["error"]
+                        "error": f"Processing error: {str(e)}"
                     })
 
             # Nếu không có câu hỏi hợp lệ nào, fail part này
@@ -804,18 +859,26 @@ Hãy phân tích và trả về JSON:
                     return result
 
                 options = question_data.get("options", {})
-                if not isinstance(options, dict) or not all(k in options for k in ["A", "B", "C", "D"]):
+                if not isinstance(options, dict):
                     result["is_valid"] = False
-                    result["error"] = "Options must contain A, B, C, D"
+                    result["error"] = f"Options must be a dictionary, got {type(options)}"
+                    return result
+
+                # Kiểm tra có đủ options A, B, C, D không
+                required_options = ["A", "B", "C", "D"]
+                missing_options = [opt for opt in required_options if opt not in options]
+                if missing_options:
+                    result["is_valid"] = False
+                    result["error"] = f"Options missing: {missing_options}"
                     return result
 
                 cleaned_question["options"] = {
-                    "A": options.get("A", ""),
-                    "B": options.get("B", ""),
-                    "C": options.get("C", ""),
-                    "D": options.get("D", "")
+                    "A": str(options.get("A", "")),
+                    "B": str(options.get("B", "")),
+                    "C": str(options.get("C", "")),
+                    "D": str(options.get("D", ""))
                 }
-                cleaned_question["answer"] = question_data.get("answer", "")
+                cleaned_question["answer"] = str(question_data.get("answer", ""))
 
             elif part_name_upper == "PHẦN II":
                 logger.info("Processing as TrueFalse question (PHẦN II)")
@@ -826,22 +889,35 @@ Hãy phân tích và trả về JSON:
                     return result
 
                 statements = question_data.get("statements", {})
-                if not isinstance(statements, dict) or not all(k in statements for k in ["a", "b", "c", "d"]):
+                if not isinstance(statements, dict):
                     result["is_valid"] = False
-                    result["error"] = "Statements must contain a, b, c, d"
+                    result["error"] = f"Statements must be a dictionary, got {type(statements)}"
+                    return result
+
+                # Kiểm tra có đủ statements a, b, c, d không
+                required_statements = ["a", "b", "c", "d"]
+                missing_statements = [stmt for stmt in required_statements if stmt not in statements]
+                if missing_statements:
+                    result["is_valid"] = False
+                    result["error"] = f"Statements missing: {missing_statements}"
                     return result
 
                 cleaned_statements = {}
                 for key in ["a", "b", "c", "d"]:
                     stmt = statements.get(key, {})
-                    if not isinstance(stmt, dict) or "text" not in stmt or "answer" not in stmt:
+                    if not isinstance(stmt, dict):
+                        result["is_valid"] = False
+                        result["error"] = f"Statement {key} must be a dictionary, got {type(stmt)}"
+                        return result
+
+                    if "text" not in stmt or "answer" not in stmt:
                         result["is_valid"] = False
                         result["error"] = f"Statement {key} missing 'text' or 'answer'"
                         return result
 
                     cleaned_statements[key] = {
-                        "text": stmt.get("text", ""),
-                        "answer": stmt.get("answer", False)
+                        "text": str(stmt.get("text", "")),
+                        "answer": bool(stmt.get("answer", False))
                     }
 
                 cleaned_question["statements"] = cleaned_statements
@@ -854,12 +930,16 @@ Hãy phân tích và trả về JSON:
                     result["error"] = "ShortAnswer question missing 'answer'"
                     return result
 
-                cleaned_question["answer"] = question_data.get("answer", "")
+                cleaned_question["answer"] = str(question_data.get("answer", ""))
 
             else:
                 result["is_valid"] = False
                 result["error"] = f"Unknown part type: {part_name}"
                 return result
+
+            # Thêm explanation nếu có
+            if "explanation" in question_data:
+                cleaned_question["explanation"] = str(question_data.get("explanation", ""))
 
             result["data"] = cleaned_question
             return result
@@ -1032,6 +1112,239 @@ Hãy phân tích và trả về JSON:
                 "version": 1,
                 "createdAt": datetime.now().isoformat()
             }
+
+    def _convert_to_staff_format(self, exam_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Chuyển đổi dữ liệu exam sang format SpringBoot cho staff
+
+        Args:
+            exam_data: Dữ liệu exam đã được clean
+
+        Returns:
+            List[Dict] theo format SpringBoot QuestionBank với lessonId = null
+        """
+        try:
+            staff_questions = []
+
+            for part in exam_data.get("parts", []):
+                part_name = part.get("part", "")
+                questions = part.get("questions", [])
+
+                # Xác định questionType dựa trên part
+                question_type = self._map_part_to_question_type(part_name)
+
+                for question in questions:
+                    # Tạo question cho SpringBoot format
+                    staff_question = {
+                        "lessonId": None,  # Staff tự chọn
+                        "questionType": question_type,
+                        "difficultyLevel": self._analyze_difficulty_level(question),
+                        "questionContent": self._format_question_content(question, question_type),
+                        "explanation": question.get("explanation", ""),
+                        "referenceSource": exam_data.get("school") or "Imported from DOCX",
+                        "suggest": self._generate_lesson_suggestions(question, exam_data)
+                    }
+
+                    staff_questions.append(staff_question)
+
+            logger.info(f"Converted {len(staff_questions)} questions to staff format")
+            return staff_questions
+
+        except Exception as e:
+            logger.error(f"Error converting to staff format: {e}")
+            return []
+
+
+
+    def _generate_lesson_suggestions(self, question: Dict[str, Any], exam_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Tạo gợi ý về bài học dựa trên nội dung câu hỏi
+
+        Args:
+            question: Dữ liệu câu hỏi
+            exam_data: Dữ liệu đề thi
+
+        Returns:
+            Dict: Thông tin gợi ý cho staff academic
+        """
+        try:
+            question_text = question.get("question", "").lower()
+
+            # Phân tích keywords trong câu hỏi
+            chemistry_topics = self._analyze_chemistry_topics(question_text)
+
+            # Tạo suggestions
+            suggestions = {
+                "keywords": self._extract_key_concepts(question_text),
+                "topics": chemistry_topics,
+                "subject_name": exam_data.get("subject", ""),
+                "grade_level": exam_data.get("grade", 12)
+            }
+
+            return suggestions
+
+        except Exception as e:
+            logger.error(f"Error generating lesson suggestions: {e}")
+            return {
+                "keywords": [],
+                "topics": [],
+                "subject_name": exam_data.get("subject", ""),
+                "grade_level": exam_data.get("grade", 12),
+                "error": "Could not generate suggestions"
+            }
+
+    def _analyze_chemistry_topics(self, question_text: str) -> List[str]:
+        """
+        Phân tích chủ đề hóa học từ câu hỏi
+
+        Args:
+            question_text: Nội dung câu hỏi
+
+        Returns:
+            List[str]: Danh sách chủ đề hóa học
+        """
+        topics = []
+
+        # Mapping keywords to chemistry topics
+        topic_keywords = {
+            "Cấu tạo nguyên tử": ["nguyên tử", "proton", "neutron", "electron", "hạt nhân", "lớp vỏ", "orbital"],
+            "Bảng tuần hoàn": ["bảng tuần hoàn", "chu kỳ", "nhóm", "kim loại", "phi kim", "khí hiếm"],
+            "Liên kết hóa học": ["liên kết", "ion", "cộng hóa trị", "kim loại", "phân tử", "tinh thể"],
+            "Phản ứng hóa học": ["phản ứng", "oxi hóa", "khử", "cân bằng", "tốc độ phản ứng"],
+            "Dung dịch": ["dung dịch", "nồng độ", "mol", "độ tan", "ph", "acid", "base"],
+            "Hóa hữu cơ": ["hydrocarbon", "alcohol", "acid carboxylic", "ester", "amin", "protein"],
+            "Nhiệt hóa học": ["enthalpy", "entropy", "năng lượng", "nhiệt độ", "cháy"],
+            "Điện hóa": ["điện phân", "pin", "thế điện cực", "ăn mòn điện hóa"]
+        }
+
+        for topic, keywords in topic_keywords.items():
+            if any(keyword in question_text for keyword in keywords):
+                topics.append(topic)
+
+        return topics
+
+    def _extract_key_concepts(self, question_text: str) -> List[str]:
+        """
+        Trích xuất các khái niệm chính từ câu hỏi
+
+        Args:
+            question_text: Nội dung câu hỏi
+
+        Returns:
+            List[str]: Danh sách khái niệm chính
+        """
+        concepts = []
+
+        # Common chemistry concepts
+        concept_patterns = [
+            r'(nguyên tử \w+)', r'(phân tử \w+)', r'(ion \w+)',
+            r'(axit \w+)', r'(bazơ \w+)', r'(muối \w+)',
+            r'(kim loại \w+)', r'(phi kim \w+)',
+            r'(phản ứng \w+)', r'(dung dịch \w+)',
+            r'(nồng độ \w+)', r'(khối lượng \w+)'
+        ]
+
+        for pattern in concept_patterns:
+            matches = re.findall(pattern, question_text, re.IGNORECASE)
+            concepts.extend(matches)
+
+        # Remove duplicates and limit
+        return list(set(concepts))[:5]
+
+    def _map_part_to_question_type(self, part_name: str) -> str:
+        """
+        Map tên phần sang questionType cho SpringBoot
+
+        Args:
+            part_name: Tên phần (Phần I, II, III)
+
+        Returns:
+            str: Question type
+        """
+        part_mapping = {
+            "PHẦN I": "PART_I",
+            "Phần I": "PART_I",
+            "PHẦN II": "PART_II",
+            "Phần II": "PART_II",
+            "PHẦN III": "PART_III",
+            "Phần III": "PART_III"
+        }
+
+        return part_mapping.get(part_name, "PART_I")
+
+    def _analyze_difficulty_level(self, question: Dict[str, Any]) -> str:
+        """
+        Phân tích mức độ khó của câu hỏi dựa trên nội dung
+
+        Args:
+            question: Dữ liệu câu hỏi
+
+        Returns:
+            str: Difficulty level (KNOWLEDGE, COMPREHENSION, APPLICATION, ANALYSIS)
+        """
+        try:
+            question_text = question.get("question", "").lower()
+
+            # Keywords cho từng mức độ
+            knowledge_keywords = ["là gì", "định nghĩa", "tên gọi", "ký hiệu", "công thức phân tử"]
+            comprehension_keywords = ["giải thích", "tại sao", "nguyên nhân", "so sánh", "phân biệt"]
+            application_keywords = ["tính toán", "xác định", "tìm", "khối lượng", "thể tích", "nồng độ"]
+            analysis_keywords = ["phân tích", "đánh giá", "dự đoán", "thiết kế", "tổng hợp"]
+
+            # Kiểm tra theo thứ tự từ cao xuống thấp
+            if any(keyword in question_text for keyword in analysis_keywords):
+                return "ANALYSIS"
+            elif any(keyword in question_text for keyword in application_keywords):
+                return "APPLICATION"
+            elif any(keyword in question_text for keyword in comprehension_keywords):
+                return "COMPREHENSION"
+            elif any(keyword in question_text for keyword in knowledge_keywords):
+                return "KNOWLEDGE"
+            else:
+                return "KNOWLEDGE"  # Default fallback
+
+        except Exception as e:
+            logger.error(f"Error analyzing difficulty level: {e}")
+            return "KNOWLEDGE"
+
+    def _format_question_content(self, question: Dict[str, Any], question_type: str) -> Dict[str, Any]:
+        """
+        Format nội dung câu hỏi theo từng loại
+
+        Args:
+            question: Dữ liệu câu hỏi
+            question_type: Loại câu hỏi (PART_I, PART_II, PART_III)
+
+        Returns:
+            Dict: Question content theo format SpringBoot
+        """
+        try:
+            base_content = {
+                "question": question.get("question", ""),
+                "image": None  # Có thể thêm sau nếu cần
+            }
+
+            if question_type == "PART_I":
+                # Multiple choice
+                base_content.update({
+                    "options": question.get("options", {}),
+                    "answer": question.get("answer", "")
+                })
+
+            elif question_type == "PART_II":
+                # True/False statements
+                statements = question.get("statements", {})
+                base_content["statements"] = statements
+
+            elif question_type == "PART_III":
+                # Short answer
+                base_content["answer"] = question.get("answer", "")
+
+            return base_content
+
+        except Exception as e:
+            logger.error(f"Error formatting question content: {e}")
+            return {"question": question.get("question", ""), "image": None}
 
 
 # Factory function để tạo ExamImportService instance

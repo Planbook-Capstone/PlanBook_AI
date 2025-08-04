@@ -22,7 +22,8 @@ router = APIRouter()
 @router.post("/import-docx", response_model=Dict[str, Any])
 async def import_exam_from_docx(
     file: UploadFile = File(..., description="File DOCX chứa đề thi"),
-    additional_instructions: Optional[str] = Form(None, description="Hướng dẫn bổ sung cho LLM")
+    additional_instructions: Optional[str] = Form(None, description="Hướng dẫn bổ sung cho LLM"),
+    staff_import: bool = Form(False, description="True nếu import cho staff")
 ):
     """
     Import đề thi từ file DOCX và chuyển đổi thành JSON
@@ -35,18 +36,21 @@ async def import_exam_from_docx(
     Args:
         file: File DOCX upload
         additional_instructions: Hướng dẫn bổ sung cho LLM (optional)
+        staff_import: True để trả về format SpringBoot cho staff, False cho frontend (default: False)
 
     Returns:
-        ExamImportResponse: Dữ liệu đề thi đã chuyển đổi hoặc lỗi nếu thất bại
+        - Nếu staff_import=False: Dữ liệu template đề thi cho frontend
+        - Nếu staff_import=True: Danh sách câu hỏi theo format SpringBoot QuestionBank với lessonId=null và suggest field
 
     Example:
         POST /api/v1/exam/import-docx
         Content-Type: multipart/form-data
-        
+
         file: [DOCX file]
         additional_instructions: "Chú ý đặc biệt đến phần đáp án"
+        staff_import: true
 
-        Response: JSON với dữ liệu đề thi đã phân tích
+        Response: JSON với dữ liệu đề thi đã phân tích theo format tương ứng
     """
     start_time = time.time()
     
@@ -98,12 +102,13 @@ async def import_exam_from_docx(
             )
         
         # 3. Import và xử lý file
-        logger.info("Processing DOCX file...")
+        logger.info(f"Processing DOCX file... (staff_import={staff_import})")
         try:
             import_service = get_exam_import_service()
             result = await import_service.import_exam_from_docx_content(
                 file_content=file_content,
-                filename=file.filename
+                filename=file.filename,
+                staff_import=staff_import
             )
             
             logger.info(f"Import result: statusCode={result.get('statusCode', 500)}")
@@ -122,13 +127,24 @@ async def import_exam_from_docx(
 
             # Thêm thông tin bổ sung vào response data
             if "data" in result:
-                result["data"]["processing_time"] = processing_time
-                result["data"]["file_info"] = {
-                    "filename": file.filename,
-                    "file_size": file_size,
-                    "content_type": file.content_type
-                }
-            
+                # Kiểm tra xem data có phải dict không (FE format) hay list (staff format)
+                if isinstance(result["data"], dict):
+                    # FE format - thêm thông tin vào data object
+                    result["data"]["processing_time"] = processing_time
+                    result["data"]["file_info"] = {
+                        "filename": file.filename,
+                        "file_size": file_size,
+                        "content_type": file.content_type
+                    }
+                else:
+                    # Staff format - thêm thông tin vào root level
+                    result["processing_time"] = processing_time
+                    result["file_info"] = {
+                        "filename": file.filename,
+                        "file_size": file_size,
+                        "content_type": file.content_type
+                    }
+
             if additional_instructions:
                 result["additional_instructions"] = additional_instructions
             
@@ -180,94 +196,6 @@ async def import_exam_from_docx(
         )
 
 
-# @router.post("/import-docx-test")
-async def test_import_exam():
-    """
-    Test endpoint để kiểm tra chức năng import với dữ liệu mẫu
-
-    Returns:
-        Dict: Kết quả test import
-    """
-    try:
-        logger.info("=== TEST IMPORT START ===")
-        
-        # Dữ liệu mẫu để test
-        sample_exam_text = """
-BỘ GIÁO DỤC VÀ ĐÀO TẠO
-Trường THPT Hong Thinh
-ĐỀ KIỂM TRA LỚP 12
-Môn: HOA HOC
-Thời gian làm bài: 90 phút, không kể thời gian phát đề
-
-Họ, tên thí sinh: ..................................................
-Mã đề: 1234
-Số báo danh: .......................................................
-
-BẢNG NGUYÊN TỬ KHỐI CỦA CÁC NGUYÊN TỐ HÓA HỌC
-H = 1; C = 12; N = 14; O = 16; S = 32
-
-PHẦN I. Câu trắc nghiệm nhiều phương án lựa chọn. Thí sinh trả lời từ câu 1 đến câu 2.
-(Mỗi câu trả lời đúng thí sinh được 0,25 điểm)
-
-Câu 1. Hạt nào sau đây không cấu tạo nên hạt nhân nguyên tử?
-A. Proton
-B. Neutron
-C. Electron
-D. Cả proton và neutron
-
-Câu 2. Đơn vị khối lượng nguyên tử (amu) tương đương với bao nhiêu kg?
-A. 1,6605 x 10^-27 kg
-B. 1,6605 x 10^-24 kg
-C. 1,602 x 10^-19 kg
-D. 9,109 x 10^-31 kg
-
-PHẦN II. Câu trắc nghiệm đúng sai. Thí sinh trả lời từ câu 1 đến câu 1.
-Câu 1. Xét về cấu tạo nguyên tử Hydrogen (H), cho các phát biểu sau:
-a) Nguyên tử Hydrogen chỉ chứa một proton trong hạt nhân.
-b) Nguyên tử Hydrogen luôn chứa một neutron trong hạt nhân.
-c) Nguyên tử Hydrogen trung hòa về điện vì số proton bằng số electron.
-d) Khối lượng của nguyên tử Hydrogen chủ yếu tập trung ở lớp vỏ electron.
-
-PHẦN III. Câu trắc nghiệm trả lời ngắn. Thí sinh trả lời từ câu 1 đến câu 1
-Câu 1. Một nguyên tử X có cấu tạo gồm 1 proton, 1 electron và không có neutron. Tính khối lượng gần đúng của nguyên tử X theo đơn vị amu.
-
---- Hết ---
-
-ĐÁP ÁN
-
-PHẦN I. Câu trắc nghiệm nhiều phương án lựa chọn.
-Câu    1    2
-Chọn   C    A
-
-PHẦN II. Câu trắc nghiệm đúng sai.
-Câu 1: a) Đúng, b) Sai, c) Đúng, d) Sai
-
-PHẦN III. Câu trắc nghiệm trả lời ngắn.
-Câu 1: 1
-"""
-        
-        # Gọi service để phân tích
-        import_service = get_exam_import_service()
-        result = await import_service._analyze_exam_with_llm(
-            exam_text=sample_exam_text,
-            filename="test_exam.docx"
-        )
-        
-        return {
-            "success": True,
-            "message": "Test import completed",
-            "test_data": sample_exam_text[:500] + "...",
-            "analysis_result": result,
-            "test_mode": True
-        }
-
-    except Exception as e:
-        logger.error(f"Error in test import: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "test_mode": True
-        }
 
 
 @router.get("/import-status")
@@ -289,12 +217,24 @@ async def get_import_status():
                 "LLM-based analysis",
                 "Multi-part exam support",
                 "Answer key extraction",
-                "Chemistry atomic masses support"
+                "Chemistry atomic masses support",
+                "Dual format output (Frontend/SpringBoot)",
+                "Staff import with difficulty analysis"
             ],
             "model_info": {
                 "llm_model": "google/gemini-2.0-flash-001",
                 "provider": "OpenRouter"
-            }
+            },
+            "output_formats": {
+                "frontend": "Template format for exam creation UI",
+                "staff": "QuestionBank format for SpringBoot backend"
+            },
+            "difficulty_levels": [
+                "KNOWLEDGE - Recall of facts, terms, basic concepts",
+                "COMPREHENSION - Understanding meaning, interpretation",
+                "APPLICATION - Applying knowledge to new situations",
+                "ANALYSIS - Analysis, synthesis, evaluation"
+            ]
         }
 
     except Exception as e:
