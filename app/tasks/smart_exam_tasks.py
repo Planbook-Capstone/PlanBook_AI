@@ -14,7 +14,10 @@ from app.services.smart_exam_generation_service import get_smart_exam_generation
 from app.services.textbook_retrieval_service import get_textbook_retrieval_service
 from app.services.smart_exam_docx_service import get_smart_exam_docx_service
 from app.services.google_drive_service import get_google_drive_service
-from app.services.kafka_service import kafka_service, safe_kafka_call
+from app.services.kafka_service import get_kafka_service, safe_kafka_call
+
+# Create kafka service instance for this module
+kafka_service = get_kafka_service()
 from app.models.smart_exam_models import SmartExamRequest
 
 logger = logging.getLogger(__name__)

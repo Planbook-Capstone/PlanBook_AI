@@ -10,12 +10,15 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 
-from app.services.kafka_service import kafka_service
+from app.services.kafka_service import get_kafka_service
 from app.core.kafka_config import get_topic_name, get_kafka_servers, kafka_settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Create kafka service instance for this module
+kafka_service = get_kafka_service()
 
 
 # Pydantic models

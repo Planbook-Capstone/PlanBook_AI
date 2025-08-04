@@ -485,8 +485,10 @@ class KafkaService:
 
 
 
-# Global Kafka service instance
-kafka_service = KafkaService()
+# Factory function - creates new instance each time
+def get_kafka_service() -> KafkaService:
+    """Create new instance của KafkaService (thread-safe)"""
+    return KafkaService()
 
 
 # Note: Message handling is done directly in app/api/api.py via handle_incoming_message function

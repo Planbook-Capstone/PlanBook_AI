@@ -6,7 +6,7 @@ Endpoints để monitor và health check Celery workers
 import logging
 from typing import Dict, Any
 from fastapi import APIRouter, HTTPException
-from app.services.celery_task_service import celery_task_service
+from app.services.celery_task_service import get_celery_task_service
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,7 @@ async def celery_health_check() -> Dict[str, Any]:
         Dict: Health status và chi tiết
     """
     try:
+        celery_task_service = get_celery_task_service()
         health_status = await celery_task_service.health_check()
         
         # Set HTTP status code based on health
@@ -62,6 +63,7 @@ async def get_worker_stats() -> Dict[str, Any]:
         Dict: Worker statistics
     """
     try:
+        celery_task_service = get_celery_task_service()
         stats = await celery_task_service.get_worker_stats()
         
         return {

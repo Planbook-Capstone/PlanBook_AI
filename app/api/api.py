@@ -19,9 +19,12 @@ from app.api.endpoints import (
     rag_endpoints,
 )
 
-from app.services.kafka_service import kafka_service
+from app.services.kafka_service import get_kafka_service
 from app.core.kafka_config import get_responses_topic
 from app.constants.kafka_message_types import RESPONSE_TYPE, RESULT_TYPE
+
+# Create kafka service instance for this module
+kafka_service = get_kafka_service()
 from app.constants.took_code_type import ToolCodeEnum
 from app.api.endpoints import auto_grading
 

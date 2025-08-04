@@ -356,8 +356,9 @@ class BackgroundTaskProcessor:
         }
 
         # Sử dụng Celery thay vì asyncio.create_task
-        from app.services.celery_task_service import celery_task_service
+        from app.services.celery_task_service import get_celery_task_service
 
+        celery_task_service = get_celery_task_service()
         task_id = await celery_task_service.create_and_dispatch_task(
             task_type="guide_import", task_data=task_data
         )
@@ -383,8 +384,9 @@ class BackgroundTaskProcessor:
         }
 
         # Sử dụng Celery thay vì asyncio.create_task
-        from app.services.celery_task_service import celery_task_service
+        from app.services.celery_task_service import get_celery_task_service
 
+        celery_task_service = get_celery_task_service()
         task_id = await celery_task_service.create_and_dispatch_task(
             task_type="lesson_plan_content_generation", task_data=task_data
         )
@@ -403,8 +405,9 @@ class BackgroundTaskProcessor:
             }
 
             # Sử dụng Celery thay vì asyncio.create_task
-            from app.services.celery_task_service import celery_task_service
+            from app.services.celery_task_service import get_celery_task_service
 
+            celery_task_service = get_celery_task_service()
             task_id = await celery_task_service.create_and_dispatch_task(
                 task_type="smart_exam_generation", task_data=task_data
             )

@@ -7,7 +7,10 @@ from typing import Dict, Any
 
 from app.core.celery_app import celery_app
 from app.services.mongodb_task_service import get_mongodb_task_service
-from app.services.kafka_service import kafka_service, safe_kafka_call
+from app.services.kafka_service import get_kafka_service, safe_kafka_call
+
+# Create kafka service instance for this module
+kafka_service = get_kafka_service()
 
 logger = logging.getLogger(__name__)
 

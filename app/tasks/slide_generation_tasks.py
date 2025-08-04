@@ -11,7 +11,10 @@ from datetime import datetime
 from app.core.celery_app import celery_app
 from app.services.mongodb_task_service import get_mongodb_task_service
 from app.services.json_template_service import get_json_template_service
-from app.services.kafka_service import kafka_service, safe_kafka_call
+from app.services.kafka_service import get_kafka_service, safe_kafka_call
+
+# Create kafka service instance for this module
+kafka_service = get_kafka_service()
 from app.constants.kafka_message_types import PROGRESS_TYPE, RESULT_TYPE
 
 logger = logging.getLogger(__name__)

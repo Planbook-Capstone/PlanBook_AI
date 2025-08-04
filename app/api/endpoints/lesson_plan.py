@@ -10,7 +10,7 @@ import os
 from app.services.lesson_plan_framework_service import get_lesson_plan_framework_service
 from app.services.llm_service import LLMService
 from app.services.docx_export_service import docx_export_service
-from app.services.docx_upload_service import docx_upload_service
+from app.services.docx_upload_service import get_docx_upload_service
 from app.models.online_document_models import OnlineDocumentResponse
 
 
@@ -397,6 +397,7 @@ async def upload_docx_to_online_document(
         logger.info(f"Processing DOCX upload: {file.filename}")
 
         # Xử lý upload file thông qua service
+        docx_upload_service = get_docx_upload_service()
         result = await docx_upload_service.process_docx_upload_to_online(
             uploaded_file=file,
             convert_to_google_docs=convert_to_google_docs
