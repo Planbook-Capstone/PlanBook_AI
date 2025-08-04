@@ -95,7 +95,7 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
                         task_id=task_id,
                         user_id=user_id,
                         result=final_result,
-                        tool_log_id=None
+                        tool_log_id=tool_log_id
                     )
 
                 logger.info(f"✅ Task {task_id} hoàn thành thành công")
@@ -124,7 +124,7 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
                         task_id=task_id,
                         user_id=user_id,
                         result=error_result,
-                        tool_log_id=None
+                        tool_log_id=tool_log_id
                     )
 
                 logger.error(f"❌ Task {task_id} thất bại: {error_message}")
@@ -158,7 +158,7 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
                         task_id=task_id,
                         user_id=user_id,
                         result=error_result,
-                        tool_log_id=None
+                        tool_log_id=tool_log_id
                     )
 
             except Exception as update_error:
