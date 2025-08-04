@@ -298,5 +298,7 @@ class DocxUploadService:
         return safe_filename
 
 
-# Singleton instance
-docx_upload_service = DocxUploadService()
+# Factory function - creates new instance each time
+def get_docx_upload_service() -> DocxUploadService:
+    """Create new instance của DocxUploadService (thread-safe)"""
+    return DocxUploadService()

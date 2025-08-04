@@ -6,6 +6,7 @@ import asyncio
 import logging
 import json
 import time
+import threading
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 import concurrent.futures
@@ -26,11 +27,11 @@ class BackgroundTaskProcessor:
         # Task status cache để tránh query MongoDB liên tục
         self._task_cache: Dict[str, Dict[str, Any]] = {}
         self._cache_timeout = 0
-        self._cache_lock = asyncio.Lock()
+        self._cache_lock = threading.Lock()  # Changed from asyncio.Lock to threading.Lock
 
     async def _get_cached_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Lấy task từ cache nếu còn hợp lệ"""
-        async with self._cache_lock:
+        with self._cache_lock:  # Changed from async with to with
             cached = self._task_cache.get(task_id)
             if (
                 cached
@@ -41,7 +42,7 @@ class BackgroundTaskProcessor:
 
     async def _cache_task(self, task_id: str, task_data: Dict[str, Any]):
         """Cache task data"""
-        async with self._cache_lock:
+        with self._cache_lock:  # Changed from async with to with
             self._task_cache[task_id] = {
                 "data": task_data.copy(),
                 "cached_at": time.time(),
@@ -329,8 +330,9 @@ class BackgroundTaskProcessor:
         }
 
         # Sử dụng Celery thay vì asyncio.create_task
-        from app.services.celery_task_service import celery_task_service
+        from app.services.celery_task_service import get_celery_task_service
 
+        celery_task_service = get_celery_task_service()
         task_id = await celery_task_service.create_and_dispatch_task(
             task_type="quick_analysis", task_data=task_data
         )

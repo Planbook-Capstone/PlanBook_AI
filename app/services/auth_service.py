@@ -312,5 +312,7 @@ class AuthService:
             return 0
 
 
-# Singleton instance
-auth_service = AuthService()
+# Factory function - creates new instance each time
+def get_auth_service() -> AuthService:
+    """Create new instance của AuthService (thread-safe)"""
+    return AuthService()

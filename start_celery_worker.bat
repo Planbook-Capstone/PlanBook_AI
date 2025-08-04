@@ -15,11 +15,11 @@ echo   CELERY_RESULT_BACKEND: %CELERY_RESULT_BACKEND%
 echo.
 
 REM Start với include tasks
-echo ⚡ Starting Celery Worker with all tasks (slide_generation using solo pool)...
+echo ⚡ Starting Celery Worker with threads pool (concurrency=8, no singletons)...
 python -m celery -A app.core.celery_app worker ^
     --loglevel=info ^
-    --pool=solo ^
-    --concurrency=1 ^
+    --pool=threads ^
+    --concurrency=8 ^
     --queues=pdf_queue,embeddings_queue,cv_queue,slide_generation_queue,default ^
     --hostname=planbook_worker@%%h
 

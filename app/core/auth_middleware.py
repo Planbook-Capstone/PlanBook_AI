@@ -7,7 +7,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
 import logging
 
-from app.services.auth_service import auth_service
+from app.services.auth_service import get_auth_service
 from app.models.auth_models import TokenVerificationResponse
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,8 @@ class AuthMiddleware:
             pass
         """
         try:
+            auth_service = get_auth_service()
+            await auth_service.initialize()
             verification = await auth_service.verify_token(credentials.credentials)
             
             if not verification.valid:

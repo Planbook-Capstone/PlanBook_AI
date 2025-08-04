@@ -29,7 +29,7 @@ from app.services.exam_generation_service import get_exam_generation_service
 from app.services.exam_docx_service import exam_docx_service
 from app.services.google_drive_service import get_google_drive_service
 from app.services.smart_exam_generation_service import get_smart_exam_generation_service
-from app.services.smart_exam_docx_service import smart_exam_docx_service
+from app.services.smart_exam_docx_service import get_smart_exam_docx_service
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)

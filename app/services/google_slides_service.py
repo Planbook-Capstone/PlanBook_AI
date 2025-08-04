@@ -139,32 +139,23 @@ def find_parent_placeholder_style(presentation: Dict[str, Any], parent_object_id
 
 
 class GoogleSlidesService:
-    _instance = None
-    _lock = threading.Lock()
-
-    def __new__(cls):
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super(GoogleSlidesService, cls).__new__(cls)
-                    cls._instance._initialized = False
-        return cls._instance
+    """Google Slides Service - No longer singleton, thread-safe per instance"""
 
     def __init__(self):
-        if self._initialized:
-            return
         self.slides_service = None
         self.drive_service = None
         self.credentials = None
         self._service_initialized = False
-        self._initialized = True
+        self._initialization_lock = threading.Lock()
 
     def _ensure_service_initialized(self):
         if not self._service_initialized:
-            logger.info("🔄 GoogleSlidesService: First-time initialization triggered")
-            self._initialize_service()
-            self._service_initialized = True
-            logger.info("✅ GoogleSlidesService: Initialization completed")
+            with self._initialization_lock:
+                if not self._service_initialized:  # Double-check locking
+                    logger.info("🔄 GoogleSlidesService: First-time initialization triggered")
+                    self._initialize_service()
+                    self._service_initialized = True
+                    logger.info("✅ GoogleSlidesService: Initialization completed")
 
     def _initialize_service(self):
         """Khởi tạo Google Slides service với OAuth 2.0"""

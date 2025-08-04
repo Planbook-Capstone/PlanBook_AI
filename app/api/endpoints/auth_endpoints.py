@@ -17,7 +17,7 @@ from app.models.auth_models import (
     ClientInfo,
     AuthError
 )
-from app.services.auth_service import auth_service
+from app.services.auth_service import get_auth_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -33,6 +33,8 @@ async def register_client(request: ClientRegistrationRequest):
     Vui lòng lưu trữ an toàn để sử dụng cho việc tạo token.
     """
     try:
+        auth_service = get_auth_service()
+        await auth_service.initialize()
         result = await auth_service.register_client(
             client_name=request.client_name,
             description=request.description,
@@ -58,6 +60,8 @@ async def generate_token(request: TokenRequest):
     Token này sẽ được sử dụng để xác thực các API calls khác.
     """
     try:
+        auth_service = get_auth_service()
+        await auth_service.initialize()
         result = await auth_service.generate_access_token(
             client_id=request.client_id,
             client_secret=request.client_secret

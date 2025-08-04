@@ -89,7 +89,7 @@ services:
   # Celery Worker
   celery-worker:
     build: .
-    command: celery -A app.core.celery_app worker --loglevel=info --pool=solo --concurrency=1
+    command: celery -A app.core.celery_app worker --loglevel=info --pool=threads --concurrency=8
     environment:
       - MONGODB_URL=mongodb://mongodb:27017/planbook_db
       - REDIS_URL=redis://redis:6379/0

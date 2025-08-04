@@ -1359,5 +1359,7 @@ class SmartExamDocxService:
             return f"Bai_kiem_tra.docx"
 
 
-# Singleton instance
-smart_exam_docx_service = SmartExamDocxService()
+# Factory function - creates new instance each time
+def get_smart_exam_docx_service() -> SmartExamDocxService:
+    """Create new instance của SmartExamDocxService (thread-safe)"""
+    return SmartExamDocxService()

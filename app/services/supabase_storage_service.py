@@ -349,12 +349,7 @@ class SupabaseStorageService:
             }
 
 
-# Singleton instance
-_supabase_storage_service = None
-
+# Factory function - creates new instance each time
 def get_supabase_storage_service() -> SupabaseStorageService:
-    """Lấy singleton instance của SupabaseStorageService"""
-    global _supabase_storage_service
-    if _supabase_storage_service is None:
-        _supabase_storage_service = SupabaseStorageService()
-    return _supabase_storage_service
+    """Create new instance của SupabaseStorageService (thread-safe)"""
+    return SupabaseStorageService()

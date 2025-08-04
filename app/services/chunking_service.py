@@ -221,18 +221,12 @@ class ChunkingService:
         return chunks
 
 
-# Singleton instance
-_chunking_service = None
-
-
+# Factory function - creates new instance each time
 def get_chunking_service() -> ChunkingService:
     """
-    Lấy singleton instance của ChunkingService
-    
+    Create new instance của ChunkingService (thread-safe)
+
     Returns:
-        ChunkingService: Singleton instance
+        ChunkingService: New instance
     """
-    global _chunking_service
-    if _chunking_service is None:
-        _chunking_service = ChunkingService()
-    return _chunking_service
+    return ChunkingService()

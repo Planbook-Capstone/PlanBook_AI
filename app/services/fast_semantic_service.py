@@ -217,12 +217,7 @@ class FastSemanticService:
         return results
 
 
-# Singleton instance
-_fast_semantic_service = None
-
+# Factory function - creates new instance each time
 def get_fast_semantic_service() -> FastSemanticService:
-    """Get singleton instance của FastSemanticService"""
-    global _fast_semantic_service
-    if _fast_semantic_service is None:
-        _fast_semantic_service = FastSemanticService()
-    return _fast_semantic_service
+    """Create new instance của FastSemanticService (thread-safe)"""
+    return FastSemanticService()

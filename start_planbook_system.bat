@@ -50,8 +50,8 @@ echo 🚀 Starting PlanBook AI Services...
 echo.
 
 REM Start Celery Worker
-echo ⚡ Starting Celery Worker (with slide_generation using solo pool)...
-start "PlanBook AI - Celery Worker" cmd /k "title PlanBook AI - Celery Worker && python -m celery -A app.core.celery_app worker --loglevel=info --pool=solo --concurrency=1 --queues=pdf_queue,embeddings_queue,cv_queue,slide_generation_queue,default --hostname=planbook_worker@%%h"
+echo ⚡ Starting Celery Worker (threads pool, concurrency=8, no singletons)...
+start "PlanBook AI - Celery Worker" cmd /k "title PlanBook AI - Celery Worker && python -m celery -A app.core.celery_app worker --loglevel=info --pool=threads --concurrency=8 --queues=pdf_queue,embeddings_queue,cv_queue,slide_generation_queue,default --hostname=planbook_worker@%%h"
 
 
 REM Wait for worker to start

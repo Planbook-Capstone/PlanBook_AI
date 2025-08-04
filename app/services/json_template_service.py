@@ -2150,12 +2150,7 @@ SHORTENED CONTENT MAP:"""
             logger.error(f"❌ Error getting content by position for {placeholder_key}: {e}")
             return None
 
-# Singleton instance
-_json_template_service = None
-
+# Factory function - creates new instance each time
 def get_json_template_service() -> JsonTemplateService:
-    """Get singleton instance của JsonTemplateService"""
-    global _json_template_service
-    if _json_template_service is None:
-        _json_template_service = JsonTemplateService()
-    return _json_template_service
+    """Create new instance của JsonTemplateService (thread-safe)"""
+    return JsonTemplateService()

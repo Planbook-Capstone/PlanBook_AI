@@ -288,5 +288,7 @@ class CeleryTaskService:
         }
 
 
-# Singleton instance
-celery_task_service = CeleryTaskService()
+# Factory function - creates new instance each time
+def get_celery_task_service() -> CeleryTaskService:
+    """Create new instance của CeleryTaskService (thread-safe)"""
+    return CeleryTaskService()
