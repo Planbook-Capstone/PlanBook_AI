@@ -104,12 +104,17 @@ class JsonTemplateService:
             # Format nội dung cho frontend
             formatted_result = self._format_content_for_frontend(result)
 
-            return {
+            final_result = {
                 "success": True,
                 "lesson_id": lesson_id,
                 "processed_template": formatted_result,
                 "slides_created": len(formatted_result.get("slides", []))
             }
+
+            # Đảm bảo tất cả keys đều là string để tránh lỗi MongoDB
+            final_result = self._ensure_string_keys(final_result)
+
+            return final_result
 
         except Exception as e:
             logger.error(f"❌ Error processing JSON template with progress: {e}")
@@ -191,6 +196,10 @@ class JsonTemplateService:
                             logger.info(f"   After: {formatted_text[:100]}...")
 
             logger.info(f"✅ Content formatting complete for {len(slides)} slides")
+
+            # Đảm bảo tất cả keys đều là string để tránh lỗi MongoDB
+            formatted_data = self._ensure_string_keys(formatted_data)
+
             return formatted_data
 
         except Exception as e:
@@ -448,6 +457,10 @@ class JsonTemplateService:
                 )
 
             logger.info(f"🎉 Optimized workflow with progress complete: {len(final_template.get('slides', []))} slides created")
+
+            # Đảm bảo tất cả keys trong final_template đều là string để tránh lỗi MongoDB
+            final_template = self._ensure_string_keys(final_template)
+
             return final_template
 
         except Exception as e:
@@ -591,6 +604,9 @@ class JsonTemplateService:
                 if json_start != -1 and json_end > json_start:
                     json_content = framework_content[json_start:json_end]
                     parsed_json = json.loads(json_content)
+
+                    # Đảm bảo tất cả keys đều là string để tránh lỗi MongoDB
+                    parsed_json = self._ensure_string_keys(parsed_json)
 
                     # Extract slides from JSON
                     slides = parsed_json.get("slides", [])
@@ -739,6 +755,9 @@ JSON ĐẦU RA:
                 if json_start != -1 and json_end > json_start:
                     json_content = framework_content[json_start:json_end]
                     parsed_json = json.loads(json_content)
+
+                    # Đảm bảo tất cả keys đều là string để tránh lỗi MongoDB
+                    parsed_json = self._ensure_string_keys(parsed_json)
 
                     # Extract slides from JSON
                     json_slides = parsed_json.get("slides", [])
@@ -1043,6 +1062,9 @@ JSON ĐẦU RA:
                 json_content = detailed_content[json_start:json_end]
                 parsed_json = json.loads(json_content)
 
+                # Đảm bảo tất cả keys đều là string để tránh lỗi MongoDB
+                parsed_json = self._ensure_string_keys(parsed_json)
+
                 if isinstance(parsed_json, list) and len(parsed_json) > 0:
                     slide_data = parsed_json[0]  # Get first slide from array
 
@@ -1212,7 +1234,7 @@ JSON ĐẦU RA:
                     # point -> MainPointName
                     if point_text:
                         slide_data["parsed_data"]["MainPointName"].append({
-                            "content": {0: point_text},  # Trả về dạng map với key là index
+                            "content": {"0": point_text},  # Trả về dạng map với key là string để tránh lỗi MongoDB
                             "main_point": main_point_idx,
                             "position_key": f"MainPointName_{main_point_idx}"
                         })
@@ -1220,8 +1242,8 @@ JSON ĐẦU RA:
 
                     # pointContent -> MainPointContent (xử lý array)
                     if point_content and isinstance(point_content, list):
-                        # Chuyển array thành map với key là index
-                        content_map = {i: content for i, content in enumerate(point_content) if content.strip()}
+                        # Chuyển array thành map với key là string index để tránh lỗi MongoDB
+                        content_map = {str(i): content for i, content in enumerate(point_content) if content.strip()}
 
                         if content_map:  # Chỉ thêm nếu có nội dung
                             slide_data["parsed_data"]["MainPointContent"].append({
@@ -1456,6 +1478,9 @@ SHORTENED CONTENT MAP:"""
                             json_content = shortened_content[json_start:json_end]
                             shortened_map = json.loads(json_content)
 
+                            # Đảm bảo tất cả keys đều là string để tránh lỗi MongoDB
+                            shortened_map = {str(k): v for k, v in shortened_map.items()}
+
                             # Kiểm tra tổng độ dài
                             new_total_length = sum(len(str(value)) for value in shortened_map.values())
 
@@ -1481,6 +1506,18 @@ SHORTENED CONTENT MAP:"""
         except Exception as e:
             logger.error(f"❌ Error handling max_length content map: {e}")
             return content_map  # Trả về content gốc nếu có lỗi exception
+
+    def _ensure_string_keys(self, obj):
+        """
+        Đảm bảo tất cả keys trong dictionary đều là string để tránh lỗi MongoDB
+        Recursively convert all numeric keys to string keys
+        """
+        if isinstance(obj, dict):
+            return {str(k): self._ensure_string_keys(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._ensure_string_keys(item) for item in obj]
+        else:
+            return obj
 
     def _find_best_matching_template_with_max_length(
         self,
@@ -1985,6 +2022,8 @@ SHORTENED CONTENT MAP:"""
 
                             # Copy element và update content với map đã được làm ngắn
                             processed_element = copy.deepcopy(element)
+                            # Đảm bảo processed_content_map có string keys để tránh lỗi MongoDB
+                            processed_content_map = self._ensure_string_keys(processed_content_map)
                             processed_element["text"] = processed_content_map  # Trực tiếp gán map
 
                             processed_slide["slideData"]["elements"].append(processed_element)
