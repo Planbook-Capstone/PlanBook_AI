@@ -545,7 +545,7 @@ async def handle_slide_generation_request(data: dict):
         # Extract request parameters from nested data structure
         user_id = data.get("user_id", "")
         input_data = data.get("input", {})
-        slides_input = input_data.get("data", {})  # input now contains a "data" key with the actual slides data
+        slides_input = input_data.get("data", input_data)  # input now contains a "data" key with the actual slides data
         lesson_id = data.get("lesson_id", "")
         tool_log_id = data.get("tool_log_id", "")
         book_id = data.get("book_id", "")
