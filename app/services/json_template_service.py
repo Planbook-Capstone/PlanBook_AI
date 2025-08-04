@@ -118,8 +118,7 @@ class JsonTemplateService:
 
         except Exception as e:
             logger.error(f"❌ Error processing JSON template with progress: {e}")
-
-            error_result = {
+            return {
                 "success": False,
                 "error": f"Failed to process JSON template: {str(e)}",
                 "lesson_id": lesson_id,
@@ -131,26 +130,6 @@ class JsonTemplateService:
                 },
                 "slides_created": 0
             }
-
-            # Send error result via Kafka if user_id is available
-            if user_id:
-                from app.services.kafka_service import kafka_service
-                from app.services.kafka_service import safe_kafka_call
-
-                logger.info(f"📤 Sending error result via Kafka for user {user_id}")
-                safe_kafka_call(
-                    kafka_service.send_final_result_sync,
-                    task_id=task_id,
-                    user_id=user_id,
-                    result=error_result,
-                    lesson_id=lesson_id,
-                    tool_log_id=tool_log_id
-                )
-
-            # Đảm bảo tất cả keys đều là string để tránh lỗi MongoDB
-            error_result = self._ensure_string_keys(error_result)
-
-            return error_result
 
     async def _get_lesson_content(self, lesson_id: str, book_id: str = None) -> Dict[str, Any]:
         """Lấy nội dung bài học từ TextbookRetrievalService"""
@@ -476,21 +455,6 @@ class JsonTemplateService:
                     message=f"🎉 Đã tạo thành công {len(final_template.get('slides', []))} slides",
                     partial_result=final_result
                 )
-
-                # Send final result via Kafka if user_id is available
-                if user_id:
-                    from app.services.kafka_service import kafka_service
-                    from app.services.kafka_service import safe_kafka_call
-
-                    logger.info(f"📤 Sending final result via Kafka for user {user_id}")
-                    safe_kafka_call(
-                        kafka_service.send_final_result_sync,
-                        task_id=task_id,
-                        user_id=user_id,
-                        result=final_result,
-                        lesson_id=template_json.get("lesson_id"),
-                        tool_log_id=tool_log_id
-                    )
 
             logger.info(f"🎉 Optimized workflow with progress complete: {len(final_template.get('slides', []))} slides created")
 
