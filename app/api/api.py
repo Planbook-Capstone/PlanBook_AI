@@ -544,10 +544,12 @@ async def handle_slide_generation_request(data: dict):
 
         # Extract request parameters from nested data structure
         user_id = data.get("user_id", "")
-        slides_input = data.get("input", {})  # input is now a dict with numbered keys
+        input_data = data.get("input", {})
+        slides_input = input_data.get("data", {})  # input now contains a "data" key with the actual slides data
         lesson_id = data.get("lesson_id", "")
         tool_log_id = data.get("tool_log_id", "")
         book_id = data.get("book_id", "")
+        config_prompt= data.get("user_config", "")
 
         print(f"[KAFKA] 🔍 Extracted values:")
         print(f"[KAFKA]   - user_id: {user_id}")
@@ -623,7 +625,7 @@ async def handle_slide_generation_request(data: dict):
         task_id = await trigger_json_template_task(
             lesson_id=lesson_id,
             template_json=template_json,
-            config_prompt=None,
+            config_prompt=config_prompt,
             user_id=user_id,
             book_id=book_id,
             tool_log_id=tool_log_id
