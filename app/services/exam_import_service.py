@@ -20,6 +20,7 @@ from app.models.exam_import_models import (
     ImportedExamData,
     ExamImportStatistics
 )
+from app.constants.difficulty_levels import DifficultyLevel
 
 logger = logging.getLogger(__name__)
 
@@ -1138,7 +1139,7 @@ Hãy phân tích và trả về JSON:
                     staff_question = {
                         "lessonId": None,  # Staff tự chọn
                         "questionType": question_type,
-                        "difficultyLevel": self._analyze_difficulty_level(question),
+                        "difficultyLevel": self._analyze_difficulty_level(question).value,
                         "questionContent": self._format_question_content(question, question_type),
                         "explanation": question.get("explanation", ""),
                         "referenceSource": exam_data.get("school") or "Imported from DOCX",
@@ -1272,7 +1273,7 @@ Hãy phân tích và trả về JSON:
 
         return part_mapping.get(part_name, "PART_I")
 
-    def _analyze_difficulty_level(self, question: Dict[str, Any]) -> str:
+    def _analyze_difficulty_level(self, question: Dict[str, Any]) -> DifficultyLevel:
         """
         Phân tích mức độ khó của câu hỏi dựa trên nội dung
 
@@ -1280,7 +1281,7 @@ Hãy phân tích và trả về JSON:
             question: Dữ liệu câu hỏi
 
         Returns:
-            str: Difficulty level (KNOWLEDGE, COMPREHENSION, APPLICATION, ANALYSIS)
+            DifficultyLevel: Difficulty level enum (KNOWLEDGE, COMPREHENSION, APPLICATION)
         """
         try:
             question_text = question.get("question", "").lower()
@@ -1288,24 +1289,22 @@ Hãy phân tích và trả về JSON:
             # Keywords cho từng mức độ
             knowledge_keywords = ["là gì", "định nghĩa", "tên gọi", "ký hiệu", "công thức phân tử"]
             comprehension_keywords = ["giải thích", "tại sao", "nguyên nhân", "so sánh", "phân biệt"]
-            application_keywords = ["tính toán", "xác định", "tìm", "khối lượng", "thể tích", "nồng độ"]
-            analysis_keywords = ["phân tích", "đánh giá", "dự đoán", "thiết kế", "tổng hợp"]
+            application_keywords = ["tính toán", "xác định", "tìm", "khối lượng", "thể tích", "nồng độ",
+                                  "phân tích", "đánh giá", "dự đoán", "thiết kế", "tổng hợp"]
 
-            # Kiểm tra theo thứ tự từ cao xuống thấp
-            if any(keyword in question_text for keyword in analysis_keywords):
-                return "ANALYSIS"
-            elif any(keyword in question_text for keyword in application_keywords):
-                return "APPLICATION"
+            # Kiểm tra theo thứ tự từ cao xuống thấp (bỏ ANALYSIS, chuyển keywords vào APPLICATION)
+            if any(keyword in question_text for keyword in application_keywords):
+                return DifficultyLevel.APPLICATION
             elif any(keyword in question_text for keyword in comprehension_keywords):
-                return "COMPREHENSION"
+                return DifficultyLevel.COMPREHENSION
             elif any(keyword in question_text for keyword in knowledge_keywords):
-                return "KNOWLEDGE"
+                return DifficultyLevel.KNOWLEDGE
             else:
-                return "KNOWLEDGE"  # Default fallback
+                return DifficultyLevel.KNOWLEDGE  # Default fallback
 
         except Exception as e:
             logger.error(f"Error analyzing difficulty level: {e}")
-            return "KNOWLEDGE"
+            return DifficultyLevel.KNOWLEDGE
 
     def _format_question_content(self, question: Dict[str, Any], question_type: str) -> Dict[str, Any]:
         """

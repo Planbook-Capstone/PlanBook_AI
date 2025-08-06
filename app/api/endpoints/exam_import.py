@@ -14,6 +14,7 @@ from app.models.exam_import_models import (
     ImportedExamData
 )
 from app.services.exam_import_service import get_exam_import_service
+from app.constants.difficulty_levels import DifficultyLevel
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -230,10 +231,9 @@ async def get_import_status():
                 "staff": "QuestionBank format for SpringBoot backend"
             },
             "difficulty_levels": [
-                "KNOWLEDGE - Recall of facts, terms, basic concepts",
-                "COMPREHENSION - Understanding meaning, interpretation",
-                "APPLICATION - Applying knowledge to new situations",
-                "ANALYSIS - Analysis, synthesis, evaluation"
+                f"{DifficultyLevel.KNOWLEDGE.value} - Recall of facts, terms, basic concepts",
+                f"{DifficultyLevel.COMPREHENSION.value} - Understanding meaning, interpretation",
+                f"{DifficultyLevel.APPLICATION.value} - Applying knowledge to new situations"
             ]
         }
 
