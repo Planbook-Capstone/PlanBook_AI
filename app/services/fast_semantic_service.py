@@ -55,19 +55,31 @@ class FastSemanticService:
             r'\b[A-Z]{2,}\b',  # Abbreviations
         ]
         
-        # Difficulty indicators
+        # Difficulty indicators theo chuẩn THPT 2025 (Hóa học)
         self.difficulty_indicators = {
             "basic": [
-                r'(cơ bản|đơn giản|dễ|thường|phổ biến)',
-                r'(khái niệm|định nghĩa|giới thiệu)',
+                # Nhận biết - 40% đề thi
+                r'(khái niệm|định nghĩa|tên gọi|ký hiệu)',
+                r'(công thức phân tử|công thức cấu tạo)',
+                r'(tính chất|đặc điểm|màu sắc|trạng thái)',
+                r'(thuộc nhóm|loại hợp chất|phân loại)',
+                r'(số hiệu nguyên tử|khối lượng nguyên tử)',
             ],
             "intermediate": [
-                r'(phức tạp hơn|nâng cao|chi tiết|cụ thể)',
-                r'(ứng dụng|áp dụng|sử dụng)',
+                # Thông hiểu - 35-40% đề thi
+                r'(giải thích|tại sao|nguyên nhân|do đâu)',
+                r'(so sánh|phân biệt|khác nhau|giống nhau)',
+                r'(liên quan|ảnh hưởng|tác động|phụ thuộc)',
+                r'(dự đoán|nhận xét|kết luận|suy ra)',
+                r'(điều kiện|yếu tố ảnh hưởng|cơ chế)',
             ],
             "advanced": [
-                r'(phức tạp|khó|chuyên sâu|cao cấp)',
-                r'(nghiên cứu|phân tích|tổng hợp)',
+                # Vận dụng - 20-25% đề thi
+                r'(tính toán|xác định|tìm|khối lượng|thể tích)',
+                r'(nồng độ|số mol|hiệu suất|độ tan|ph)',
+                r'(phân tích|đánh giá|nhận định|bình luận)',
+                r'(thiết kế|thí nghiệm|phương pháp|quy trình)',
+                r'(ứng dụng|sử dụng|trong thực tế|sản xuất)',
             ]
         }
 
@@ -167,29 +179,45 @@ class FastSemanticService:
         }
 
     def _estimate_difficulty(self, text_lower: str) -> str:
-        """Ước tính mức độ khó của content"""
+        """
+        Ước tính mức độ khó của content theo chuẩn THPT 2025
+        basic = Nhận biết, intermediate = Thông hiểu, advanced = Vận dụng
+        """
         scores = {"basic": 0, "intermediate": 0, "advanced": 0}
-        
+
+        # Đếm điểm dựa trên từ khóa
         for level, patterns in self.difficulty_indicators.items():
             for pattern in patterns:
                 if re.search(pattern, text_lower):
                     scores[level] += 1
-        
-        # Thêm heuristics
+
+        # Phân tích bổ sung cho hóa học
+        # Có số liệu, đơn vị đo lường -> vận dụng
+        if re.search(r'\d+[.,]\d+|\d+\s*(g|ml|l|mol|m|%|°c|atm|bar)', text_lower):
+            scores["advanced"] += 2
+
+        # Có phương trình hóa học -> thông hiểu hoặc vận dụng
+        if re.search(r'[A-Z][a-z]?\s*\+|→|↔|=', text_lower):
+            scores["intermediate"] += 1
+
+        # Có từ "tính", "tìm", "xác định" -> vận dụng
+        if re.search(r'tính|tìm|xác định|cho biết', text_lower):
+            scores["advanced"] += 1
+
+        # Có công thức hóa học phức tạp -> intermediate/advanced
+        chemical_formula_pattern = r'[A-Z][a-z]?\d*(\([A-Z][a-z]?\d*\))?\d*'
+        if re.search(chemical_formula_pattern, text_lower):
+            scores["intermediate"] += 1
+
+        # Heuristics dựa trên độ dài
         word_count = len(text_lower.split())
-        if word_count < 50:
+        if word_count < 30:
             scores["basic"] += 1
-        elif word_count > 200:
+        elif word_count > 150:
             scores["advanced"] += 1
         else:
             scores["intermediate"] += 1
-        
-        # Kiểm tra technical terms
-        technical_patterns = [r'[A-Z][a-z]?\d+', r'[A-Z]{2,}', r'→|↔|≡']
-        for pattern in technical_patterns:
-            if re.search(pattern, text_lower):
-                scores["advanced"] += 1
-        
+
         # Return level với score cao nhất
         max_level = max(scores.items(), key=lambda x: x[1])
         return max_level[0]

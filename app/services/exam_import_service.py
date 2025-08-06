@@ -1058,6 +1058,9 @@ Hãy phân tích và trả về JSON:
                         # Short answer
                         fe_question["answer"] = question["answer"]
 
+                    # Thêm difficultyLevel cho từng câu hỏi
+                    fe_question["difficultyLevel"] = self._analyze_difficulty_level(question).value
+
                     fe_questions.append(fe_question)
 
                 fe_part = {
@@ -1276,6 +1279,7 @@ Hãy phân tích và trả về JSON:
     def _analyze_difficulty_level(self, question: Dict[str, Any]) -> DifficultyLevel:
         """
         Phân tích mức độ khó của câu hỏi dựa trên nội dung
+        Dựa theo cấu trúc đề thi THPT 2025: 75-80% nhận biết-thông hiểu, 20-25% vận dụng
 
         Args:
             question: Dữ liệu câu hỏi
@@ -1285,22 +1289,95 @@ Hãy phân tích và trả về JSON:
         """
         try:
             question_text = question.get("question", "").lower()
+            options_text = ""
 
-            # Keywords cho từng mức độ
-            knowledge_keywords = ["là gì", "định nghĩa", "tên gọi", "ký hiệu", "công thức phân tử"]
-            comprehension_keywords = ["giải thích", "tại sao", "nguyên nhân", "so sánh", "phân biệt"]
-            application_keywords = ["tính toán", "xác định", "tìm", "khối lượng", "thể tích", "nồng độ",
-                                  "phân tích", "đánh giá", "dự đoán", "thiết kế", "tổng hợp"]
+            # Lấy text từ các lựa chọn nếu có
+            if "options" in question:
+                options = question.get("options", {})
+                if isinstance(options, dict):
+                    options_text = " ".join([str(v).lower() for v in options.values() if v])
+                elif isinstance(options, list):
+                    options_text = " ".join([str(opt).lower() for opt in options if opt])
 
-            # Kiểm tra theo thứ tự từ cao xuống thấp (bỏ ANALYSIS, chuyển keywords vào APPLICATION)
-            if any(keyword in question_text for keyword in application_keywords):
+            full_text = f"{question_text} {options_text}"
+
+            # Keywords cho mức độ NHẬN BIẾT (Knowledge) - 40% đề thi
+            knowledge_keywords = [
+                # Định nghĩa, khái niệm cơ bản
+                "là gì", "định nghĩa", "khái niệm", "tên gọi", "ký hiệu", "công thức phân tử",
+                "công thức cấu tạo", "tên hóa học", "thuộc loại", "được gọi là",
+                # Nhận biết tính chất
+                "tính chất", "đặc điểm", "màu sắc", "trạng thái", "mùi", "vị",
+                # Phân loại cơ bản
+                "thuộc nhóm", "loại hợp chất", "phân loại", "nhóm chức",
+                # Công thức và ký hiệu
+                "ký hiệu hóa học", "số hiệu nguyên tử", "khối lượng nguyên tử",
+                "cấu hình electron", "số electron", "số proton", "số neutron"
+            ]
+
+            # Keywords cho mức độ THÔNG HIỂU (Comprehension) - 35-40% đề thi
+            comprehension_keywords = [
+                # Giải thích hiện tượng
+                "giải thích", "tại sao", "nguyên nhân", "do đâu", "vì sao",
+                "điều kiện", "yếu tố ảnh hưởng", "cơ chế", "quá trình",
+                # So sánh, phân biệt
+                "so sánh", "phân biệt", "khác nhau", "giống nhau", "tương tự",
+                "khác biệt", "điểm chung", "điểm khác",
+                # Mối quan hệ
+                "liên quan", "ảnh hưởng", "tác động", "phụ thuộc", "tỉ lệ",
+                # Dự đoán tính chất
+                "dự đoán", "nhận xét", "kết luận", "suy ra", "cho biết"
+            ]
+
+            # Keywords cho mức độ VẬN DỤNG (Application) - 20-25% đề thi
+            application_keywords = [
+                # Tính toán định lượng
+                "tính", "tính toán", "xác định", "tìm", "khối lượng", "thể tích",
+                "nồng độ", "số mol", "hiệu suất", "độ tan", "ph", "poh",
+                "phần trăm", "tỉ lệ phần trăm", "khối lượng riêng",
+                # Phân tích và đánh giá
+                "phân tích", "đánh giá", "nhận định", "bình luận", "thảo luận",
+                # Thiết kế thí nghiệm
+                "thiết kế", "thí nghiệm", "phương pháp", "cách tiến hành",
+                "quy trình", "các bước", "thực hiện",
+                # Ứng dụng thực tế
+                "ứng dụng", "sử dụng", "áp dụng", "trong thực tế", "trong đời sống",
+                "sản xuất", "công nghiệp", "chế tạo", "điều chế"
+            ]
+
+            # Đếm điểm cho từng mức độ
+            knowledge_score = sum(1 for keyword in knowledge_keywords if keyword in full_text)
+            comprehension_score = sum(1 for keyword in comprehension_keywords if keyword in full_text)
+            application_score = sum(1 for keyword in application_keywords if keyword in full_text)
+
+            # Phân tích bổ sung dựa trên cấu trúc câu hỏi
+            # Câu hỏi có số liệu cụ thể + đơn vị thường là vận dụng
+            if re.search(r'\d+[.,]\d+|\d+\s*(g|ml|l|mol|m|%|°c)', full_text):
+                application_score += 2
+
+            # Câu hỏi có phương trình hóa học thường là thông hiểu hoặc vận dụng
+            if re.search(r'[A-Z][a-z]?\s*\+|→|↔|=', full_text):
+                comprehension_score += 1
+
+            # Ưu tiên mạnh cho từ khóa thông hiểu
+            if re.search(r'giải thích|so sánh|phân biệt', full_text):
+                comprehension_score += 3
+
+            # Câu hỏi có từ "tính", "tìm" thường là vận dụng
+            elif re.search(r'tính|tìm', full_text):
+                application_score += 2
+
+            # Câu hỏi có "xác định" + số liệu thường là vận dụng
+            elif re.search(r'xác định', full_text) and re.search(r'\d+', full_text):
+                application_score += 1
+
+            # Quyết định mức độ dựa trên điểm số
+            if application_score > max(knowledge_score, comprehension_score):
                 return DifficultyLevel.APPLICATION
-            elif any(keyword in question_text for keyword in comprehension_keywords):
+            elif comprehension_score > knowledge_score:
                 return DifficultyLevel.COMPREHENSION
-            elif any(keyword in question_text for keyword in knowledge_keywords):
-                return DifficultyLevel.KNOWLEDGE
             else:
-                return DifficultyLevel.KNOWLEDGE  # Default fallback
+                return DifficultyLevel.KNOWLEDGE
 
         except Exception as e:
             logger.error(f"Error analyzing difficulty level: {e}")
