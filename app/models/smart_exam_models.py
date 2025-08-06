@@ -29,7 +29,7 @@ class PartModel(BaseModel):
     """Model cho từng phần trong đề thi"""
     part: Literal[1, 2, 3] = Field(..., description="Số phần (1, 2, hoặc 3)")
     objectives: ObjectivesModel = Field(..., description="Phân bổ mức độ nhận thức cho phần này")
-
+    
     @validator('objectives')
     def validate_objectives_not_empty(cls, v):
         # Cho phép phần có 0 câu hỏi (user có thể chỉ muốn tạo một số phần)
@@ -39,7 +39,7 @@ class PartModel(BaseModel):
 
 class LessonMatrixModel(BaseModel):
     """Model cho ma trận của một bài học"""
-    lessonId: str = Field(..., description="ID của bài học")
+    lessonId: Any = Field(..., description="ID của bài học")
     parts: List[PartModel] = Field(..., description="Phân bổ câu hỏi theo từng phần")
 
     @validator('parts')
@@ -76,9 +76,10 @@ class SmartExamRequest(BaseModel):
     examCode: Optional[str] = Field(None, description="Mã đề thi (4 số, VD: 0335). Nếu không truyền sẽ tự động random")
     outputFormat: Literal["docx"] = Field("docx", description="Định dạng file xuất ra")
     outputLink: Literal["online"] = Field("online", description="Loại link trả về")
-    bookID: Optional[str] = Field(None, description="ID của sách giáo khoa (optional). Nếu có thì chỉ tìm lessons trong collection textbook_{bookID}")
+    isExportDocx: bool = Field(False, description="True: tạo file DOCX, False: trả về JSON format")
+    bookID: Optional[Any] = Field(None, description="ID của sách giáo khoa (optional). Nếu có thì chỉ tìm lessons trong collection textbook_{bookID}")
     matrix: List[LessonMatrixModel] = Field(..., description="Ma trận đề thi theo bài học")
-    user_id: Optional[str] = Field(None, description="ID của user (dùng cho Kafka integration)")
+    user_id: Optional[Any] = Field(None, description="ID của user (dùng cho Kafka integration)")
 
     @validator('matrix')
     def validate_matrix_not_empty(cls, v):
@@ -119,7 +120,7 @@ class SmartExamRequest(BaseModel):
                 "bookID": "hoa12",
                 "matrix": [
                     {
-                        "lessonId": "hoa12_bai1",
+                        "lessonId": "1",
                         "parts": [
                             {
                                 "part": 1,

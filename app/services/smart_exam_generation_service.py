@@ -116,9 +116,15 @@ class SmartExamGenerationService:
 
             # Tạo câu hỏi cho từng phần - truyền lesson_data thay vì actual_content
             for part in lesson_matrix.parts:
+                # Debug logging
+                total_expected = part.objectives.Biết + part.objectives.Hiểu + part.objectives.Vận_dụng
+                logger.info(f"[DEBUG] Processing Part {part.part}: Expected {total_expected} questions (Biết:{part.objectives.Biết}, Hiểu:{part.objectives.Hiểu}, Vận_dụng:{part.objectives.Vận_dụng})")
+
                 part_questions = await self._generate_questions_for_part(
                     part, lesson_data, subject, lesson_id
                 )
+
+                logger.info(f"[DEBUG] Part {part.part} generated {len(part_questions)} questions")
                 all_lesson_questions.extend(part_questions)
 
             return all_lesson_questions
@@ -180,11 +186,12 @@ class SmartExamGenerationService:
             )   
             print(f"Generated prompt: {prompt}")
 
-            # Gọi LLM để tạo câu hỏi
+            # Gọi LLM để tạo câu hỏi - tăng max_tokens cho nhiều câu hỏi
+            max_tokens = 6000 if count > 3 else 4000  # Tăng token limit cho nhiều câu
             response = await self.llm_service.generate_content(
                 prompt=prompt,
                 temperature=0.3,
-                max_tokens=4000
+                max_tokens=max_tokens
             )
             print(f"LLM response: {response}")
             if not response.get("success", False):
@@ -194,8 +201,15 @@ class SmartExamGenerationService:
             # Parse response JSON
             questions = self._parse_llm_response(response.get("text", ""), part_num, level, lesson_id)
             print(f"Parsed questions: {questions}")
+
+            # Debug logging
+            logger.info(f"[DEBUG] Part {part_num}, Level {level}: Requested {count} questions, LLM generated {len(questions)} questions")
+
             # Giới hạn số câu hỏi theo yêu cầu
-            return questions[:count]
+            limited_questions = questions[:count]
+            logger.info(f"[DEBUG] Part {part_num}, Level {level}: Returning {len(limited_questions)} questions after limit")
+
+            return limited_questions
 
         except Exception as e:
             logger.error(f"Error generating questions for level {level}: {e}")

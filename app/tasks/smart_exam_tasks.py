@@ -253,6 +253,10 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
         lesson_ids = [lesson.lessonId for lesson in exam_request.matrix]
         total_lessons = len(lesson_ids)
 
+        # Debug logging
+        logger.info(f"[DEBUG] Lesson IDs to search: {lesson_ids}")
+        logger.info(f"[DEBUG] Book ID: {getattr(exam_request, 'bookID', None)}")
+
         # Tính tổng số câu hỏi từ parts
         total_questions = 0
         for lesson in exam_request.matrix:
@@ -271,6 +275,12 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
             await progress_callback(22, f"Tìm kiếm trong sách: {book_id}")
 
         lesson_content = await textbook_service.get_multiple_lessons_content_for_exam(lesson_ids, book_id)
+
+        # Debug logging cho kết quả
+        logger.info(f"[DEBUG] Lesson content result: success={lesson_content.get('success')}")
+        if not lesson_content.get('success'):
+            logger.error(f"[DEBUG] Lesson content errors: {lesson_content.get('errors', [])}")
+            logger.error(f"[DEBUG] Full lesson content response: {lesson_content}")
 
         if not lesson_content.get("success", False):
             error_result = create_error_result(task_id,
@@ -313,68 +323,103 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
 
         generated_questions = len(exam_result.get("questions", []))
         await progress_callback(60, f"Đã tạo thành công {generated_questions} câu hỏi")
-        
-        # Bước 4: Tạo file DOCX
-        await progress_callback(65, "Đang tạo file Word (.docx)...")
-        docx_result = await smart_exam_docx_service.create_smart_exam_docx(exam_result, exam_request.model_dump())
 
-        if not docx_result.get("success", False):
-            error_result = create_error_result(task_id,
-                f"Không thể tạo file DOCX: {docx_result.get('error', 'Lỗi không xác định')}",
-                "DocxCreationError", "docx_creation")
-            await progress_callback(100, f"Lỗi: {error_result['error']}")
-            await task_service.mark_task_completed(task_id=task_id, result=error_result)
-            return error_result
+        # Kiểm tra isExportDocx để quyết định xử lý
+        is_export_docx = exam_request.isExportDocx
 
-        file_path = docx_result.get("file_path")
-        filename = docx_result.get("filename")
-        await progress_callback(75, f"Đã tạo file Word: {filename}")
-        
-        # Bước 5: Upload lên Google Drive
-        await progress_callback(80, "Đang tải lên Google Drive...")
-        google_drive_service = get_google_drive_service()
-        upload_result = await google_drive_service.upload_docx_file(
-            file_path, filename or "smart_exam.docx", convert_to_google_docs=True)
+        if is_export_docx:
+            # Bước 4: Tạo file DOCX
+            await progress_callback(65, "Đang tạo file Word (.docx)...")
+            docx_result = await smart_exam_docx_service.create_smart_exam_docx(exam_result, exam_request.model_dump())
 
-        if not upload_result.get("success", False):
-            error_result = create_error_result(task_id,
-                f"Không thể tải lên Google Drive: {upload_result.get('error', 'Lỗi không xác định')}",
-                "GoogleDriveUploadError", "file_upload")
-            await progress_callback(100, f"Lỗi: {error_result['error']}")
-            await task_service.mark_task_completed(task_id=task_id, result=error_result)
-            return error_result
+            if not docx_result.get("success", False):
+                error_result = create_error_result(task_id,
+                    f"Không thể tạo file DOCX: {docx_result.get('error', 'Lỗi không xác định')}",
+                    "DocxCreationError", "docx_creation")
+                await progress_callback(100, f"Lỗi: {error_result['error']}")
+                await task_service.mark_task_completed(task_id=task_id, result=error_result)
+                return error_result
 
-        await progress_callback(90, "Đã tải lên Google Drive thành công")
-        
-        # Bước 6: Dọn dẹp file tạm
-        try:
-            if file_path and os.path.exists(file_path):
-                os.remove(file_path)
-                logger.info(f"Đã xóa file tạm: {file_path}")
-        except Exception as e:
-            logger.warning(f"Không thể xóa file tạm: {e}")
+            file_path = docx_result.get("file_path")
+            filename = docx_result.get("filename")
+            await progress_callback(75, f"Đã tạo file Word: {filename}")
 
-        # Bước 7: Hoàn thành
-        await progress_callback(95, "Đang hoàn thiện kết quả...")
-        statistics = exam_result.get("statistics", {})
-        statistics_dict = statistics.model_dump() if hasattr(statistics, 'model_dump') else statistics
+            # Bước 5: Upload lên Google Drive
+            await progress_callback(80, "Đang tải lên Google Drive...")
+            google_drive_service = get_google_drive_service()
+            upload_result = await google_drive_service.upload_docx_file(
+                file_path, filename or "smart_exam.docx", convert_to_google_docs=True)
 
-        result = {
-            "success": True,
-            "output": {
-                "exam_id": exam_result.get("exam_id"),
-                "message": "Đề thi thông minh đã được tạo thành công theo chuẩn THPT 2025",
-                "online_links": upload_result.get("links", {}),
-                "statistics": statistics_dict,
-                "task_id": task_id,
-                "processing_info": {
-                    "total_questions_generated": generated_questions,
-                    "total_lessons_used": len(available_lessons),
-                    "missing_lessons": missing_lessons,
-                    "processing_method": "celery_smart_exam_generation"
+            if not upload_result.get("success", False):
+                error_result = create_error_result(task_id,
+                    f"Không thể tải lên Google Drive: {upload_result.get('error', 'Lỗi không xác định')}",
+                    "GoogleDriveUploadError", "file_upload")
+                await progress_callback(100, f"Lỗi: {error_result['error']}")
+                await task_service.mark_task_completed(task_id=task_id, result=error_result)
+                return error_result
+
+            await progress_callback(90, "Đã tải lên Google Drive thành công")
+
+            # Bước 6: Dọn dẹp file tạm
+            try:
+                if file_path and os.path.exists(file_path):
+                    os.remove(file_path)
+                    logger.info(f"Đã xóa file tạm: {file_path}")
+            except Exception as e:
+                logger.warning(f"Không thể xóa file tạm: {e}")
+
+            # Bước 7: Hoàn thành với DOCX
+            await progress_callback(95, "Đang hoàn thiện kết quả...")
+            statistics = exam_result.get("statistics", {})
+            statistics_dict = statistics.model_dump() if hasattr(statistics, 'model_dump') else statistics
+
+            result = {
+                "success": True,
+                "output": {
+                    "exam_id": exam_result.get("exam_id"),
+                    "message": "Đề thi thông minh đã được tạo thành công theo chuẩn THPT 2025",
+                    "online_links": upload_result.get("links", {}),
+                    "statistics": statistics_dict,
+                    "task_id": task_id,
+                    "processing_info": {
+                        "total_questions_generated": generated_questions,
+                        "total_lessons_used": len(available_lessons),
+                        "missing_lessons": missing_lessons,
+                        "processing_method": "celery_smart_exam_generation"
+                    }
                 }
             }
-        }
+        else:
+            # Bước 4: Chuyển đổi sang JSON format
+            await progress_callback(70, "Đang chuyển đổi sang JSON format...")
+            from app.services.smart_exam_json_formatter import get_smart_exam_json_formatter
+
+            json_formatter = get_smart_exam_json_formatter()
+            formatted_json = json_formatter.format_exam_to_json_response(exam_result)
+
+            await progress_callback(90, "Đã chuyển đổi JSON thành công")
+
+            # Bước 5: Hoàn thành với JSON
+            await progress_callback(95, "Đang hoàn thiện kết quả...")
+            statistics = exam_result.get("statistics", {})
+            statistics_dict = statistics.model_dump() if hasattr(statistics, 'model_dump') else statistics
+
+            result = {
+                "success": True,
+                "output": {
+                    "exam_id": exam_result.get("exam_id"),
+                    "message": "Đề thi thông minh đã được tạo thành công theo chuẩn THPT 2025",
+                    "exam_data": formatted_json,
+                    "statistics": statistics_dict,
+                    "task_id": task_id,
+                    "processing_info": {
+                        "total_questions_generated": generated_questions,
+                        "total_lessons_used": len(available_lessons),
+                        "missing_lessons": missing_lessons,
+                        "processing_method": "celery_smart_exam_generation"
+                    }
+                }
+            }
 
         await progress_callback(100, f"Hoàn thành! Đã tạo {generated_questions} câu hỏi từ {len(available_lessons)} bài học")
         await task_service.mark_task_completed(task_id=task_id, result=result)

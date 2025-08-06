@@ -433,10 +433,12 @@ async def generate_smart_exam(request: SmartExamRequest):
     Hỗ trợ Kafka integration khi có user_id.
 
     Args:
-        request: SmartExamRequest chứa thông tin trường, môn học, ma trận đề thi, user_id (optional)
+        request: SmartExamRequest chứa thông tin trường, môn học, ma trận đề thi, user_id (optional), isExportDocx
 
     Returns:
         Dict: {"task_id": "...", "message": "..."} để theo dõi qua /api/v1/tasks/{task_id}/status
+        - Nếu isExportDocx = true: tạo file DOCX và upload Google Drive
+        - Nếu isExportDocx = false: trả về JSON format với cấu trúc parts
 
     Example:
         POST /api/v1/exam/generate-smart-exam
@@ -451,6 +453,7 @@ async def generate_smart_exam(request: SmartExamRequest):
             "outputLink": "online",
             "bookID": "hoa12",
             "user_id": "user123",
+            "isExportDocx": false,
             "matrix": [
                 {
                     "lessonId": "hoa12_bai1",
@@ -473,11 +476,22 @@ async def generate_smart_exam(request: SmartExamRequest):
             "task_id": "abc-123-def",
             "message": "Đã tạo task tạo đề thi thông minh. Sử dụng task_id để theo dõi tiến độ."
         }
+
+        Kết quả task (khi isExportDocx = false):
+        {
+            "success": true,
+            "output": {
+                "exam_data": {
+                    "parts": [...]  // JSON format theo cấu trúc mới
+                }
+            }
+        }
     """
     print("=== SMART EXAM ENDPOINT CALLED ===")
     try:
         logger.info(f"=== SMART EXAM GENERATION START (ASYNC) ===")
         logger.info(f"Request: {request.school} - {request.subject} - Grade {request.grade}")
+        logger.info(f"Export mode: {'DOCX' if request.isExportDocx else 'JSON'}")
         if request.user_id:
             logger.info(f"User ID: {request.user_id} (Kafka integration enabled)")
 
