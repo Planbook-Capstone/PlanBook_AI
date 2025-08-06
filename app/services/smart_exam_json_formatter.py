@@ -6,6 +6,8 @@ import uuid
 import logging
 from typing import Dict, Any, List
 
+from app.constants.difficulty_levels import DifficultyLevel
+
 logger = logging.getLogger(__name__)
 
 
@@ -14,6 +16,23 @@ class SmartExamJsonFormatter:
 
     def __init__(self):
         pass
+
+    def _map_cognitive_level_to_difficulty(self, cognitive_level: str) -> str:
+        """
+        Map cognitive_level từ smart exam sang DifficultyLevel enum
+
+        Args:
+            cognitive_level: Mức độ nhận thức từ smart exam ("Biết", "Hiểu", "Vận_dụng")
+
+        Returns:
+            str: DifficultyLevel value ("KNOWLEDGE", "COMPREHENSION", "APPLICATION")
+        """
+        mapping = {
+            "Biết": DifficultyLevel.KNOWLEDGE.value,
+            "Hiểu": DifficultyLevel.COMPREHENSION.value,
+            "Vận_dụng": DifficultyLevel.APPLICATION.value
+        }
+        return mapping.get(cognitive_level, DifficultyLevel.KNOWLEDGE.value)
 
     def format_exam_to_json_response(self, exam_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -81,7 +100,11 @@ class SmartExamJsonFormatter:
                 "questionNumber": i,
                 "question": question.get("question", ""),
                 "options": options,
-                "answer": correct_answer
+                "answer": correct_answer,
+                "explanation": question.get("explanation", ""),
+                "difficultyLevel": self._map_cognitive_level_to_difficulty(
+                    question.get("cognitive_level", "Biết")
+                )
             }
 
             # Thêm illustrationImage nếu có
@@ -128,7 +151,11 @@ class SmartExamJsonFormatter:
                 "id": str(uuid.uuid4()),
                 "questionNumber": i,
                 "question": question.get("question", ""),
-                "statements": statements
+                "statements": statements,
+                "explanation": question.get("explanation", ""),
+                "difficultyLevel": self._map_cognitive_level_to_difficulty(
+                    question.get("cognitive_level", "Chưa thể xác định")
+                )
             }
 
             formatted_questions.append(formatted_question)
@@ -157,7 +184,11 @@ class SmartExamJsonFormatter:
                 "id": str(uuid.uuid4()),
                 "questionNumber": i,
                 "question": question.get("question", ""),
-                "answer": answer
+                "answer": answer,
+                "explanation": question.get("explanation", ""),
+                "difficultyLevel": self._map_cognitive_level_to_difficulty(
+                    question.get("cognitive_level", "Biết")
+                )
             }
 
             formatted_questions.append(formatted_question)
