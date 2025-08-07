@@ -22,7 +22,6 @@ class SmartExamGenerationService:
         self.llm_service = get_openrouter_service()
         # Đảm bảo service được khởi tạo đầy đủ
         self.llm_service._ensure_service_initialized()
-        logger.info("🔄 SmartExamGenerationService: First-time initialization triggered")
 
     async def generate_smart_exam(
         self, exam_request: SmartExamRequest, lesson_content: Dict[str, Any]
@@ -51,17 +50,10 @@ class SmartExamGenerationService:
 
             # Tạo câu hỏi cho từng phần theo chuẩn THPT 2025
             all_questions = []
-            part_statistics = {"part_1": 0, "part_2": 0, "part_3": 0}
             for lesson_matrix in exam_request.matrix:
                 lesson_questions = await self._generate_questions_for_lesson(
                     lesson_matrix, lesson_content, exam_request.subject
                 )
-                
-                # Phân loại câu hỏi theo phần
-                for question in lesson_questions:
-                    part_num = question.get("part", 1)
-                    part_statistics[f"part_{part_num}"] += 1
-                
                 all_questions.extend(lesson_questions)
 
             # Sắp xếp câu hỏi theo phần và đánh số lại
@@ -114,17 +106,11 @@ class SmartExamGenerationService:
 
             all_lesson_questions = []
 
-            # Tạo câu hỏi cho từng phần - truyền lesson_data thay vì actual_content
+            # Tạo câu hỏi cho từng phần
             for part in lesson_matrix.parts:
-                # Debug logging
-                total_expected = part.objectives.Biết + part.objectives.Hiểu + part.objectives.Vận_dụng
-                logger.info(f"[DEBUG] Processing Part {part.part}: Expected {total_expected} questions (Biết:{part.objectives.Biết}, Hiểu:{part.objectives.Hiểu}, Vận_dụng:{part.objectives.Vận_dụng})")
-
                 part_questions = await self._generate_questions_for_part(
                     part, lesson_data, subject, lesson_id
                 )
-
-                logger.info(f"[DEBUG] Part {part.part} generated {len(part_questions)} questions")
                 all_lesson_questions.extend(part_questions)
 
             return all_lesson_questions
@@ -183,8 +169,7 @@ class SmartExamGenerationService:
             # Tạo prompt cho LLM
             prompt = self._create_prompt_for_level(
                 part_num, level, count, lesson_data, subject, lesson_id
-            )   
-            print(f"Generated prompt: {prompt}")
+            )
 
             # Gọi LLM để tạo câu hỏi - tăng max_tokens cho nhiều câu hỏi
             max_tokens = 6000 if count > 3 else 4000  # Tăng token limit cho nhiều câu
@@ -193,22 +178,16 @@ class SmartExamGenerationService:
                 temperature=0.3,
                 max_tokens=max_tokens
             )
-            print(f"LLM response: {response}")
+
             if not response.get("success", False):
                 logger.error(f"LLM failed for part {part_num}, level {level}: {response.get('error')}")
                 return []
 
             # Parse response JSON
             questions = self._parse_llm_response(response.get("text", ""), part_num, level, lesson_id)
-            print(f"Parsed questions: {questions}")
-
-            # Debug logging
-            logger.info(f"[DEBUG] Part {part_num}, Level {level}: Requested {count} questions, LLM generated {len(questions)} questions")
 
             # Giới hạn số câu hỏi theo yêu cầu
             limited_questions = questions[:count]
-            logger.info(f"[DEBUG] Part {part_num}, Level {level}: Returning {len(limited_questions)} questions after limit")
-
             return limited_questions
 
         except Exception as e:
@@ -225,21 +204,13 @@ class SmartExamGenerationService:
 
         # Lấy nội dung bài học từ textbook_retrieval_service format
         main_content = ""
-        lesson_info = {}
 
         if "lesson_content" in lesson_data:
             # Từ textbook_retrieval_service
             main_content = lesson_data.get("lesson_content", "")
-            lesson_info = {
-                "lesson_id": lesson_data.get("lesson_id", lesson_id),
-                "book_id": lesson_data.get("book_id", ""),
-                "collection_name": lesson_data.get("collection_name", ""),
-                "total_chunks": lesson_data.get("total_chunks", 0)
-            }
         else:
             # Fallback cho format cũ
             main_content = lesson_data.get("main_content", "")
-            lesson_info = lesson_data.get("lesson_info", {})
 
         # Ensure main_content is string and limit length
         if isinstance(main_content, str):
@@ -578,7 +549,6 @@ Yêu cầu: Sử dụng phương pháp bảo toàn electron, phân tích kỹ l�
             part_counters = {1: 1, 2: 1, 3: 1}
             
             for question in sorted_questions:
-                print(f"Question ne xt: {question}")
                 part = question.get("part", 1)
                 question["stt"] = part_counters[part]
                 question["stt_global"] = len([q for q in sorted_questions[:sorted_questions.index(question)+1]])
@@ -641,7 +611,3 @@ def get_smart_exam_generation_service() -> SmartExamGenerationService:
         SmartExamGenerationService: Fresh instance
     """
     return SmartExamGenerationService()
-
-
-
-
