@@ -59,20 +59,23 @@ class SmartExamGenerationService:
             # Sắp xếp câu hỏi theo phần và đánh số lại
             sorted_questions = self._sort_and_renumber_questions(all_questions)
 
+            # Final validation: Loại bỏ câu hỏi có đáp án quá dài
+            validated_questions = self._final_answer_validation(sorted_questions)
+
             # Tính toán thống kê
             end_time = datetime.now()
             generation_time = (end_time - start_time).total_seconds()
-            
+
             statistics = self._calculate_statistics(
-                sorted_questions, exam_request, generation_time
+                validated_questions, exam_request, generation_time
             )
 
             return {
                 "success": True,
                 "exam_id": f"smart_exam_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                "questions": sorted_questions,
+                "questions": validated_questions,
                 "statistics": statistics,
-                "total_generated": len(sorted_questions),
+                "total_generated": len(validated_questions),
                 "exam_request": exam_request.model_dump()
             }
 
@@ -166,7 +169,13 @@ class SmartExamGenerationService:
     ) -> List[Dict[str, Any]]:
         """Tạo câu hỏi cho một mức độ nhận thức cụ thể"""
         try:
-            # Tạo prompt cho LLM
+            # Phần 3 sử dụng quy trình tư duy ngược với validation loop
+            if part_num == 3:
+                return await self._generate_part3_questions_with_reverse_thinking(
+                    level, count, lesson_data, subject, lesson_id
+                )
+
+            # Phần 1 và 2 sử dụng quy trình cũ
             prompt = self._create_prompt_for_level(
                 part_num, level, count, lesson_data, subject, lesson_id
             )
@@ -194,7 +203,503 @@ class SmartExamGenerationService:
             logger.error(f"Error generating questions for level {level}: {e}")
             return []
 
+    async def _generate_part3_questions_with_reverse_thinking(
+        self, level: str, count: int, lesson_data: Dict[str, Any],
+        subject: str, lesson_id: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Tạo câu hỏi phần 3 theo quy trình tư duy ngược với validation loop
 
+        Quy trình:
+        1. Tạo đáp án trước (4 chữ số phù hợp THPT 2025)
+        2. Xây dựng ngược câu hỏi từ đáp án
+        3. Validation loop với 2 LLM roles khác nhau
+        """
+        try:
+            validated_questions = []
+            max_retries = 2  # Retry nếu không tạo được câu hỏi
+
+            for i in range(count):
+                question_created = False
+
+                # Retry logic để đảm bảo tạo đủ câu hỏi
+                for retry in range(max_retries + 1):
+                    try:
+                        # Bước 1: Tạo đáp án và câu hỏi ban đầu
+                        initial_question = await self._create_initial_part3_question(
+                            level, lesson_data, subject, lesson_id
+                        )
+
+                        if not initial_question:
+                            logger.warning(f"Failed to create initial question {i+1}/{count}, retry {retry+1}/{max_retries+1}")
+                            continue
+
+                        # Bước 2: Validation loop
+                        final_question = await self._validate_and_improve_question(
+                            initial_question, level, lesson_data, subject, lesson_id
+                        )
+
+                        if final_question:
+                            validated_questions.append(final_question)
+                            question_created = True
+                            logger.info(f"Successfully created question {i+1}/{count} for level {level}")
+                            break
+                        else:
+                            logger.warning(f"Validation failed for question {i+1}/{count}, retry {retry+1}/{max_retries+1}")
+
+                    except Exception as e:
+                        logger.error(f"Error creating question {i+1}/{count}, retry {retry+1}/{max_retries+1}: {e}")
+                        continue
+
+                if not question_created:
+                    logger.error(f"Failed to create question {i+1}/{count} after {max_retries+1} attempts")
+
+            logger.info(f"Generated {len(validated_questions)}/{count} questions for level {level}")
+            return validated_questions
+
+        except Exception as e:
+            logger.error(f"Error in reverse thinking generation: {e}")
+            return []
+
+    async def _create_initial_part3_question(
+        self, level: str, lesson_data: Dict[str, Any],
+        subject: str, lesson_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Tạo câu hỏi ban đầu với đáp án được sinh trước"""
+        try:
+            # Lấy nội dung bài học
+            main_content = self._extract_lesson_content(lesson_data)
+            if not main_content.strip():
+                return None
+
+            # Tạo prompt cho việc sinh đáp án trước
+            prompt = self._create_reverse_thinking_prompt(level, main_content, lesson_id)
+
+            response = await self.llm_service.generate_content(
+                prompt=prompt,
+                temperature=0.4,
+                max_tokens=3000
+            )
+
+            if not response.get("success", False):
+                logger.error(f"Failed to create initial question: {response.get('error')}")
+                return None
+
+            # Parse response
+            question_data = self._parse_reverse_thinking_response(
+                response.get("text", ""), level, lesson_id
+            )
+
+            return question_data
+
+        except Exception as e:
+            logger.error(f"Error creating initial question: {e}")
+            return None
+
+    async def _validate_and_improve_question(
+        self, question: Dict[str, Any], level: str, lesson_data: Dict[str, Any],
+        subject: str, lesson_id: str, max_iterations: int = 3
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Validation loop với 2 LLM roles:
+        - Role 1: Chuyên gia hóa học (giải và xác minh)
+        - Role 2: Chuyên gia ra đề (cải thiện câu hỏi)
+        """
+        try:
+            current_question = question.copy()
+
+            for iteration in range(max_iterations):
+                # Bước 3a: Gọi LLM với role chuyên gia hóa học
+                validation_result = await self._validate_with_chemistry_expert(
+                    current_question, lesson_data
+                )
+
+                if not validation_result:
+                    continue
+
+                # Kiểm tra xem câu hỏi đã đạt yêu cầu chưa
+                accuracy_score = validation_result.get("accuracy_score", 0)
+                # Convert string to int if needed
+                if isinstance(accuracy_score, str):
+                    try:
+                        accuracy_score = int(accuracy_score)
+                    except ValueError:
+                        accuracy_score = 0
+
+                if validation_result.get("is_valid", False) and accuracy_score >= 8:
+                    logger.info(f"Question validated successfully after {iteration + 1} iterations")
+                    return current_question
+
+                # Bước 3b: Gọi LLM với role chuyên gia ra đề để cải thiện
+                improved_question = await self._improve_with_exam_expert(
+                    current_question, validation_result, level, lesson_data
+                )
+
+                if improved_question:
+                    current_question = improved_question
+                else:
+                    break
+
+            # Nếu sau max_iterations vẫn chưa đạt, trả về phiên bản tốt nhất
+            logger.warning(f"Question validation completed with {max_iterations} iterations")
+            return current_question
+
+        except Exception as e:
+            logger.error(f"Error in validation loop: {e}")
+            return question
+
+    async def _validate_with_chemistry_expert(
+        self, question: Dict[str, Any], lesson_data: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Gọi LLM với role chuyên gia hóa học để xác minh câu hỏi"""
+        try:
+            prompt = self._create_chemistry_expert_prompt(question, lesson_data)
+
+            response = await self.llm_service.generate_content(
+                prompt=prompt,
+                temperature=0.1,
+                max_tokens=2000
+            )
+
+            if not response.get("success", False):
+                return None
+
+            return self._parse_validation_response(response.get("text", ""))
+
+        except Exception as e:
+            logger.error(f"Error in chemistry expert validation: {e}")
+            return None
+
+    async def _improve_with_exam_expert(
+        self, question: Dict[str, Any], validation_result: Dict[str, Any],
+        level: str, lesson_data: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Gọi LLM với role chuyên gia ra đề để cải thiện câu hỏi"""
+        try:
+            prompt = self._create_exam_expert_prompt(question, validation_result, level, lesson_data)
+
+            response = await self.llm_service.generate_content(
+                prompt=prompt,
+                temperature=0.3,
+                max_tokens=2500
+            )
+
+            if not response.get("success", False):
+                return None
+
+            improved_question = self._parse_improved_question_response(
+                response.get("text", ""), question
+            )
+
+            return improved_question
+
+        except Exception as e:
+            logger.error(f"Error in exam expert improvement: {e}")
+            return None
+
+    def _extract_lesson_content(self, lesson_data: Dict[str, Any]) -> str:
+        """Trích xuất nội dung bài học từ lesson_data"""
+        if "lesson_content" in lesson_data:
+            content = lesson_data.get("lesson_content", "")
+        else:
+            content = lesson_data.get("main_content", "")
+
+        if isinstance(content, str):
+            return content[:2000] if len(content) > 2000 else content
+        elif isinstance(content, list):
+            return " ".join(str(item) for item in content)[:2000]
+        else:
+            return str(content)[:2000] if content else ""
+
+    def _create_reverse_thinking_prompt(self, level: str, content: str, lesson_id: str) -> str:
+        """Tạo prompt cho quy trình tư duy ngược"""
+        return f"""
+Bạn là chuyên gia tạo đề thi Hóa học THPT 2025. Hãy áp dụng phương pháp TƯ DUY NGƯỢC để tạo câu hỏi tự luận tính toán.
+
+QUY TRÌNH TƯ DUY NGƯỢC:
+1. SINH ĐÁP ÁN TRƯỚC: Tạo một đáp án số thực dương phù hợp với phiếu trắc nghiệm THPT 2025
+2. XÂY DỰNG NGƯỢC: Từ đáp án đó, thiết kế bối cảnh và nội dung câu hỏi
+
+YÊU CẦU ĐÁP ÁN NGHIÊM NGẶT CHO PHIẾU TRẮC NGHIỆM:
+- Đáp án phải có ÍT HƠN 5 ký tự (tối đa 4 ký tự bao gồm dấu thập phân)
+- Đáp án phải chính xác theo tính toán hóa học
+- Ví dụ hợp lệ: "12.5", "0.25", "75", "2.4", "1000"
+- Ví dụ KHÔNG hợp lệ: "125.6" (5 ký tự), "35.25" (5 ký tự), "1234.5" (6 ký tự)
+- Nếu kết quả tính toán ≥5 ký tự, hãy điều chỉnh dữ kiện đề bài để có đáp án <5 ký tự
+
+THÔNG TIN BÀI HỌC:
+- Lesson ID: {lesson_id}
+- Nội dung: {content}
+
+YÊU CẦU MỨC ĐỘ "{level}":
+{self._get_reverse_thinking_requirements(level)}
+
+ĐỊNH DẠNG JSON TRẢ VỀ:
+{{
+    "target_answer": "Số thực dương <5 ký tự - Ví dụ: 12.5, 0.25, 75, 2.4, 1000",
+    "question": "Nội dung câu hỏi được xây dựng từ đáp án",
+    "solution_steps": [
+        "Bước 1: Mô tả bước giải",
+        "Bước 2: Tính toán cụ thể",
+        "Bước 3: Kết luận"
+    ],
+    "explanation": "Giải thích chi tiết cách đi từ đề bài đến đáp án",
+    "cognitive_level": "{level}",
+    "part": 3
+}}
+
+LƯU Ý QUAN TRỌNG VỀ ĐÁP ÁN:
+- target_answer phải có ÍT HƠN 5 ký tự để phù hợp với phiếu trắc nghiệm THPT 2025
+- Điều chỉnh dữ kiện đề bài (khối lượng, thể tích, nồng độ) để đáp án <5 ký tự
+- KHÔNG được sửa đáp án sau khi tính toán - phải điều chỉnh từ đầu
+
+Lưu ý: Chỉ trả về JSON, không có văn bản bổ sung.
+"""
+
+    def _get_reverse_thinking_requirements(self, level: str) -> str:
+        """Yêu cầu cụ thể cho từng mức độ trong tư duy ngược"""
+        requirements = {
+            "Biết": """
+- Đáp án: Số đơn giản <5 ký tự, chính xác theo tính toán hóa học
+- Bối cảnh: Áp dụng trực tiếp công thức cơ bản (n=m/M, C=n/V, pH=-log[H⁺])
+- Ví dụ đáp án hợp lệ: "2.24", "5.6", "12", "0.5", "22.4"
+- Điều chỉnh dữ kiện để đáp án <5 ký tự
+""",
+            "Hiểu": """
+- Đáp án: Số vừa phải <5 ký tự, chính xác theo tính toán hóa học
+- Bối cảnh: Cần hiểu bản chất phản ứng, áp dụng 2-3 bước tính toán
+- Ví dụ đáp án hợp lệ: "16.2", "1.25", "48.6", "3.75"
+- Điều chỉnh dữ kiện để đáp án <5 ký tự
+""",
+            "Vận_dụng": """
+- Đáp án: Số phức tạp <5 ký tự, chính xác theo tính toán hóa học
+- Bối cảnh: Bài toán nhiều bước, hiệu suất, hỗn hợp, quy trình công nghiệp
+- Ví dụ đáp án hợp lệ: "125", "87.5", "2450", "67.8"
+- Điều chỉnh dữ kiện để đáp án <5 ký tự
+"""
+        }
+        return requirements.get(level, requirements["Biết"])
+
+    def _create_chemistry_expert_prompt(self, question: Dict[str, Any], lesson_data: Dict[str, Any]) -> str:
+        """Tạo prompt cho chuyên gia hóa học xác minh câu hỏi"""
+        return f"""
+Bạn là CHUYÊN GIA HÓA HỌC với 20 năm kinh nghiệm giảng dạy THPT. Hãy GIẢI THỬ câu hỏi dưới đây và đánh giá tính chính xác.
+
+CÂU HỎI CẦN ĐÁNH GIÁ:
+{question.get('question', '')}
+
+ĐÁP ÁN ĐƯỢC CHO:
+{question.get('target_answer', '')}
+
+NHIỆM VỤ CỦA BẠN:
+1. Giải chi tiết câu hỏi từ đầu đến cuối
+2. So sánh kết quả của bạn với đáp án được cho
+3. Đánh giá tính chính xác về mặt khoa học
+4. Kiểm tra ngữ cảnh có phù hợp với chương trình THPT không
+5. Đưa ra góp ý cải thiện nếu cần
+
+ĐỊNH DẠNG JSON TRẢ VỀ:
+{{
+    "my_solution": "Lời giải chi tiết của bạn",
+    "my_answer": "Đáp án bạn tính được",
+    "is_valid": true/false,
+    "accuracy_score": "Điểm từ 1-10",
+    "feedback": "Góp ý cụ thể để cải thiện",
+    "suggested_improvements": [
+        "Cải thiện 1",
+        "Cải thiện 2"
+    ]
+}}
+
+Lưu ý: Hãy nghiêm túc và chính xác trong đánh giá.
+"""
+
+    def _create_exam_expert_prompt(
+        self, question: Dict[str, Any], validation_result: Dict[str, Any],
+        level: str, lesson_data: Dict[str, Any]
+    ) -> str:
+        """Tạo prompt cho chuyên gia ra đề cải thiện câu hỏi"""
+        return f"""
+Bạn là CHUYÊN GIA RA ĐỀ THI HÓA HỌC THPT 2025. Hãy cải thiện câu hỏi dựa trên feedback từ chuyên gia hóa học.
+
+CÂU HỎI HIỆN TẠI:
+{question.get('question', '')}
+
+ĐÁP ÁN HIỆN TẠI:
+{question.get('target_answer', '')}
+
+FEEDBACK TỪ CHUYÊN GIA HÓA HỌC:
+- Điểm đánh giá: {validation_result.get('accuracy_score', 0)}/10
+- Tính hợp lệ: {validation_result.get('is_valid', False)}
+- Góp ý: {validation_result.get('feedback', '')}
+- Cải thiện đề xuất: {validation_result.get('suggested_improvements', [])}
+
+NHIỆM VỤ CỦA BẠN:
+1. Chỉnh sửa câu hỏi dựa trên feedback
+2. Điều chỉnh các thông số để đảm bảo đáp án chính xác
+3. Cải thiện ngữ cảnh và cách diễn đạt
+4. Đảm bảo phù hợp với mức độ "{level}"
+
+ĐỊNH DẠNG JSON TRẢ VỀ:
+{{
+    "target_answer": "Đáp án đã được điều chỉnh",
+    "question": "Câu hỏi đã được cải thiện",
+    "solution_steps": [
+        "Bước giải đã được cập nhật"
+    ],
+    "explanation": "Giải thích cải thiện",
+    "cognitive_level": "{level}",
+    "part": 3,
+    "improvements_made": [
+        "Mô tả những thay đổi đã thực hiện"
+    ]
+}}
+
+Lưu ý: Chỉ trả về JSON, tập trung vào việc cải thiện chất lượng câu hỏi.
+"""
+
+    def _parse_reverse_thinking_response(self, response_text: str, level: str, lesson_id: str) -> Optional[Dict[str, Any]]:
+        """Parse response từ quy trình tư duy ngược"""
+        try:
+            # Tìm JSON trong response
+            start_idx = response_text.find('{')
+            end_idx = response_text.rfind('}') + 1
+
+            if start_idx == -1 or end_idx == 0:
+                logger.error("No JSON object found in reverse thinking response")
+                return None
+
+            json_str = response_text[start_idx:end_idx]
+            question_data = json.loads(json_str)
+
+            # Validate và bổ sung thông tin
+            if not all(key in question_data for key in ["target_answer", "question"]):
+                logger.error("Missing required fields in reverse thinking response")
+                return None
+
+            # Validate đáp án là số hợp lệ và có độ dài phù hợp với phiếu trắc nghiệm
+            target_answer = str(question_data["target_answer"]).strip()
+            logger.info(f"🔍 Validating answer: '{target_answer}' (length: {len(target_answer)} chars)")
+
+            try:
+                # Kiểm tra đáp án có phải là số hợp lệ không
+                float(target_answer)
+
+                # Kiểm tra độ dài đáp án phù hợp với phiếu trắc nghiệm THPT 2025
+                if len(target_answer) >= 5:
+                    logger.warning(f"❌ REJECTING: Answer too long for answer sheet: '{target_answer}' ({len(target_answer)} chars >= 5)")
+                    return None
+
+                logger.info(f"✅ ACCEPTING: Valid answer format: '{target_answer}' ({len(target_answer)} chars < 5)")
+            except ValueError:
+                logger.error(f"❌ REJECTING: Invalid answer format: '{target_answer}' is not a valid number")
+                return None
+
+            question_data["part"] = 3
+            question_data["cognitive_level"] = level
+            question_data["lesson_id"] = lesson_id
+            question_data["question_type"] = "TL"
+            question_data["answer"] = {"answer": question_data["target_answer"]}
+
+            return question_data
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON from reverse thinking response: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error parsing reverse thinking response: {e}")
+            return None
+
+    def _parse_validation_response(self, response_text: str) -> Optional[Dict[str, Any]]:
+        """Parse response từ chuyên gia hóa học"""
+        try:
+            start_idx = response_text.find('{')
+            end_idx = response_text.rfind('}') + 1
+
+            if start_idx == -1 or end_idx == 0:
+                logger.error("No JSON object found in validation response")
+                return None
+
+            json_str = response_text[start_idx:end_idx]
+            validation_data = json.loads(json_str)
+
+            # Ensure required fields exist
+            required_fields = ["is_valid", "accuracy_score", "feedback"]
+            for field in required_fields:
+                if field not in validation_data:
+                    validation_data[field] = False if field == "is_valid" else ""
+
+            return validation_data
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON from validation response: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error parsing validation response: {e}")
+            return None
+
+    def _parse_improved_question_response(self, response_text: str, original_question: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Parse response từ chuyên gia ra đề"""
+        try:
+            start_idx = response_text.find('{')
+            end_idx = response_text.rfind('}') + 1
+
+            if start_idx == -1 or end_idx == 0:
+                logger.error("No JSON object found in improved question response")
+                return original_question
+
+            json_str = response_text[start_idx:end_idx]
+            improved_data = json.loads(json_str)
+
+            # Merge với câu hỏi gốc, ưu tiên dữ liệu mới
+            result = original_question.copy()
+            result.update(improved_data)
+
+            # Đảm bảo format đáp án đúng và validate độ dài
+            if "target_answer" in improved_data:
+                improved_answer = str(improved_data["target_answer"]).strip()
+                logger.info(f"🔍 Validating improved answer: '{improved_answer}' (length: {len(improved_answer)} chars)")
+
+                # Validate độ dài đáp án cải thiện
+                if len(improved_answer) >= 5:
+                    logger.warning(f"❌ REJECTING IMPROVED: Answer too long: '{improved_answer}' ({len(improved_answer)} chars >= 5). Keeping original.")
+                    # Giữ nguyên đáp án gốc nếu đáp án cải thiện quá dài
+                    pass
+                else:
+                    logger.info(f"✅ ACCEPTING IMPROVED: Valid answer: '{improved_answer}' ({len(improved_answer)} chars < 5)")
+                    result["answer"] = {"answer": improved_answer}
+
+            return result
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse JSON from improved question response: {e}")
+            return original_question
+        except Exception as e:
+            logger.error(f"Error parsing improved question response: {e}")
+            return original_question
+
+    def _final_answer_validation(self, questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Final validation để loại bỏ câu hỏi có đáp án quá dài"""
+        validated_questions = []
+
+        for question in questions:
+            # Lấy đáp án từ question
+            answer_data = question.get("answer", {})
+            if isinstance(answer_data, dict):
+                answer = str(answer_data.get("answer", "")).strip()
+            else:
+                answer = str(answer_data).strip()
+
+            # Validate độ dài đáp án
+            if len(answer) >= 5:
+                logger.warning(f"🚫 FINAL REJECT: Question with long answer '{answer}' ({len(answer)} chars) removed from final result")
+                continue
+            else:
+                logger.info(f"✅ FINAL ACCEPT: Question with answer '{answer}' ({len(answer)} chars) included in final result")
+                validated_questions.append(question)
+
+        logger.info(f"📊 Final validation: {len(validated_questions)}/{len(questions)} questions passed")
+        return validated_questions
 
     def _create_prompt_for_level(
         self, part_num: int, level: str, count: int,
