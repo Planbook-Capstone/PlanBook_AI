@@ -443,7 +443,7 @@ YÊU CẦU MỨC ĐỘ "{level}":
         "Bước 2: Tính toán cụ thể",
         "Bước 3: Kết luận"
     ],
-    "explanation": "Giải thích chi tiết cách đi từ đề bài đến đáp án",
+    "explanation": "Giải thích chi tiết từng bước giải bài và lý do tại sao đáp án chính xác",
     "cognitive_level": "{level}",
     "part": 3
 }}
@@ -452,6 +452,11 @@ LƯU Ý QUAN TRỌNG VỀ ĐÁP ÁN:
 - target_answer phải có ÍT HƠN 5 ký tự để phù hợp với phiếu trắc nghiệm THPT 2025
 - Điều chỉnh dữ kiện đề bài (khối lượng, thể tích, nồng độ) để đáp án <5 ký tự
 - KHÔNG được sửa đáp án sau khi tính toán - phải điều chỉnh từ đầu
+
+LƯU Ý QUAN TRỌNG VỀ EXPLANATION:
+- Field "explanation" phải là hướng dẫn giải bài chi tiết, từng bước
+- KHÔNG được viết mô tả về câu hỏi hoặc thông tin meta
+- Phải giải thích tại sao đáp án chính xác và cách tính toán
 
 Lưu ý: Chỉ trả về JSON, không có văn bản bổ sung.
 """
@@ -528,6 +533,9 @@ CÂU HỎI HIỆN TẠI:
 ĐÁP ÁN HIỆN TẠI:
 {question.get('target_answer', '')}
 
+GIẢI THÍCH HIỆN TẠI:
+{question.get('explanation', '')}
+
 FEEDBACK TỪ CHUYÊN GIA HÓA HỌC:
 - Điểm đánh giá: {validation_result.get('accuracy_score', 0)}/10
 - Tính hợp lệ: {validation_result.get('is_valid', False)}
@@ -538,7 +546,8 @@ NHIỆM VỤ CỦA BẠN:
 1. Chỉnh sửa câu hỏi dựa trên feedback
 2. Điều chỉnh các thông số để đảm bảo đáp án chính xác
 3. Cải thiện ngữ cảnh và cách diễn đạt
-4. Đảm bảo phù hợp với mức độ "{level}"
+4. Cải thiện giải thích để phù hợp với câu hỏi mới
+5. Đảm bảo phù hợp với mức độ "{level}"
 
 ĐỊNH DẠNG JSON TRẢ VỀ:
 {{
@@ -547,7 +556,7 @@ NHIỆM VỤ CỦA BẠN:
     "solution_steps": [
         "Bước giải đã được cập nhật"
     ],
-    "explanation": "Giải thích cải thiện",
+    "explanation": "Giải thích chi tiết cách giải câu hỏi đã cải thiện",
     "cognitive_level": "{level}",
     "part": 3,
     "improvements_made": [
@@ -555,7 +564,7 @@ NHIỆM VỤ CỦA BẠN:
     ]
 }}
 
-Lưu ý: Chỉ trả về JSON, tập trung vào việc cải thiện chất lượng câu hỏi.
+Lưu ý: Chỉ trả về JSON, tập trung vào việc cải thiện chất lượng câu hỏi. Field "explanation" phải là giải thích cách giải bài, không phải mô tả cải thiện.
 """
 
     def _parse_reverse_thinking_response(self, response_text: str, level: str, lesson_id: str) -> Optional[Dict[str, Any]]:
@@ -653,9 +662,8 @@ Lưu ý: Chỉ trả về JSON, tập trung vào việc cải thiện chất lư
 
             # Merge với câu hỏi gốc, ưu tiên dữ liệu mới
             result = original_question.copy()
-            result.update(improved_data)
 
-            # Đảm bảo format đáp án đúng và validate độ dài
+            # Cập nhật từng field một cách có kiểm soát
             if "target_answer" in improved_data:
                 improved_answer = str(improved_data["target_answer"]).strip()
                 logger.info(f"🔍 Validating improved answer: '{improved_answer}' (length: {len(improved_answer)} chars)")
@@ -668,6 +676,19 @@ Lưu ý: Chỉ trả về JSON, tập trung vào việc cải thiện chất lư
                 else:
                     logger.info(f"✅ ACCEPTING IMPROVED: Valid answer: '{improved_answer}' ({len(improved_answer)} chars < 5)")
                     result["answer"] = {"answer": improved_answer}
+                    result["target_answer"] = improved_answer
+
+            # Cập nhật các field khác nếu có
+            for field in ["question", "solution_steps", "explanation"]:
+                if field in improved_data:
+                    result[field] = improved_data[field]
+                    logger.info(f"✅ Updated field '{field}' from improved response")
+
+            # Đảm bảo các field bắt buộc
+            if "cognitive_level" in improved_data:
+                result["cognitive_level"] = improved_data["cognitive_level"]
+            if "part" in improved_data:
+                result["part"] = improved_data["part"]
 
             return result
 
@@ -759,13 +780,13 @@ YÊU CẦU:
     {{
         "question": "Nội dung câu hỏi",
         "answer": {self._get_answer_format_by_part(part_num)},
-        "explanation": "Giải thích đáp án",
+        "explanation": "Giải thích chi tiết cách giải và lý do tại sao đáp án đúng",
         "cognitive_level": "{level}",
         "part": {part_num}
     }}
 ]
 
-Lưu ý: chỉ trả về JSON, không có văn bản bổ sung.
+Lưu ý: chỉ trả về JSON, không có văn bản bổ sung. Field "explanation" phải là giải thích cách giải bài, không phải mô tả câu hỏi.
 """
         return prompt
 
