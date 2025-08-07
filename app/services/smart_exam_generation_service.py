@@ -453,7 +453,7 @@ YÊU CẦU MỨC ĐỘ "{level}":
         "Bước 2: Tính toán cụ thể",
         "Bước 3: Kết luận"
     ],
-    "explanation": "Giải thích chi tiết từng bước giải bài và lý do tại sao đáp án chính xác",
+    "explanation": "Giải thích chi tiết từng bước giải bài với tính toán cụ thể, công thức sử dụng, và lý do tại sao đáp án chính xác",
     "cognitive_level": "{level}",
     "part": 3
 }}
@@ -483,13 +483,23 @@ LƯU Ý QUAN TRỌNG VỀ HÓA HỌC - NGUYÊN TẮC CHUNG:
    - Sử dụng đúng khối lượng nguyên tử/phân tử theo bảng tuần hoàn
    - Kiểm tra tính hợp lý của kết quả (không âm, trong khoảng thực tế)
    - Đơn vị phải nhất quán và chính xác
+   - TÍNH THEO TỈ LỆ MOL, KHÔNG PHẢI TỈ LỆ KHỐI LƯỢNG
 
 4. LOGIC VÀ NHẤT QUÁN:
    - Kết quả các bước tính toán phải nhất quán với nhau
    - Công thức phân tử phải khớp với dữ liệu đã tính
    - Kiểm tra lại từng bước để tránh sai sót
+   - KIỂM TRA KỸ TÍNH TOÁN: thực hiện phép tính từng bước và xác minh kết quả
 
-Lưu ý: Chỉ trả về JSON, không có văn bản bổ sung. ÁP DỤNG NGUYÊN TẮC HÓA HỌC CHUNG!
+5. QUY TRÌNH KIỂM TRA TÍNH TOÁN:
+   - Bước 1: Xác định dữ liệu đầu vào và đơn vị
+   - Bước 2: Viết phương trình phản ứng cân bằng
+   - Bước 3: Tính số mol chất tham gia
+   - Bước 4: Áp dụng tỉ lệ mol và hiệu suất
+   - Bước 5: Tính khối lượng/thể tích sản phẩm
+   - Bước 6: Kiểm tra tính hợp lý của kết quả
+
+Lưu ý: Chỉ trả về JSON, không có văn bản bổ sung. THỰC HIỆN TÍNH TOÁN CHÍNH XÁC!
 """
 
     def _get_reverse_thinking_requirements(self, level: str) -> str:
@@ -528,7 +538,7 @@ CÂU HỎI CẦN ĐÁNH GIÁ:
 {question.get('target_answer', '')}
 
 NHIỆM VỤ CỦA BẠN:
-1. Giải chi tiết câu hỏi từ đầu đến cuối
+1. Giải chi tiết câu hỏi từ đầu đến cuối với từng bước tính toán cụ thể
 2. So sánh kết quả của bạn với đáp án được cho
 3. Đánh giá tính chính xác về mặt khoa học
 4. KIỂM TRA ĐặC BIỆT: Logic hóa học, phương trình phản ứng, tỉ lệ mol
@@ -538,9 +548,16 @@ NHIỆM VỤ CỦA BẠN:
 NGUYÊN TẮC KIỂM TRA CHUNG:
 - Áp dụng các định luật bảo toàn (khối lượng, nguyên tố, điện tích)
 - Phương trình phản ứng phải cân bằng chính xác
-- Tỉ lệ mol theo hệ số cân bằng
+- Tỉ lệ mol theo hệ số cân bằng (KHÔNG DÙNG TỈ LỆ KHỐI LƯỢNG)
 - Khối lượng mol tính đúng theo bảng tuần hoàn
 - Giá trị kết quả trong khoảng hợp lý và thực tế
+
+KIỂM TRA TÍNH TOÁN CHI TIẾT:
+- Thực hiện từng phép tính một cách cụ thể
+- Kiểm tra đơn vị trong mỗi bước
+- Xác minh tỉ lệ mol và hiệu suất
+- So sánh kết quả tính được với đáp án cho trước
+- Nếu khác biệt, chỉ ra chính xác lỗi ở đâu
 
 KIỂM TRA TÍNH NHẤT QUÁN:
 - Kết quả các bước tính toán phải logic và nhất quán
@@ -826,7 +843,7 @@ YÊU CẦU:
     {{
         "question": "Nội dung câu hỏi",
         "answer": {self._get_answer_format_by_part(part_num)},
-        "explanation": "Giải thích chi tiết cách giải và lý do tại sao đáp án đúng",
+        "explanation": "Giải thích chi tiết từng bước giải bài với công thức, tính toán cụ thể, và lý do tại sao đáp án đúng",
         "cognitive_level": "{level}",
         "part": {part_num}
     }}
@@ -834,8 +851,9 @@ YÊU CẦU:
 
 LƯU Ý QUAN TRỌNG:
 - Chỉ trả về JSON, không có văn bản bổ sung
-- Field "explanation" phải là giải thích cách giải bài, không phải mô tả câu hỏi
-- ÁP DỤNG NGUYÊN TẮC HÓA HỌC: bảo toàn, cân bằng, tỉ lệ, logic, nhất quán
+- Field "explanation" phải là giải thích cách giải bài với tính toán chi tiết, không phải mô tả câu hỏi
+- ÁP DỤNG NGUYÊN TẮC HÓA HỌC: bảo toàn, cân bằng, tỉ lệ mol (không phải tỉ lệ khối lượng)
+- THỰC HIỆN TÍNH TOÁN CHÍNH XÁC: kiểm tra từng bước, đơn vị, công thức
 - Đảm bảo tính chính xác khoa học và hợp lý thực tế
 
 VALIDATION NGHIÊM NGẶT - PHẢI KIỂM TRA:
