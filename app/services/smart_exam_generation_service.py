@@ -217,44 +217,52 @@ class SmartExamGenerationService:
         """
         try:
             validated_questions = []
-            max_retries = 2  # Retry nếu không tạo được câu hỏi
+            max_retries = 5  # Tăng số lần retry để đảm bảo tạo đủ câu hỏi
+
+            logger.info(f"🎯 Starting generation of {count} questions for level '{level}'")
 
             for i in range(count):
                 question_created = False
+                logger.info(f"📝 Generating question {i+1}/{count} for level '{level}'")
 
                 # Retry logic để đảm bảo tạo đủ câu hỏi
                 for retry in range(max_retries + 1):
                     try:
+                        logger.info(f"🔄 Attempt {retry+1}/{max_retries+1} for question {i+1}/{count}")
+
                         # Bước 1: Tạo đáp án và câu hỏi ban đầu
                         initial_question = await self._create_initial_part3_question(
                             level, lesson_data, subject, lesson_id
                         )
 
                         if not initial_question:
-                            logger.warning(f"Failed to create initial question {i+1}/{count}, retry {retry+1}/{max_retries+1}")
+                            logger.warning(f"❌ Failed to create initial question {i+1}/{count}, retry {retry+1}/{max_retries+1}")
                             continue
 
-                        # Bước 2: Validation loop
+                        logger.info(f"✅ Created initial question {i+1}/{count}, proceeding to validation")
+
+                        # Bước 2: Validation loop (với timeout ngắn hơn cho retry)
+                        max_validation_iterations = 2 if retry > 0 else 3  # Giảm validation cho retry
                         final_question = await self._validate_and_improve_question(
-                            initial_question, level, lesson_data, subject, lesson_id
+                            initial_question, level, lesson_data, subject, lesson_id, max_validation_iterations
                         )
 
                         if final_question:
                             validated_questions.append(final_question)
                             question_created = True
-                            logger.info(f"Successfully created question {i+1}/{count} for level {level}")
+                            logger.info(f"🎉 Successfully created question {i+1}/{count} for level '{level}' after {retry+1} attempts")
                             break
                         else:
-                            logger.warning(f"Validation failed for question {i+1}/{count}, retry {retry+1}/{max_retries+1}")
+                            logger.warning(f"❌ Validation failed for question {i+1}/{count}, retry {retry+1}/{max_retries+1}")
 
                     except Exception as e:
-                        logger.error(f"Error creating question {i+1}/{count}, retry {retry+1}/{max_retries+1}: {e}")
+                        logger.error(f"💥 Error creating question {i+1}/{count}, retry {retry+1}/{max_retries+1}: {e}")
                         continue
 
                 if not question_created:
-                    logger.error(f"Failed to create question {i+1}/{count} after {max_retries+1} attempts")
+                    logger.error(f"🚫 FAILED to create question {i+1}/{count} after {max_retries+1} attempts")
 
-            logger.info(f"Generated {len(validated_questions)}/{count} questions for level {level}")
+            logger.info(f"📊 Final result: Generated {len(validated_questions)}/{count} questions for level '{level}'")
             return validated_questions
 
         except Exception as e:
@@ -326,8 +334,10 @@ class SmartExamGenerationService:
                     except ValueError:
                         accuracy_score = 0
 
-                if validation_result.get("is_valid", False) and accuracy_score >= 8:
-                    logger.info(f"Question validated successfully after {iteration + 1} iterations")
+                # Giảm tiêu chuẩn validation để tạo được nhiều câu hỏi hơn
+                min_score = 7 if max_iterations <= 2 else 8  # Giảm tiêu chuẩn cho retry
+                if validation_result.get("is_valid", False) and accuracy_score >= min_score:
+                    logger.info(f"✅ Question validated successfully after {iteration + 1} iterations (score: {accuracy_score}/{min_score})")
                     return current_question
 
                 # Bước 3b: Gọi LLM với role chuyên gia ra đề để cải thiện
