@@ -458,7 +458,28 @@ LƯU Ý QUAN TRỌNG VỀ EXPLANATION:
 - KHÔNG được viết mô tả về câu hỏi hoặc thông tin meta
 - Phải giải thích tại sao đáp án chính xác và cách tính toán
 
-Lưu ý: Chỉ trả về JSON, không có văn bản bổ sung.
+LƯU Ý QUAN TRỌNG VỀ HÓA HỌC - NGUYÊN TẮC CHUNG:
+1. ĐỊNH LUẬT BẢO TOÀN:
+   - Bảo toàn khối lượng: tổng khối lượng chất tham gia = tổng khối lượng sản phẩm
+   - Bảo toàn nguyên tố: số nguyên tử mỗi nguyên tố ở 2 vế phương trình bằng nhau
+   - Bảo toàn điện tích: tổng điện tích 2 vế phương trình ion bằng nhau
+
+2. PHƯƠNG TRÌNH HÓA HỌC:
+   - Viết đúng công thức hóa học của các chất
+   - Cân bằng phương trình với hệ số nguyên tối giản
+   - Tỉ lệ mol theo hệ số cân bằng phải chính xác
+
+3. TÍNH TOÁN HÓA HỌC:
+   - Sử dụng đúng khối lượng nguyên tử/phân tử theo bảng tuần hoàn
+   - Kiểm tra tính hợp lý của kết quả (không âm, trong khoảng thực tế)
+   - Đơn vị phải nhất quán và chính xác
+
+4. LOGIC VÀ NHẤT QUÁN:
+   - Kết quả các bước tính toán phải nhất quán với nhau
+   - Công thức phân tử phải khớp với dữ liệu đã tính
+   - Kiểm tra lại từng bước để tránh sai sót
+
+Lưu ý: Chỉ trả về JSON, không có văn bản bổ sung. ÁP DỤNG NGUYÊN TẮC HÓA HỌC CHUNG!
 """
 
     def _get_reverse_thinking_requirements(self, level: str) -> str:
@@ -500,8 +521,22 @@ NHIỆM VỤ CỦA BẠN:
 1. Giải chi tiết câu hỏi từ đầu đến cuối
 2. So sánh kết quả của bạn với đáp án được cho
 3. Đánh giá tính chính xác về mặt khoa học
-4. Kiểm tra ngữ cảnh có phù hợp với chương trình THPT không
-5. Đưa ra góp ý cải thiện nếu cần
+4. KIỂM TRA ĐặC BIỆT: Logic hóa học, phương trình phản ứng, tỉ lệ mol
+5. Kiểm tra ngữ cảnh có phù hợp với chương trình THPT không
+6. Đưa ra góp ý cải thiện nếu cần
+
+NGUYÊN TẮC KIỂM TRA CHUNG:
+- Áp dụng các định luật bảo toàn (khối lượng, nguyên tố, điện tích)
+- Phương trình phản ứng phải cân bằng chính xác
+- Tỉ lệ mol theo hệ số cân bằng
+- Khối lượng mol tính đúng theo bảng tuần hoàn
+- Giá trị kết quả trong khoảng hợp lý và thực tế
+
+KIỂM TRA TÍNH NHẤT QUÁN:
+- Kết quả các bước tính toán phải logic và nhất quán
+- Công thức phân tử phải khớp với dữ liệu đã tính
+- Đơn vị và số liệu phải chính xác
+- Không có mâu thuẫn giữa các phần của bài giải
 
 ĐỊNH DẠNG JSON TRẢ VỀ:
 {{
@@ -773,6 +808,7 @@ YÊU CẦU:
 - Ngữ liệu, dữ kiện trong câu phải khoa học, đúng thực tế.
 - Tuân thủ nghiêm ngặt ma trận đề thi chuẩn THPT 2025
 - Đảm bảo kiến thức chính xác, logic, không gây hiểu nhầm.
+- KIỂM TRA KỸ LOGIC HÓA HỌC: phương trình phản ứng, tỉ lệ mol, bảo toàn nguyên tố, tính hợp lý
 {self._get_specific_instructions_by_part(part_num, level)}
 
 ĐỊNH DẠNG JSON TRẢ VỀ:
@@ -786,7 +822,18 @@ YÊU CẦU:
     }}
 ]
 
-Lưu ý: chỉ trả về JSON, không có văn bản bổ sung. Field "explanation" phải là giải thích cách giải bài, không phải mô tả câu hỏi.
+LƯU Ý QUAN TRỌNG:
+- Chỉ trả về JSON, không có văn bản bổ sung
+- Field "explanation" phải là giải thích cách giải bài, không phải mô tả câu hỏi
+- ÁP DỤNG NGUYÊN TẮC HÓA HỌC: bảo toàn, cân bằng, tỉ lệ, logic, nhất quán
+- Đảm bảo tính chính xác khoa học và hợp lý thực tế
+
+VALIDATION NGHIÊM NGẶT - PHẢI KIỂM TRA:
+✓ Khối lượng mol chính xác: CaCO₃=100, NaCl=58.5, H₂SO₄=98...
+✓ Công thức phân tử nhất quán: nếu n=17 thì C₁₇H₃₇N, không phải C₃H₉N
+✓ Tỉ lệ mol theo phương trình cân bằng
+✓ Bảo toàn nguyên tố trong mọi phản ứng
+✓ Giá trị số học hợp lý và có thể tính được
 """
         return prompt
 
