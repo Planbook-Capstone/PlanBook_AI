@@ -217,44 +217,52 @@ class SmartExamGenerationService:
         """
         try:
             validated_questions = []
-            max_retries = 2  # Retry nếu không tạo được câu hỏi
+            max_retries = 5  # Tăng số lần retry để đảm bảo tạo đủ câu hỏi
+
+            logger.info(f"🎯 Starting generation of {count} questions for level '{level}'")
 
             for i in range(count):
                 question_created = False
+                logger.info(f"📝 Generating question {i+1}/{count} for level '{level}'")
 
                 # Retry logic để đảm bảo tạo đủ câu hỏi
                 for retry in range(max_retries + 1):
                     try:
+                        logger.info(f"🔄 Attempt {retry+1}/{max_retries+1} for question {i+1}/{count}")
+
                         # Bước 1: Tạo đáp án và câu hỏi ban đầu
                         initial_question = await self._create_initial_part3_question(
                             level, lesson_data, subject, lesson_id
                         )
 
                         if not initial_question:
-                            logger.warning(f"Failed to create initial question {i+1}/{count}, retry {retry+1}/{max_retries+1}")
+                            logger.warning(f"❌ Failed to create initial question {i+1}/{count}, retry {retry+1}/{max_retries+1}")
                             continue
 
-                        # Bước 2: Validation loop
+                        logger.info(f"✅ Created initial question {i+1}/{count}, proceeding to validation")
+
+                        # Bước 2: Validation loop (với timeout ngắn hơn cho retry)
+                        max_validation_iterations = 2 if retry > 0 else 3  # Giảm validation cho retry
                         final_question = await self._validate_and_improve_question(
-                            initial_question, level, lesson_data, subject, lesson_id
+                            initial_question, level, lesson_data, subject, lesson_id, max_validation_iterations
                         )
 
                         if final_question:
                             validated_questions.append(final_question)
                             question_created = True
-                            logger.info(f"Successfully created question {i+1}/{count} for level {level}")
+                            logger.info(f"🎉 Successfully created question {i+1}/{count} for level '{level}' after {retry+1} attempts")
                             break
                         else:
-                            logger.warning(f"Validation failed for question {i+1}/{count}, retry {retry+1}/{max_retries+1}")
+                            logger.warning(f"❌ Validation failed for question {i+1}/{count}, retry {retry+1}/{max_retries+1}")
 
                     except Exception as e:
-                        logger.error(f"Error creating question {i+1}/{count}, retry {retry+1}/{max_retries+1}: {e}")
+                        logger.error(f"💥 Error creating question {i+1}/{count}, retry {retry+1}/{max_retries+1}: {e}")
                         continue
 
                 if not question_created:
-                    logger.error(f"Failed to create question {i+1}/{count} after {max_retries+1} attempts")
+                    logger.error(f"🚫 FAILED to create question {i+1}/{count} after {max_retries+1} attempts")
 
-            logger.info(f"Generated {len(validated_questions)}/{count} questions for level {level}")
+            logger.info(f"📊 Final result: Generated {len(validated_questions)}/{count} questions for level '{level}'")
             return validated_questions
 
         except Exception as e:
@@ -326,8 +334,10 @@ class SmartExamGenerationService:
                     except ValueError:
                         accuracy_score = 0
 
-                if validation_result.get("is_valid", False) and accuracy_score >= 8:
-                    logger.info(f"Question validated successfully after {iteration + 1} iterations")
+                # Giảm tiêu chuẩn validation để tạo được nhiều câu hỏi hơn
+                min_score = 7 if max_iterations <= 2 else 8  # Giảm tiêu chuẩn cho retry
+                if validation_result.get("is_valid", False) and accuracy_score >= min_score:
+                    logger.info(f"✅ Question validated successfully after {iteration + 1} iterations (score: {accuracy_score}/{min_score})")
                     return current_question
 
                 # Bước 3b: Gọi LLM với role chuyên gia ra đề để cải thiện
@@ -443,7 +453,7 @@ YÊU CẦU MỨC ĐỘ "{level}":
         "Bước 2: Tính toán cụ thể",
         "Bước 3: Kết luận"
     ],
-    "explanation": "Giải thích chi tiết cách đi từ đề bài đến đáp án",
+    "explanation": "Giải thích chi tiết từng bước giải bài và lý do tại sao đáp án chính xác",
     "cognitive_level": "{level}",
     "part": 3
 }}
@@ -453,7 +463,33 @@ LƯU Ý QUAN TRỌNG VỀ ĐÁP ÁN:
 - Điều chỉnh dữ kiện đề bài (khối lượng, thể tích, nồng độ) để đáp án <5 ký tự
 - KHÔNG được sửa đáp án sau khi tính toán - phải điều chỉnh từ đầu
 
-Lưu ý: Chỉ trả về JSON, không có văn bản bổ sung.
+LƯU Ý QUAN TRỌNG VỀ EXPLANATION:
+- Field "explanation" phải là hướng dẫn giải bài chi tiết, từng bước
+- KHÔNG được viết mô tả về câu hỏi hoặc thông tin meta
+- Phải giải thích tại sao đáp án chính xác và cách tính toán
+
+LƯU Ý QUAN TRỌNG VỀ HÓA HỌC - NGUYÊN TẮC CHUNG:
+1. ĐỊNH LUẬT BẢO TOÀN:
+   - Bảo toàn khối lượng: tổng khối lượng chất tham gia = tổng khối lượng sản phẩm
+   - Bảo toàn nguyên tố: số nguyên tử mỗi nguyên tố ở 2 vế phương trình bằng nhau
+   - Bảo toàn điện tích: tổng điện tích 2 vế phương trình ion bằng nhau
+
+2. PHƯƠNG TRÌNH HÓA HỌC:
+   - Viết đúng công thức hóa học của các chất
+   - Cân bằng phương trình với hệ số nguyên tối giản
+   - Tỉ lệ mol theo hệ số cân bằng phải chính xác
+
+3. TÍNH TOÁN HÓA HỌC:
+   - Sử dụng đúng khối lượng nguyên tử/phân tử theo bảng tuần hoàn
+   - Kiểm tra tính hợp lý của kết quả (không âm, trong khoảng thực tế)
+   - Đơn vị phải nhất quán và chính xác
+
+4. LOGIC VÀ NHẤT QUÁN:
+   - Kết quả các bước tính toán phải nhất quán với nhau
+   - Công thức phân tử phải khớp với dữ liệu đã tính
+   - Kiểm tra lại từng bước để tránh sai sót
+
+Lưu ý: Chỉ trả về JSON, không có văn bản bổ sung. ÁP DỤNG NGUYÊN TẮC HÓA HỌC CHUNG!
 """
 
     def _get_reverse_thinking_requirements(self, level: str) -> str:
@@ -495,8 +531,22 @@ NHIỆM VỤ CỦA BẠN:
 1. Giải chi tiết câu hỏi từ đầu đến cuối
 2. So sánh kết quả của bạn với đáp án được cho
 3. Đánh giá tính chính xác về mặt khoa học
-4. Kiểm tra ngữ cảnh có phù hợp với chương trình THPT không
-5. Đưa ra góp ý cải thiện nếu cần
+4. KIỂM TRA ĐặC BIỆT: Logic hóa học, phương trình phản ứng, tỉ lệ mol
+5. Kiểm tra ngữ cảnh có phù hợp với chương trình THPT không
+6. Đưa ra góp ý cải thiện nếu cần
+
+NGUYÊN TẮC KIỂM TRA CHUNG:
+- Áp dụng các định luật bảo toàn (khối lượng, nguyên tố, điện tích)
+- Phương trình phản ứng phải cân bằng chính xác
+- Tỉ lệ mol theo hệ số cân bằng
+- Khối lượng mol tính đúng theo bảng tuần hoàn
+- Giá trị kết quả trong khoảng hợp lý và thực tế
+
+KIỂM TRA TÍNH NHẤT QUÁN:
+- Kết quả các bước tính toán phải logic và nhất quán
+- Công thức phân tử phải khớp với dữ liệu đã tính
+- Đơn vị và số liệu phải chính xác
+- Không có mâu thuẫn giữa các phần của bài giải
 
 ĐỊNH DẠNG JSON TRẢ VỀ:
 {{
@@ -528,6 +578,9 @@ CÂU HỎI HIỆN TẠI:
 ĐÁP ÁN HIỆN TẠI:
 {question.get('target_answer', '')}
 
+GIẢI THÍCH HIỆN TẠI:
+{question.get('explanation', '')}
+
 FEEDBACK TỪ CHUYÊN GIA HÓA HỌC:
 - Điểm đánh giá: {validation_result.get('accuracy_score', 0)}/10
 - Tính hợp lệ: {validation_result.get('is_valid', False)}
@@ -538,7 +591,8 @@ NHIỆM VỤ CỦA BẠN:
 1. Chỉnh sửa câu hỏi dựa trên feedback
 2. Điều chỉnh các thông số để đảm bảo đáp án chính xác
 3. Cải thiện ngữ cảnh và cách diễn đạt
-4. Đảm bảo phù hợp với mức độ "{level}"
+4. Cải thiện giải thích để phù hợp với câu hỏi mới
+5. Đảm bảo phù hợp với mức độ "{level}"
 
 ĐỊNH DẠNG JSON TRẢ VỀ:
 {{
@@ -547,7 +601,7 @@ NHIỆM VỤ CỦA BẠN:
     "solution_steps": [
         "Bước giải đã được cập nhật"
     ],
-    "explanation": "Giải thích cải thiện",
+    "explanation": "Giải thích chi tiết cách giải câu hỏi đã cải thiện",
     "cognitive_level": "{level}",
     "part": 3,
     "improvements_made": [
@@ -555,7 +609,7 @@ NHIỆM VỤ CỦA BẠN:
     ]
 }}
 
-Lưu ý: Chỉ trả về JSON, tập trung vào việc cải thiện chất lượng câu hỏi.
+Lưu ý: Chỉ trả về JSON, tập trung vào việc cải thiện chất lượng câu hỏi. Field "explanation" phải là giải thích cách giải bài, không phải mô tả cải thiện.
 """
 
     def _parse_reverse_thinking_response(self, response_text: str, level: str, lesson_id: str) -> Optional[Dict[str, Any]]:
@@ -653,9 +707,8 @@ Lưu ý: Chỉ trả về JSON, tập trung vào việc cải thiện chất lư
 
             # Merge với câu hỏi gốc, ưu tiên dữ liệu mới
             result = original_question.copy()
-            result.update(improved_data)
 
-            # Đảm bảo format đáp án đúng và validate độ dài
+            # Cập nhật từng field một cách có kiểm soát
             if "target_answer" in improved_data:
                 improved_answer = str(improved_data["target_answer"]).strip()
                 logger.info(f"🔍 Validating improved answer: '{improved_answer}' (length: {len(improved_answer)} chars)")
@@ -668,6 +721,19 @@ Lưu ý: Chỉ trả về JSON, tập trung vào việc cải thiện chất lư
                 else:
                     logger.info(f"✅ ACCEPTING IMPROVED: Valid answer: '{improved_answer}' ({len(improved_answer)} chars < 5)")
                     result["answer"] = {"answer": improved_answer}
+                    result["target_answer"] = improved_answer
+
+            # Cập nhật các field khác nếu có
+            for field in ["question", "solution_steps", "explanation"]:
+                if field in improved_data:
+                    result[field] = improved_data[field]
+                    logger.info(f"✅ Updated field '{field}' from improved response")
+
+            # Đảm bảo các field bắt buộc
+            if "cognitive_level" in improved_data:
+                result["cognitive_level"] = improved_data["cognitive_level"]
+            if "part" in improved_data:
+                result["part"] = improved_data["part"]
 
             return result
 
@@ -752,6 +818,7 @@ YÊU CẦU:
 - Ngữ liệu, dữ kiện trong câu phải khoa học, đúng thực tế.
 - Tuân thủ nghiêm ngặt ma trận đề thi chuẩn THPT 2025
 - Đảm bảo kiến thức chính xác, logic, không gây hiểu nhầm.
+- KIỂM TRA KỸ LOGIC HÓA HỌC: phương trình phản ứng, tỉ lệ mol, bảo toàn nguyên tố, tính hợp lý
 {self._get_specific_instructions_by_part(part_num, level)}
 
 ĐỊNH DẠNG JSON TRẢ VỀ:
@@ -759,13 +826,24 @@ YÊU CẦU:
     {{
         "question": "Nội dung câu hỏi",
         "answer": {self._get_answer_format_by_part(part_num)},
-        "explanation": "Giải thích đáp án",
+        "explanation": "Giải thích chi tiết cách giải và lý do tại sao đáp án đúng",
         "cognitive_level": "{level}",
         "part": {part_num}
     }}
 ]
 
-Lưu ý: chỉ trả về JSON, không có văn bản bổ sung.
+LƯU Ý QUAN TRỌNG:
+- Chỉ trả về JSON, không có văn bản bổ sung
+- Field "explanation" phải là giải thích cách giải bài, không phải mô tả câu hỏi
+- ÁP DỤNG NGUYÊN TẮC HÓA HỌC: bảo toàn, cân bằng, tỉ lệ, logic, nhất quán
+- Đảm bảo tính chính xác khoa học và hợp lý thực tế
+
+VALIDATION NGHIÊM NGẶT - PHẢI KIỂM TRA:
+✓ Khối lượng mol chính xác: CaCO₃=100, NaCl=58.5, H₂SO₄=98...
+✓ Công thức phân tử nhất quán: nếu n=17 thì C₁₇H₃₇N, không phải C₃H₉N
+✓ Tỉ lệ mol theo phương trình cân bằng
+✓ Bảo toàn nguyên tố trong mọi phản ứng
+✓ Giá trị số học hợp lý và có thể tính được
 """
         return prompt
 
