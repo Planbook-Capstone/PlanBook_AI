@@ -11,6 +11,7 @@ from copy import deepcopy
 from app.services.llm_service import get_llm_service
 from app.services.textbook_retrieval_service import get_textbook_retrieval_service
 from app.services.enhanced_textbook_service import get_enhanced_textbook_service
+from app.services.smart_exam_docx_service import SmartExamDocxService
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,8 @@ class LessonPlanContentService:
         self.llm_service = get_llm_service()
         self.textbook_service = get_textbook_retrieval_service()
         self.enhanced_textbook_service = get_enhanced_textbook_service()
-        
+        self.smart_exam_service = SmartExamDocxService()
+
         # Giới hạn độ sâu để tránh vòng lặp vô hạn
         self.MAX_DEPTH = 10
         
@@ -1698,14 +1700,19 @@ LƯU Ý QUAN TRỌNG:
             # Sử dụng hàm clean_text_content từ enhanced_textbook_service
             cleaned_content = self.enhanced_textbook_service.clean_text_content(content)
 
-            logger.info(f"🧹 Content cleaned for node {node_id}: {len(content)} → {len(cleaned_content)} chars")
+            # Format ký hiệu hóa học sử dụng hàm từ SmartExamDocxService
+            formatted_content = self.smart_exam_service._normalize_chemistry_format(cleaned_content)
 
-            return cleaned_content
+            logger.info(f"🧹 Content cleaned and formatted for node {node_id}: {len(content)} → {len(formatted_content)} chars")
+
+            return formatted_content
 
         except Exception as e:
             logger.error(f"Error cleaning content for node {node_id}: {e}")
             # Trả về nội dung gốc nếu có lỗi khi làm sạch
             return content.strip()
+
+
 
 
 # Factory function để tạo LessonPlanContentService instance
