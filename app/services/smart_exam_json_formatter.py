@@ -7,6 +7,7 @@ import logging
 from typing import Dict, Any, List
 
 from app.constants.difficulty_levels import DifficultyLevel
+from app.services.smart_exam_docx_service import SmartExamDocxService
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,8 @@ class SmartExamJsonFormatter:
     """Service chuyển đổi format JSON cho smart exam"""
 
     def __init__(self):
-        pass
+        # Tạo instance của SmartExamDocxService để sử dụng hàm _normalize_chemistry_format
+        self._docx_service = SmartExamDocxService()
 
     def _map_cognitive_level_to_difficulty(self, cognitive_level: str) -> str:
         """
@@ -86,11 +88,11 @@ class SmartExamJsonFormatter:
         for i, question in enumerate(questions, 1):
             answer_data = question.get("answer", {})
             
-            # Tạo options từ A, B, C, D
+            # Tạo options từ A, B, C, D với chemistry format
             options = {}
             for option in ["A", "B", "C", "D"]:
                 if option in answer_data:
-                    options[option] = str(answer_data[option])
+                    options[option] = self._docx_service._normalize_chemistry_format(str(answer_data[option]))
 
             # Lấy đáp án đúng
             correct_answer = answer_data.get("correct_answer", "A")
@@ -98,10 +100,10 @@ class SmartExamJsonFormatter:
             formatted_question = {
                 "id": str(uuid.uuid4()),
                 "questionNumber": i,
-                "question": question.get("question", ""),
+                "question": self._docx_service._normalize_chemistry_format(question.get("question", "")),
                 "options": options,
                 "answer": correct_answer,
-                "explanation": question.get("explanation", ""),
+                "explanation": self._docx_service._normalize_chemistry_format(question.get("explanation", "")),
                 "difficultyLevel": self._map_cognitive_level_to_difficulty(
                     question.get("cognitive_level", "Biết")
                 )
@@ -134,14 +136,14 @@ class SmartExamJsonFormatter:
                     
                     if isinstance(option_data, dict):
                         # Format mới với content và evaluation
-                        text = option_data.get("content", "")
+                        text = self._docx_service._normalize_chemistry_format(option_data.get("content", ""))
                         evaluation = option_data.get("evaluation", "Đúng")
                         answer = evaluation.lower() == "đúng"
                     else:
                         # Format cũ - fallback
-                        text = str(option_data)
+                        text = self._docx_service._normalize_chemistry_format(str(option_data))
                         answer = True  # Default
-                    
+
                     statements[option] = {
                         "text": text,
                         "answer": answer
@@ -150,9 +152,9 @@ class SmartExamJsonFormatter:
             formatted_question = {
                 "id": str(uuid.uuid4()),
                 "questionNumber": i,
-                "question": question.get("question", ""),
+                "question": self._docx_service._normalize_chemistry_format(question.get("question", "")),
                 "statements": statements,
-                "explanation": question.get("explanation", ""),
+                "explanation": self._docx_service._normalize_chemistry_format(question.get("explanation", "")),
                 "difficultyLevel": self._map_cognitive_level_to_difficulty(
                     question.get("cognitive_level", "Chưa thể xác định")
                 )
@@ -183,9 +185,9 @@ class SmartExamJsonFormatter:
             formatted_question = {
                 "id": str(uuid.uuid4()),
                 "questionNumber": i,
-                "question": question.get("question", ""),
-                "answer": answer,
-                "explanation": question.get("explanation", ""),
+                "question": self._docx_service._normalize_chemistry_format(question.get("question", "")),
+                "answer": answer,  # Đáp án số không cần format chemistry
+                "explanation": self._docx_service._normalize_chemistry_format(question.get("explanation", "")),
                 "difficultyLevel": self._map_cognitive_level_to_difficulty(
                     question.get("cognitive_level", "Biết")
                 )
