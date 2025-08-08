@@ -294,15 +294,23 @@ class SmartExamGenerationService:
         self, level: str, lesson_data: Dict[str, Any],
         subject: str, lesson_id: str
     ) -> Optional[Dict[str, Any]]:
-        """Tạo câu hỏi ban đầu với đáp án được sinh trước"""
+        """Tạo câu hỏi ban đầu với đáp án được sinh dựa trên context bài học"""
         try:
             # Lấy nội dung bài học
             main_content = self._extract_lesson_content(lesson_data)
             if not main_content.strip():
                 return None
 
-            # Tạo prompt cho việc sinh đáp án trước
-            prompt = self._create_reverse_thinking_prompt(level, main_content, lesson_id)
+            # Phân tích context và sinh đáp án có cơ sở khoa học
+            context_analysis = await self._analyze_lesson_context(main_content, level)
+
+            # Tạo prompt dựa trên context analysis hoặc fallback
+            if context_analysis:
+                logger.info("✅ Using context-based approach for answer generation")
+                prompt = self._create_context_based_prompt(level, main_content, context_analysis, lesson_id)
+            else:
+                logger.warning("⚠️ Context analysis failed, using traditional reverse thinking approach")
+                prompt = self._create_reverse_thinking_prompt(level, main_content, lesson_id)
 
             response = await self.llm_service.generate_content(
                 prompt=prompt,
@@ -319,7 +327,19 @@ class SmartExamGenerationService:
                 response.get("text", ""), level, lesson_id
             )
 
-            return question_data
+            # Nếu parse thành công nhưng có vấn đề với đáp án, thử auto-adjust
+            if question_data:
+                return question_data
+            else:
+                # Thử parse lại với auto-adjustment
+                raw_question = self._parse_raw_response(response.get("text", ""))
+                if raw_question:
+                    adjusted_question = await self._auto_adjust_answer_if_needed(raw_question, level)
+                    if adjusted_question:
+                        logger.info("🔧 Successfully auto-adjusted question")
+                        return self._finalize_question_data(adjusted_question, level, lesson_id)
+
+            return None
 
         except Exception as e:
             logger.error(f"Error creating initial question: {e}")
@@ -355,11 +375,61 @@ class SmartExamGenerationService:
                     except ValueError:
                         accuracy_score = 0
 
-                # Giảm tiêu chuẩn validation để tạo được nhiều câu hỏi hơn
-                min_score = 7 if max_iterations <= 2 else 8  # Giảm tiêu chuẩn cho retry
-                if validation_result.get("is_valid", False) and accuracy_score >= min_score:
-                    logger.info(f"✅ Question validated successfully after {iteration + 1} iterations (score: {accuracy_score}/{min_score})")
+                # Kiểm tra sai lệch đáp án
+                answer_diff = validation_result.get("answer_difference_percent", 0)
+                try:
+                    answer_diff = float(str(answer_diff).replace("%", ""))
+                except (ValueError, TypeError):
+                    answer_diff = 100  # Nếu không parse được, coi như sai lệch lớn
+
+                # Tiêu chuẩn validation nghiêm ngặt
+                min_score = 7 if max_iterations <= 2 else 8
+                max_answer_diff = 10  # Sai lệch tối đa 10%
+
+                is_calculation_valid = answer_diff <= max_answer_diff
+                is_score_valid = accuracy_score >= min_score
+                is_overall_valid = validation_result.get("is_valid", False)
+
+                # Kiểm tra xem có thể áp dụng làm tròn thông minh không (sai lệch nhỏ 2-5%)
+                if (not is_calculation_valid and
+                    2 <= answer_diff <= 5 and
+                    is_score_valid and
+                    validation_result.get("my_answer")):
+
+                    smart_rounded_question = self._try_smart_rounding_from_validation(current_question, validation_result)
+                    if smart_rounded_question:
+                        logger.info(f"🎯 Applied smart rounding for small difference: {answer_diff}%")
+                        return smart_rounded_question
+
+                if is_overall_valid and is_score_valid and is_calculation_valid:
+                    logger.info(f"✅ Question validated successfully after {iteration + 1} iterations (score: {accuracy_score}/{min_score}, diff: {answer_diff}%)")
                     return current_question
+                elif not is_calculation_valid:
+                    logger.warning(f"❌ Answer difference too large: {answer_diff}% > {max_answer_diff}%")
+
+                # Kiểm tra loại lỗi và xử lý tương ứng
+                error_type = validation_result.get("error_type", "none")
+                feedback = validation_result.get("feedback", "").lower()
+
+                # Lỗi nghiêm trọng - cần tạo lại từ đầu
+                critical_errors = [
+                    "không thể giải", "đề bài sai", "mâu thuẫn", "không hợp lý",
+                    "không tính được", "dữ kiện thiếu", "logic sai"
+                ]
+
+                if error_type == "data" or any(critical_error in feedback for critical_error in critical_errors):
+                    logger.warning(f"🔄 Critical error detected (type: {error_type}), regenerating question from scratch")
+                    return None  # Trigger retry từ đầu
+
+                # Lỗi tính toán - có thể sửa được
+                if error_type == "calculation" and answer_diff > max_answer_diff:
+                    logger.info(f"🔧 Calculation error detected, attempting to fix answer")
+                    # Thử điều chỉnh đáp án dựa trên kết quả validation
+                    corrected_question = self._try_correct_answer(current_question, validation_result)
+                    if corrected_question:
+                        current_question = corrected_question
+                        logger.info(f"✅ Answer corrected based on validation result")
+                        continue
 
                 # Bước 3b: Gọi LLM với role chuyên gia ra đề để cải thiện
                 improved_question = await self._improve_with_exam_expert(
@@ -428,6 +498,408 @@ class SmartExamGenerationService:
             logger.error(f"Error in exam expert improvement: {e}")
             return None
 
+    async def _auto_adjust_answer_if_needed(self, question_data: Dict[str, Any], level: str) -> Optional[Dict[str, Any]]:
+        """
+        Tự động điều chỉnh đáp án và thêm yêu cầu làm tròn vào đề nếu cần
+        """
+        try:
+            target_answer = str(question_data.get("target_answer", "")).strip()
+            question_text = question_data.get("question", "")
+
+            # Nếu đáp án quá dài, thử làm tròn và thêm yêu cầu vào đề
+            if len(target_answer) >= 5:
+                try:
+                    answer_value = float(target_answer)
+
+                    # Thử các cách làm tròn và tạo yêu cầu tương ứng
+                    rounding_options = [
+                        {
+                            "rounded": str(round(answer_value, 1)),
+                            "requirement": "(làm tròn đến 1 chữ số thập phân)",
+                            "decimal_places": 1
+                        },
+                        {
+                            "rounded": str(round(answer_value, 2)),
+                            "requirement": "(làm tròn đến 2 chữ số thập phân)",
+                            "decimal_places": 2
+                        },
+                        {
+                            "rounded": str(int(round(answer_value))),
+                            "requirement": "(làm tròn đến số nguyên)",
+                            "decimal_places": 0
+                        }
+                    ]
+
+                    for option in rounding_options:
+                        rounded_answer = option["rounded"]
+                        if len(rounded_answer) < 5 and float(rounded_answer) > 0:
+                            logger.info(f"🔧 Auto-adjusted answer: {target_answer} → {rounded_answer}")
+
+                            # Cập nhật đáp án
+                            question_data["target_answer"] = rounded_answer
+                            question_data["answer"] = {"answer": rounded_answer}
+
+                            # Thêm yêu cầu làm tròn vào câu hỏi nếu chưa có
+                            rounding_requirement = option["requirement"]
+                            if rounding_requirement.replace("(", "").replace(")", "") not in question_text.lower():
+                                # Thêm yêu cầu làm tròn vào cuối câu hỏi
+                                if question_text.endswith("?"):
+                                    updated_question = question_text[:-1] + f" {rounding_requirement}?"
+                                else:
+                                    updated_question = question_text + f" {rounding_requirement}"
+
+                                question_data["question"] = updated_question
+                                logger.info(f"📝 Added rounding requirement to question")
+
+                            # Cập nhật explanation
+                            original_explanation = question_data.get("explanation", "")
+                            if option["decimal_places"] == 0:
+                                question_data["explanation"] = f"Kết quả tính toán được làm tròn đến số nguyên: {rounded_answer}. {original_explanation}"
+                            else:
+                                question_data["explanation"] = f"Kết quả tính toán được làm tròn đến {option['decimal_places']} chữ số thập phân: {rounded_answer}. {original_explanation}"
+
+                            return question_data
+
+                except ValueError:
+                    pass
+
+            # Nếu không thể điều chỉnh, trả về None để trigger retry
+            logger.warning(f"❌ Cannot auto-adjust answer: {target_answer}")
+            return None
+
+        except Exception as e:
+            logger.error(f"Error in auto-adjustment: {e}")
+            return None
+
+    def _try_correct_answer(self, question: Dict[str, Any], validation_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Thử sửa đáp án dựa trên kết quả validation từ chuyên gia hóa học
+        """
+        try:
+            my_answer = validation_result.get("my_answer", "").strip()
+            if not my_answer:
+                return None
+
+            # Kiểm tra đáp án từ chuyên gia có hợp lệ không
+            try:
+                expert_answer_value = float(my_answer)
+                if expert_answer_value <= 0 or expert_answer_value > 9999 or len(my_answer) >= 5:
+                    return None
+            except ValueError:
+                return None
+
+            # Kiểm tra xem có thể áp dụng logic làm tròn thông minh không
+            original_answer = question.get("target_answer", "")
+            try:
+                original_value = float(original_answer)
+
+                # Nếu sai lệch nhỏ (< 5%), thử áp dụng làm tròn thông minh
+                difference_percent = abs(expert_answer_value - original_value) / expert_answer_value * 100
+                if difference_percent < 5:
+                    smart_rounded_question = self._apply_smart_rounding(question, expert_answer_value, original_value)
+                    if smart_rounded_question:
+                        logger.info(f"🎯 Applied smart rounding: {original_answer} → {smart_rounded_question['target_answer']} (expert: {my_answer})")
+                        return smart_rounded_question
+            except ValueError:
+                pass
+
+            # Tạo câu hỏi mới với đáp án từ chuyên gia
+            corrected_question = question.copy()
+            corrected_question["target_answer"] = my_answer
+            corrected_question["answer"] = {"answer": my_answer}
+
+            # Cập nhật explanation với lời giải từ chuyên gia
+            expert_solution = validation_result.get("my_solution", "")
+            if expert_solution:
+                corrected_question["explanation"] = f"{expert_solution}"
+
+            logger.info(f"🔧 Corrected answer: {question.get('target_answer')} → {my_answer}")
+            return corrected_question
+
+        except Exception as e:
+            logger.error(f"Error correcting answer: {e}")
+            return None
+
+    def _apply_smart_rounding(self, question: Dict[str, Any], expert_value: float, original_value: float) -> Optional[Dict[str, Any]]:
+        """
+        Áp dụng làm tròn thông minh khi có sai lệch nhỏ giữa đáp án gốc và đáp án chuyên gia
+        """
+        try:
+            # Thử các cách làm tròn khác nhau để tìm cách phù hợp nhất
+            rounding_options = [
+                {
+                    "rounded": round(expert_value),
+                    "requirement": "làm tròn đến số nguyên",
+                    "decimal_places": 0
+                },
+                {
+                    "rounded": round(expert_value, 1),
+                    "requirement": "làm tròn đến 1 chữ số thập phân",
+                    "decimal_places": 1
+                },
+                {
+                    "rounded": round(expert_value, 2),
+                    "requirement": "làm tròn đến 2 chữ số thập phân",
+                    "decimal_places": 2
+                }
+            ]
+
+            # Tìm cách làm tròn phù hợp nhất với đáp án gốc
+            best_option = None
+            min_difference = float('inf')
+
+            for option in rounding_options:
+                rounded_value = option["rounded"]
+                difference = abs(rounded_value - original_value)
+
+                # Kiểm tra xem đáp án làm tròn có phù hợp không
+                if (difference < min_difference and
+                    len(str(rounded_value)) < 5 and
+                    rounded_value > 0):
+                    min_difference = difference
+                    best_option = option
+
+            if best_option and min_difference / original_value * 100 < 2:  # Sai lệch < 2%
+                corrected_question = question.copy()
+                rounded_answer = str(best_option["rounded"])
+
+                # Cập nhật đáp án
+                corrected_question["target_answer"] = rounded_answer
+                corrected_question["answer"] = {"answer": rounded_answer}
+
+                # Thêm yêu cầu làm tròn vào câu hỏi
+                question_text = question.get("question", "")
+                rounding_requirement = f"({best_option['requirement']})"
+
+                if rounding_requirement.replace("(", "").replace(")", "") not in question_text.lower():
+                    if question_text.endswith("?"):
+                        updated_question = question_text[:-1] + f" {rounding_requirement}?"
+                    else:
+                        updated_question = question_text + f" {rounding_requirement}"
+
+                    corrected_question["question"] = updated_question
+
+                # Cập nhật explanation
+                original_explanation = question.get("explanation", "")
+                if best_option["decimal_places"] == 0:
+                    corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến số nguyên: {rounded_answer}. {original_explanation}"
+                else:
+                    corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến {best_option['decimal_places']} chữ số thập phân: {rounded_answer}. {original_explanation}"
+
+                return corrected_question
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error in smart rounding: {e}")
+            return None
+
+    def _try_smart_rounding_from_validation(self, question: Dict[str, Any], validation_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Thử áp dụng làm tròn thông minh dựa trên kết quả validation khi có sai lệch nhỏ
+        """
+        try:
+            expert_answer = validation_result.get("my_answer", "").strip()
+            original_answer = question.get("target_answer", "")
+
+            if not expert_answer or not original_answer:
+                return None
+
+            try:
+                expert_value = float(expert_answer)
+                original_value = float(original_answer)
+            except ValueError:
+                return None
+
+            # Kiểm tra xem đáp án gốc có thể là kết quả làm tròn của đáp án chuyên gia không
+            rounding_options = [
+                {
+                    "rounded": round(expert_value),
+                    "requirement": "làm tròn đến số nguyên",
+                    "decimal_places": 0
+                },
+                {
+                    "rounded": round(expert_value, 1),
+                    "requirement": "làm tròn đến 1 chữ số thập phân",
+                    "decimal_places": 1
+                },
+                {
+                    "rounded": round(expert_value, 2),
+                    "requirement": "làm tròn đến 2 chữ số thập phân",
+                    "decimal_places": 2
+                }
+            ]
+
+            # Tìm cách làm tròn phù hợp với đáp án gốc
+            for option in rounding_options:
+                rounded_value = option["rounded"]
+
+                # Kiểm tra khớp chính xác
+                if abs(rounded_value - original_value) < 0.01:  # Gần như bằng nhau
+                    corrected_question = question.copy()
+
+                    # Giữ nguyên đáp án gốc nhưng thêm yêu cầu làm tròn vào câu hỏi
+                    question_text = question.get("question", "")
+                    rounding_requirement = f"({option['requirement']})"
+
+                    if rounding_requirement.replace("(", "").replace(")", "") not in question_text.lower():
+                        if question_text.endswith("?"):
+                            updated_question = question_text[:-1] + f" {rounding_requirement}?"
+                        else:
+                            updated_question = question_text + f" {rounding_requirement}"
+
+                        corrected_question["question"] = updated_question
+
+                    # Cập nhật explanation để giải thích việc làm tròn
+                    original_explanation = question.get("explanation", "")
+                    if option["decimal_places"] == 0:
+                        corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến số nguyên: {original_answer}. {original_explanation}"
+                    else:
+                        corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến {option['decimal_places']} chữ số thập phân: {original_answer}. {original_explanation}"
+
+                    logger.info(f"🎯 Smart rounding applied: {expert_value:.3f} → {original_answer} ({option['requirement']})")
+                    return corrected_question
+
+            # Nếu không khớp chính xác, kiểm tra xem có thể là làm tròn với sai lệch nhỏ không
+            for option in rounding_options:
+                rounded_value = option["rounded"]
+                difference_percent = abs(rounded_value - original_value) / max(rounded_value, original_value) * 100
+
+                # Nếu sai lệch < 2% và có thể giải thích được bằng làm tròn
+                if difference_percent < 2:
+                    corrected_question = question.copy()
+
+                    # Giữ nguyên đáp án gốc nhưng thêm yêu cầu làm tròn vào câu hỏi
+                    question_text = question.get("question", "")
+                    rounding_requirement = f"({option['requirement']})"
+
+                    if rounding_requirement.replace("(", "").replace(")", "") not in question_text.lower():
+                        if question_text.endswith("?"):
+                            updated_question = question_text[:-1] + f" {rounding_requirement}?"
+                        else:
+                            updated_question = question_text + f" {rounding_requirement}"
+
+                        corrected_question["question"] = updated_question
+
+                    # Cập nhật explanation để giải thích việc làm tròn
+                    original_explanation = question.get("explanation", "")
+                    if option["decimal_places"] == 0:
+                        corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến số nguyên: {original_answer}. {original_explanation}"
+                    else:
+                        corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến {option['decimal_places']} chữ số thập phân: {original_answer}. {original_explanation}"
+
+                    logger.info(f"🎯 Smart rounding applied (with tolerance): {expert_value:.3f} → {original_answer} ({option['requirement']}, diff: {difference_percent:.1f}%)")
+                    return corrected_question
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error in smart rounding from validation: {e}")
+            return None
+
+    def _parse_raw_response(self, response_text: str) -> Optional[Dict[str, Any]]:
+        """Parse raw response without validation để có thể auto-adjust"""
+        try:
+            start_idx = response_text.find('{')
+            end_idx = response_text.rfind('}') + 1
+
+            if start_idx == -1 or end_idx == 0:
+                return None
+
+            json_str = response_text[start_idx:end_idx]
+            return json.loads(json_str)
+
+        except json.JSONDecodeError:
+            return None
+        except Exception:
+            return None
+
+    def _finalize_question_data(self, question_data: Dict[str, Any], level: str, lesson_id: str) -> Dict[str, Any]:
+        """Finalize question data với các field bắt buộc"""
+        question_data["part"] = 3
+        question_data["cognitive_level"] = level
+        question_data["lesson_id"] = lesson_id
+        question_data["question_type"] = "TL"
+
+        if "target_answer" in question_data:
+            question_data["answer"] = {"answer": question_data["target_answer"]}
+
+        return question_data
+
+    async def _analyze_lesson_context(self, content: str, level: str) -> Optional[Dict[str, Any]]:
+        """
+        Phân tích context bài học để xác định công thức, khái niệm và giá trị phù hợp
+        """
+        try:
+            analysis_prompt = f"""
+Bạn là chuyên gia phân tích nội dung hóa học THPT. Hãy phân tích nội dung bài học dưới đây để xác định:
+
+NỘI DUNG BÀI HỌC:
+{content}
+
+YÊU CẦU PHÂN TÍCH:
+1. Xác định các CÔNG THỨC HÓA HỌC chính trong bài học
+2. Xác định các GIÁ TRỊ SỐ LIỆU thường gặp (khối lượng mol, thể tích, nồng độ, pH...)
+3. Xác định các LOẠI BÀI TOÁN phù hợp với mức độ "{level}"
+4. Đề xuất ĐÁNH SỐ CỤ THỂ cho đáp án dựa trên công thức và dữ liệu thực tế
+
+ĐỊNH DẠNG JSON TRẢ VỀ:
+{{
+    "formulas": [
+        {{"name": "Tên công thức", "formula": "Công thức", "variables": ["biến 1", "biến 2"]}},
+        {{"name": "n = m/M", "formula": "n = m/M", "variables": ["n (mol)", "m (g)", "M (g/mol)"]}}
+    ],
+    "common_values": {{
+        "molar_masses": [16, 18, 32, 44, 58.5, 98, 100],
+        "volumes_stp": [22.4, 11.2, 44.8, 67.2],
+        "concentrations": [0.1, 0.2, 0.5, 1.0, 2.0],
+        "ph_values": [1, 2, 7, 12, 13]
+    }},
+    "problem_types": [
+        "stoichiometry", "concentration", "gas_volume", "ph_calculation"
+    ],
+    "suggested_answers": [
+        {{"value": "22.4", "context": "Thể tích 1 mol khí ở đktc", "formula_used": "V = n × 22.4"}},
+        {{"value": "0.1", "context": "Số mol từ khối lượng", "formula_used": "n = m/M"}}
+    ]
+}}
+
+Lưu ý: Chỉ trả về JSON, đáp án phải <5 ký tự và dựa trên tính toán thực tế từ nội dung bài học.
+"""
+
+            response = await self.llm_service.generate_content(
+                prompt=analysis_prompt,
+                temperature=0.2,
+                max_tokens=2000
+            )
+
+            if not response.get("success", False):
+                logger.error(f"Failed to analyze lesson context: {response.get('error')}")
+                return None
+
+            # Parse JSON response
+            response_text = response.get("text", "")
+            
+            start_idx = response_text.find('{')
+            end_idx = response_text.rfind('}') + 1
+
+            if start_idx == -1 or end_idx == 0:
+                logger.error("No JSON found in context analysis response")
+                return None
+
+            json_str = response_text[start_idx:end_idx]
+            context_data = json.loads(json_str)
+
+            logger.info(f"✅ Context analysis successful: {len(context_data.get('suggested_answers', []))} suggested answers")
+            return context_data
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse context analysis JSON: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error analyzing lesson context: {e}")
+            return None
+
     def _extract_lesson_content(self, lesson_data: Dict[str, Any]) -> str:
         """Trích xuất nội dung bài học từ lesson_data"""
         if "lesson_content" in lesson_data:
@@ -442,21 +914,259 @@ class SmartExamGenerationService:
         else:
             return str(content)[:2000] if content else ""
 
+    def _create_context_based_prompt(self, level: str, content: str, context_analysis: Dict[str, Any], lesson_id: str) -> str:
+        """Tạo prompt dựa trên phân tích context bài học"""
+
+        # Lấy thông tin từ context analysis
+        formulas = context_analysis.get("formulas", [])
+        suggested_answers = context_analysis.get("suggested_answers", [])
+
+        # Tạo danh sách công thức
+        formulas_text = ""
+        if formulas:
+            formulas_text = "CÔNG THỨC CHÍNH TRONG BÀI HỌC:\n"
+            for formula in formulas[:3]:  # Lấy tối đa 3 công thức
+                formulas_text += f"- {formula.get('name', '')}: {formula.get('formula', '')}\n"
+
+        # Tạo danh sách đáp án gợi ý
+        suggested_answers_text = ""
+        if suggested_answers:
+            suggested_answers_text = "ĐÁP ÁN GỢI Ý DỰA TRÊN CONTEXT:\n"
+            for answer in suggested_answers[:5]:  # Lấy tối đa 5 đáp án
+                suggested_answers_text += f"- {answer.get('value', '')}: {answer.get('context', '')} ({answer.get('formula_used', '')})\n"
+
+        # Tạo validation instructions động
+        validation_instructions = self._generate_validation_instructions(level, formulas, suggested_answers)
+
+        return f"""
+Bạn là chuyên gia tạo đề thi Hóa học THPT 2025. Hãy áp dụng phương pháp TƯ DUY NGƯỢC DỰA TRÊN CONTEXT để tạo câu hỏi tự luận tính toán.
+
+QUY TRÌNH TƯ DUY NGƯỢC DỰA TRÊN CONTEXT:
+1. CHỌN ĐÁP ÁN TỪ CONTEXT: Chọn một đáp án từ danh sách gợi ý dựa trên nội dung bài học
+2. XÂY DỰNG BÀI TOÁN: Từ đáp án và công thức, thiết kế bối cảnh và dữ kiện phù hợp
+3. KIỂM TRA TÍNH TOÁN NGƯỢC: Tính toán từ dữ kiện về đáp án để đảm bảo chính xác
+4. VALIDATION NGHIÊM NGẶT: Kiểm tra lại toàn bộ bài toán từ đầu đến cuối
+
+THÔNG TIN BÀI HỌC:
+- Lesson ID: {lesson_id}
+- Nội dung: {content}...
+
+{formulas_text}
+
+{suggested_answers_text}
+
+YÊU CẦU MỨC ĐỘ "{level}":
+{self._get_reverse_thinking_requirements(level)}
+
+YÊU CẦU ĐÁP ÁN NGHIÊM NGẶT:
+- Đáp án phải có ÍT HƠN 5 ký tự (tối đa 4 ký tự bao gồm dấu thập phân)
+- Ưu tiên chọn từ danh sách đáp án gợi ý ở trên
+- Nếu không dùng đáp án gợi ý, phải đảm bảo tính chính xác khoa học
+
+ĐỊNH DẠNG JSON TRẢ VỀ:
+{{
+    "target_answer": "Đáp án được chọn từ context hoặc tính toán chính xác <5 ký tự",
+    "question": "Nội dung câu hỏi được xây dựng từ đáp án và context",
+    "solution_steps": [
+        "Bước 1: Xác định dữ liệu và công thức",
+        "Bước 2: Thực hiện tính toán",
+        "Bước 3: Kết luận đáp án"
+    ],
+    "explanation": "Giải thích chi tiết từng bước với công thức cụ thể từ context bài học",
+    "formula_used": "Công thức chính được sử dụng",
+    "cognitive_level": "{level}",
+    "part": 3
+}}
+
+{validation_instructions}
+
+Lưu ý: Chỉ trả về JSON, không có văn bản bổ sung. PHẢI TỰ VALIDATION TRƯỚC KHI TRẢ VỀ!
+"""
+
+    def _generate_validation_instructions(self, level: str, formulas: List[Dict], suggested_answers: List[Dict]) -> str:
+        """Tạo validation instructions động dựa trên context trong format JSON"""
+
+        # Tạo validation rules tổng quát dựa trên context
+        validation_rules = {
+            "general_rules": [
+                "Ưu tiên sử dụng công thức và giá trị từ context analysis",
+                "SAU KHI TẠO XONG: Hãy tự kiểm tra lại bài toán từ đầu đến cuối",
+                "Tính toán ngược từ dữ kiện đề bài để xác minh đáp án",
+                "Nếu phát hiện sai lệch, hãy điều chỉnh dữ kiện hoặc đáp án cho phù hợp",
+                "Explanation phải là hướng dẫn giải bài với tính toán cụ thể"
+            ],
+            "context_warnings": [],
+            "validation_steps": [
+                "Đọc lại câu hỏi và xác định tất cả dữ kiện",
+                "Áp dụng công thức và tính toán từng bước",
+                "So sánh kết quả với target_answer",
+                "Kiểm tra đơn vị và yêu cầu làm tròn",
+                "Nếu sai lệch > 5%, điều chỉnh dữ kiện hoặc đáp án",
+                "Đảm bảo tất cả số liệu hợp lý và thực tế"
+            ],
+            "universal_errors": [
+                {
+                    "error_type": "unit_mismatch",
+                    "description": "Nhầm lẫn đơn vị hoặc đại lượng",
+                    "prevention": "Luôn kiểm tra đề yêu cầu tính gì và trả về đúng đơn vị"
+                },
+                {
+                    "error_type": "formula_application",
+                    "description": "Áp dụng sai công thức hoặc thiếu bước",
+                    "prevention": "Xác minh công thức phù hợp với dạng bài và áp dụng đầy đủ"
+                },
+                {
+                    "error_type": "calculation_logic",
+                    "description": "Sai logic tính toán hoặc tỉ lệ",
+                    "prevention": "Kiểm tra tính hợp lý của kết quả (không âm, không quá lớn/nhỏ)"
+                },
+                {
+                    "error_type": "data_interpretation",
+                    "description": "Hiểu sai dữ kiện hoặc yêu cầu đề bài",
+                    "prevention": "Đọc kỹ đề bài và xác định chính xác những gì cần tính"
+                }
+            ],
+            "validation_examples": []
+        }
+
+        # Thêm warnings tổng quát dựa trên formulas có trong context
+        if formulas:
+            formula_types = set()
+            for formula in formulas[:3]:
+                formula_name = formula.get('name', '').lower()
+                formula_content = formula.get('formula', '').lower()
+
+                # Phát hiện các pattern tổng quát
+                if any(keyword in formula_name + formula_content for keyword in ['tỉ lệ', 'ratio', 'proportion']):
+                    formula_types.add("ratio_calculation")
+                if any(keyword in formula_name + formula_content for keyword in ['nồng độ', 'concentration', 'molarity']):
+                    formula_types.add("concentration_calculation")
+                if any(keyword in formula_name + formula_content for keyword in ['thể tích', 'volume', 'v =']):
+                    formula_types.add("volume_calculation")
+                if any(keyword in formula_name + formula_content for keyword in ['khối lượng', 'mass', 'm =']):
+                    formula_types.add("mass_calculation")
+                if any(keyword in formula_name + formula_content for keyword in ['hiệu suất', 'efficiency', 'yield']):
+                    formula_types.add("efficiency_calculation")
+
+            # Thêm warnings dựa trên formula types
+            for formula_type in formula_types:
+                if formula_type == "ratio_calculation":
+                    validation_rules["context_warnings"].append("KIỂM TRA tỉ lệ và đơn vị trong tính toán")
+                elif formula_type == "concentration_calculation":
+                    validation_rules["context_warnings"].append("CHÚ Ý đơn vị thể tích và nồng độ")
+                elif formula_type == "volume_calculation":
+                    validation_rules["context_warnings"].append("XÁC MINH đơn vị thể tích (L, mL, cm³)")
+                elif formula_type == "mass_calculation":
+                    validation_rules["context_warnings"].append("PHÂN BIỆT khối lượng thực tế và khối lượng mol")
+                elif formula_type == "efficiency_calculation":
+                    validation_rules["context_warnings"].append("KIỂM TRA hiệu suất phải ≤ 100%")
+
+        # Thêm ví dụ validation tổng quát từ suggested answers
+        if suggested_answers:
+            for answer in suggested_answers[:2]:  # Lấy tối đa 2 ví dụ
+                context = answer.get('context', '')
+                value = answer.get('value', '')
+                formula_used = answer.get('formula_used', '')
+
+                if context and value:
+                    # Tạo ví dụ tổng quát không hardcode
+                    validation_rules["validation_examples"].append({
+                        "scenario": f"Khi tính {context}",
+                        "expected_answer": value,
+                        "formula_reference": formula_used if formula_used else "Áp dụng công thức phù hợp",
+                        "general_warning": "Đảm bảo đơn vị và công thức chính xác, tránh nhầm lẫn với các đại lượng khác"
+                    })
+
+        # Format thành JSON string dễ đọc
+        import json
+        validation_json = json.dumps(validation_rules, ensure_ascii=False, indent=2)
+
+        return f"""
+VALIDATION RULES (JSON FORMAT):
+{validation_json}
+
+LƯU Ý: Hãy tuân thủ nghiêm ngặt các rules trên khi tạo câu hỏi.
+Đặc biệt chú ý đến context_warnings và validation_examples dựa trên nội dung bài học cụ thể.
+"""
+
     def _create_reverse_thinking_prompt(self, level: str, content: str, lesson_id: str) -> str:
         """Tạo prompt cho quy trình tư duy ngược"""
         return f"""
 Bạn là chuyên gia tạo đề thi Hóa học THPT 2025. Hãy áp dụng phương pháp TƯ DUY NGƯỢC để tạo câu hỏi tự luận tính toán.
 
-QUY TRÌNH TƯ DUY NGƯỢC:
+QUY TRÌNH TƯ DUY NGƯỢC VỚI VALIDATION:
 1. SINH ĐÁP ÁN TRƯỚC: Tạo một đáp án số thực dương phù hợp với phiếu trắc nghiệm THPT 2025
 2. XÂY DỰNG NGƯỢC: Từ đáp án đó, thiết kế bối cảnh và nội dung câu hỏi
+3. TỰ KIỂM TRA: Tính toán ngược từ dữ kiện để xác minh đáp án
+4. ĐIỀU CHỈNH: Nếu không khớp, sửa dữ kiện hoặc đáp án
 
-YÊU CẦU ĐÁP ÁN NGHIÊM NGẶT CHO PHIẾU TRẮC NGHIỆM:
-- Đáp án phải có ÍT HƠN 5 ký tự (tối đa 4 ký tự bao gồm dấu thập phân)
-- Đáp án phải chính xác theo tính toán hóa học
-- Ví dụ hợp lệ: "12.5", "0.25", "75", "2.4", "1000"
-- Ví dụ KHÔNG hợp lệ: "125.6" (5 ký tự), "35.25" (5 ký tự), "1234.5" (6 ký tự)
-- Nếu kết quả tính toán ≥5 ký tự, hãy điều chỉnh dữ kiện đề bài để có đáp án <5 ký tự
+YÊU CẦU VÀ QUY TẮC (JSON FORMAT):
+{
+  "answer_requirements": {
+    "max_characters": 4,
+    "format": "Số thực dương với tối đa 4 ký tự bao gồm dấu thập phân",
+    "valid_examples": ["12.5", "0.25", "75", "2.4", "1000"],
+    "invalid_examples": ["125.6", "35.25", "1234.5"],
+    "auto_adjustment_rule": "Nếu kết quả ≥5 ký tự, tự động thêm yêu cầu làm tròn vào đề bài",
+    "rounding_strategy": "Khi tính toán ra kết quả chính xác nhưng cần đáp án ngắn gọn, hãy thêm yêu cầu làm tròn vào đề bài",
+    "rounding_options": [
+      "Làm tròn đến 1 chữ số thập phân: 307.45 → 307.5 (thêm 'làm tròn đến 1 chữ số thập phân' vào đề)",
+      "Làm tròn đến số nguyên: 307.45 → 307 (thêm 'làm tròn đến số nguyên' vào đề)",
+      "Làm tròn đến hàng chục: 307.45 → 310 (thêm 'làm tròn đến hàng chục' vào đề)"
+    ],
+    "rounding_examples": [
+      {
+        "calculation_result": "307.45",
+        "target_answer": "306",
+        "solution": "Thêm '(làm tròn đến số nguyên)' vào câu hỏi và giải thích trong explanation",
+        "question_modification": "Tính khối lượng mol phân tử... (làm tròn đến số nguyên)?"
+      },
+      {
+        "calculation_result": "22.37",
+        "target_answer": "22.4",
+        "solution": "Thêm '(làm tròn đến 1 chữ số thập phân)' vào câu hỏi",
+        "question_modification": "Tính thể tích khí... (làm tròn đến 1 chữ số thập phân)?"
+      }
+    ]
+  },
+  "common_errors_to_avoid": [
+    {
+      "error_type": "unit_confusion",
+      "description": "Nhầm lẫn giữa các đại lượng có cùng đơn vị",
+      "prevention": "Luôn kiểm tra đề yêu cầu tính đại lượng nào cụ thể"
+    },
+    {
+      "error_type": "calculation_mistake",
+      "description": "Sai trong quá trình tính toán",
+      "prevention": "Kiểm tra từng bước tính toán và sử dụng đúng công thức"
+    },
+    {
+      "error_type": "efficiency_error",
+      "description": "Sai logic về hiệu suất hoặc tỉ lệ",
+      "prevention": "Hiệu suất/tỉ lệ phải hợp lý (thường ≤ 100%)"
+    },
+    {
+      "error_type": "formula_application",
+      "description": "Áp dụng sai công thức hoặc thiếu bước",
+      "prevention": "Xác minh công thức phù hợp với dạng bài"
+    },
+    {
+      "error_type": "rounding_error",
+      "description": "Không làm tròn theo yêu cầu đề bài",
+      "prevention": "Đọc kỹ yêu cầu làm tròn trong đề"
+    },
+    {
+      "error_type": "unit_mismatch",
+      "description": "Trả về sai đơn vị so với yêu cầu",
+      "prevention": "Kiểm tra đơn vị đề yêu cầu và đổi đơn vị nếu cần"
+    },
+    {
+      "error_type": "data_interpretation",
+      "description": "Hiểu sai dữ kiện hoặc yêu cầu đề bài",
+      "prevention": "Đọc kỹ đề bài và xác định chính xác những gì cần tính"
+    }
+  ]
+}
 
 THÔNG TIN BÀI HỌC:
 - Lesson ID: {lesson_id}
@@ -479,10 +1189,17 @@ YÊU CẦU MỨC ĐỘ "{level}":
     "part": 3
 }}
 
-LƯU Ý QUAN TRỌNG VỀ ĐÁP ÁN:
+LƯU Ý QUAN TRỌNG VỀ ĐÁP ÁN VÀ LÀM TRÒN:
 - target_answer phải có ÍT HƠN 5 ký tự để phù hợp với phiếu trắc nghiệm THPT 2025
 - Điều chỉnh dữ kiện đề bài (khối lượng, thể tích, nồng độ) để đáp án <5 ký tự
-- KHÔNG được sửa đáp án sau khi tính toán - phải điều chỉnh từ đầu
+- CHIẾN LƯỢC LÀM TRÒN THÔNG MINH:
+  * Nếu kết quả tính toán chính xác là 307.45 nhưng muốn đáp án là 306:
+    → Thêm "(làm tròn đến số nguyên)" vào câu hỏi
+    → Giải thích trong explanation: "Kết quả chính xác là 307.45, làm tròn đến số nguyên: 306"
+  * Nếu kết quả là 22.37 nhưng muốn đáp án là 22.4:
+    → Thêm "(làm tròn đến 1 chữ số thập phân)" vào câu hỏi
+  * Luôn giải thích rõ ràng việc làm tròn trong explanation
+- KHÔNG được sửa đáp án sau khi tính toán - phải thêm yêu cầu làm tròn vào đề
 
 LƯU Ý QUAN TRỌNG VỀ EXPLANATION:
 - Field "explanation" phải là hướng dẫn giải bài chi tiết, từng bước
@@ -520,7 +1237,101 @@ LƯU Ý QUAN TRỌNG VỀ HÓA HỌC - NGUYÊN TẮC CHUNG:
    - Bước 5: Tính khối lượng/thể tích sản phẩm
    - Bước 6: Kiểm tra tính hợp lý của kết quả
 
-Lưu ý: Chỉ trả về JSON, không có văn bản bổ sung. THỰC HIỆN TÍNH TOÁN CHÍNH XÁC!
+VALIDATION PROCESS (JSON FORMAT):
+{
+  "mandatory_validation_steps": [
+    {
+      "step": 1,
+      "action": "Kiểm tra lại",
+      "description": "Đọc câu hỏi vừa tạo và xác định tất cả dữ kiện"
+    },
+    {
+      "step": 2,
+      "action": "Tính toán ngược",
+      "description": "Từ dữ kiện đề bài, tính toán để ra đáp án"
+    },
+    {
+      "step": 3,
+      "action": "So sánh",
+      "description": "Đáp án tính được có khớp với target_answer không?"
+    },
+    {
+      "step": 4,
+      "action": "Kiểm tra đơn vị",
+      "description": "Đề hỏi gì (g, mol, L, %) thì trả về đúng đơn vị đó"
+    },
+    {
+      "step": 5,
+      "action": "Kiểm tra độ dài đáp án",
+      "description": "Nếu đáp án ≥5 ký tự, thêm yêu cầu làm tròn vào đề bài"
+    },
+    {
+      "step": 6,
+      "action": "Kiểm tra làm tròn",
+      "description": "Nếu đề có yêu cầu làm tròn, phải tuân thủ chính xác"
+    },
+    {
+      "step": 7,
+      "action": "Điều chỉnh",
+      "description": "Nếu sai lệch > 5%, sửa lại dữ kiện hoặc target_answer"
+    },
+    {
+      "step": 8,
+      "action": "Đảm bảo",
+      "description": "Tất cả số liệu hợp lý (không âm, không quá lớn, đơn vị đúng)"
+    }
+  ],
+  "validation_examples": [
+    {
+      "scenario": "Tính toán với đơn vị cụ thể",
+      "validation_principle": "Xác định đúng đại lượng cần tính và áp dụng công thức phù hợp",
+      "validation_steps": [
+        "Xác định dữ kiện đã cho và đơn vị",
+        "Chọn công thức phù hợp với dạng bài",
+        "Thực hiện tính toán từng bước",
+        "Kiểm tra đơn vị kết quả có khớp với yêu cầu đề"
+      ],
+      "common_mistake": "Nhầm lẫn giữa các đại lượng có liên quan"
+    },
+    {
+      "scenario": "Làm tròn theo yêu cầu",
+      "validation_principle": "Tuân thủ chính xác yêu cầu làm tròn trong đề bài",
+      "validation_steps": [
+        "Đọc kỹ yêu cầu làm tròn (số chữ số thập phân, số có nghĩa...)",
+        "Thực hiện tính toán với độ chính xác cao",
+        "Áp dụng quy tắc làm tròn đúng",
+        "Kiểm tra kết quả cuối có đúng format yêu cầu"
+      ],
+      "common_mistake": "Không tuân thủ yêu cầu làm tròn hoặc làm tròn sai"
+    }
+  ],
+  "final_checklist": [
+    "Đáp án có đúng đơn vị đề yêu cầu không? (g, mol, L, %)",
+    "Có làm tròn đúng theo yêu cầu đề bài không?",
+    "Nếu kết quả tính toán khác đáp án mong muốn, đã thêm yêu cầu làm tròn vào đề chưa?",
+    "Explanation có giải thích rõ việc làm tròn không? (VD: 'Kết quả chính xác 307.45, làm tròn: 306')",
+    "Có nhầm lẫn giữa khối lượng mol và khối lượng chất không?",
+    "Tính toán có chính xác từng bước không?",
+    "Đáp án có hợp lý về mặt thực tế không?"
+  ],
+  "rounding_validation_example": {
+    "scenario": "Tính khối lượng mol của C₁₇H₃₅COONa",
+    "exact_calculation": "17×12.01 + 35×1.01 + 2×16.00 + 22.99 = 307.45",
+    "desired_answer": "306",
+    "correct_approach": {
+      "question": "Tính khối lượng mol phân tử của muối natri stearat (C₁₇H₃₅COONa) (làm tròn đến số nguyên)?",
+      "target_answer": "306",
+      "explanation": "M(C₁₇H₃₅COONa) = 17×12.01 + 35×1.01 + 2×16.00 + 22.99 = 307.45 g/mol. Làm tròn đến số nguyên: 306 g/mol."
+    },
+    "wrong_approach": {
+      "question": "Tính khối lượng mol phân tử của muối natri stearat (C₁₇H₃₅COONa)?",
+      "target_answer": "306",
+      "explanation": "M(C₁₇H₃₅COONa) = 17×12.01 + 35×1.01 + 2×16.00 + 22.99 = 306 g/mol."
+    }
+  }
+}
+
+Lưu ý: Chỉ trả về JSON sau khi đã VALIDATION HOÀN TOÀN. KHÔNG ĐƯỢC TRẢ VỀ CÂU HỎI SAI!
 """
 
     def _get_reverse_thinking_requirements(self, level: str) -> str:
@@ -566,7 +1377,25 @@ NHIỆM VỤ CỦA BẠN:
 5. Kiểm tra ngữ cảnh có phù hợp với chương trình THPT không
 6. Đưa ra góp ý cải thiện nếu cần
 
-NGUYÊN TẮC KIỂM TRA CHUNG:
+KIỂM TRA NGHIÊM NGẶT - CÁC LOẠI LỖI THƯỜNG GẶP:
+1. LỖI TÍNH TOÁN:
+   - Sai khối lượng mol (VD: CO₂ = 44, không phải 45)
+   - Sai công thức hóa học (VD: amine CₙH₂ₙ₊₃N)
+   - Sai tỉ lệ mol trong phương trình phản ứng
+   - Sai đơn vị (L vs mL, g vs kg)
+
+2. LỖI LOGIC HÓA HỌC:
+   - Phương trình không cân bằng
+   - Hiệu suất > 100% (không hợp lý)
+   - Nồng độ âm hoặc quá lớn
+   - Thể tích khí âm hoặc không hợp lý
+
+3. LỖI DỮ KIỆN:
+   - Thiếu thông tin cần thiết
+   - Dữ kiện mâu thuẫn với nhau
+   - Đáp án không khớp với tính toán
+
+NGUYÊN TẮC KIỂM TRA:
 - Áp dụng các định luật bảo toàn (khối lượng, nguyên tố, điện tích)
 - Phương trình phản ứng phải cân bằng chính xác
 - Tỉ lệ mol theo hệ số cân bằng (KHÔNG DÙNG TỈ LỆ KHỐI LƯỢNG)
@@ -574,32 +1403,32 @@ NGUYÊN TẮC KIỂM TRA CHUNG:
 - Giá trị kết quả trong khoảng hợp lý và thực tế
 
 KIỂM TRA TÍNH TOÁN CHI TIẾT:
-- Thực hiện từng phép tính một cách cụ thể
+- Thực hiện từng phép tính một cách cụ thể với số liệu chính xác
 - Kiểm tra đơn vị trong mỗi bước
 - Xác minh tỉ lệ mol và hiệu suất
 - So sánh kết quả tính được với đáp án cho trước
-- Nếu khác biệt, chỉ ra chính xác lỗi ở đâu
-
-KIỂM TRA TÍNH NHẤT QUÁN:
-- Kết quả các bước tính toán phải logic và nhất quán
-- Công thức phân tử phải khớp với dữ liệu đã tính
-- Đơn vị và số liệu phải chính xác
-- Không có mâu thuẫn giữa các phần của bài giải
+- Nếu sai lệch >10%, đánh giá là KHÔNG HỢP LỆ
 
 ĐỊNH DẠNG JSON TRẢ VỀ:
 {{
-    "my_solution": "Lời giải chi tiết của bạn",
-    "my_answer": "Đáp án bạn tính được",
+    "my_solution": "Lời giải chi tiết của bạn với từng bước tính toán cụ thể",
+    "my_answer": "Đáp án bạn tính được (số cụ thể)",
+    "answer_difference_percent": "Phần trăm sai lệch so với đáp án cho trước",
     "is_valid": true/false,
     "accuracy_score": "Điểm từ 1-10",
-    "feedback": "Góp ý cụ thể để cải thiện",
+    "error_type": "calculation/logic/data/none",
+    "feedback": "Góp ý cụ thể về lỗi phát hiện",
     "suggested_improvements": [
-        "Cải thiện 1",
-        "Cải thiện 2"
+        "Cải thiện cụ thể 1",
+        "Cải thiện cụ thể 2"
     ]
 }}
 
-Lưu ý: Hãy nghiêm túc và chính xác trong đánh giá.
+LƯU Ý QUAN TRỌNG:
+- Nếu sai lệch >10% giữa đáp án tính được và đáp án cho trước → is_valid = false
+- Nếu có lỗi logic hóa học nghiêm trọng → is_valid = false
+- Nếu dữ kiện mâu thuẫn → is_valid = false
+- Hãy nghiêm túc và chính xác trong đánh giá, không khoan dung với lỗi sai.
 """
 
     def _create_exam_expert_prompt(
@@ -669,13 +1498,27 @@ Lưu ý: Chỉ trả về JSON, tập trung vào việc cải thiện chất lư
                 logger.error("Missing required fields in reverse thinking response")
                 return None
 
+            # Kiểm tra explanation có chứa thông báo lỗi không
+            explanation = question_data.get("explanation", "")
+            if any(error_phrase in explanation.lower() for error_phrase in [
+                "đề bài sai", "không thể tạo", "không hợp lệ", "cần có dữ kiện khác",
+                "không thành công", "cố gắng chỉnh sửa", "thất bại"
+            ]):
+                logger.warning(f"❌ REJECTING: Question contains error message in explanation: {explanation[:100]}...")
+                return None
+
             # Validate đáp án là số hợp lệ và có độ dài phù hợp với phiếu trắc nghiệm
             target_answer = str(question_data["target_answer"]).strip()
             logger.info(f"🔍 Validating answer: '{target_answer}' (length: {len(target_answer)} chars)")
 
             try:
                 # Kiểm tra đáp án có phải là số hợp lệ không
-                float(target_answer)
+                answer_value = float(target_answer)
+
+                # Kiểm tra đáp án có hợp lý không (không âm, không quá lớn)
+                if answer_value <= 0 or answer_value > 9999:
+                    logger.warning(f"❌ REJECTING: Answer value out of reasonable range: {answer_value}")
+                    return None
 
                 # Kiểm tra độ dài đáp án phù hợp với phiếu trắc nghiệm THPT 2025
                 if len(target_answer) >= 5:
@@ -692,6 +1535,10 @@ Lưu ý: Chỉ trả về JSON, tập trung vào việc cải thiện chất lư
             question_data["lesson_id"] = lesson_id
             question_data["question_type"] = "TL"
             question_data["answer"] = {"answer": question_data["target_answer"]}
+
+            # Log thông tin về công thức được sử dụng nếu có
+            if "formula_used" in question_data:
+                logger.info(f"📐 Formula used: {question_data['formula_used']}")
 
             return question_data
 
