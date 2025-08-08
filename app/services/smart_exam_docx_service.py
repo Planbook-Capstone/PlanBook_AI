@@ -137,6 +137,19 @@ class SmartExamDocxService:
 
         text = re.sub(sub_pattern, replace_sub, text)
 
+        # Chuyển đổi các công thức hóa học thô (không có HTML tags)
+        # Pattern: chữ cái + số (VD: CH3, H2O, C6H12O6)
+        chemistry_pattern = r'([A-Za-z]+)(\d+)'
+
+        def replace_chemistry(match):
+            element = match.group(1)
+            number = match.group(2)
+            # Chuyển số thành subscript
+            subscript_number = ''.join(subscript_map.get(digit, digit) for digit in number)
+            return element + subscript_number
+
+        text = re.sub(chemistry_pattern, replace_chemistry, text)
+
         return text
 
     def _extract_numeric_answer(self, answer_text: str) -> str:
