@@ -390,6 +390,17 @@ class SmartExamGenerationService:
                 is_score_valid = accuracy_score >= min_score
                 is_overall_valid = validation_result.get("is_valid", False)
 
+                # Kiểm tra xem có thể áp dụng làm tròn thông minh không (sai lệch nhỏ 2-5%)
+                if (not is_calculation_valid and
+                    2 <= answer_diff <= 5 and
+                    is_score_valid and
+                    validation_result.get("my_answer")):
+
+                    smart_rounded_question = self._try_smart_rounding_from_validation(current_question, validation_result)
+                    if smart_rounded_question:
+                        logger.info(f"🎯 Applied smart rounding for small difference: {answer_diff}%")
+                        return smart_rounded_question
+
                 if is_overall_valid and is_score_valid and is_calculation_valid:
                     logger.info(f"✅ Question validated successfully after {iteration + 1} iterations (score: {accuracy_score}/{min_score}, diff: {answer_diff}%)")
                     return current_question
@@ -571,13 +582,28 @@ class SmartExamGenerationService:
 
             # Kiểm tra đáp án từ chuyên gia có hợp lệ không
             try:
-                answer_value = float(my_answer)
-                if answer_value <= 0 or answer_value > 9999 or len(my_answer) >= 5:
+                expert_answer_value = float(my_answer)
+                if expert_answer_value <= 0 or expert_answer_value > 9999 or len(my_answer) >= 5:
                     return None
             except ValueError:
                 return None
 
-            # Tạo câu hỏi mới với đáp án đã sửa
+            # Kiểm tra xem có thể áp dụng logic làm tròn thông minh không
+            original_answer = question.get("target_answer", "")
+            try:
+                original_value = float(original_answer)
+
+                # Nếu sai lệch nhỏ (< 5%), thử áp dụng làm tròn thông minh
+                difference_percent = abs(expert_answer_value - original_value) / expert_answer_value * 100
+                if difference_percent < 5:
+                    smart_rounded_question = self._apply_smart_rounding(question, expert_answer_value, original_value)
+                    if smart_rounded_question:
+                        logger.info(f"🎯 Applied smart rounding: {original_answer} → {smart_rounded_question['target_answer']} (expert: {my_answer})")
+                        return smart_rounded_question
+            except ValueError:
+                pass
+
+            # Tạo câu hỏi mới với đáp án từ chuyên gia
             corrected_question = question.copy()
             corrected_question["target_answer"] = my_answer
             corrected_question["answer"] = {"answer": my_answer}
@@ -592,6 +618,183 @@ class SmartExamGenerationService:
 
         except Exception as e:
             logger.error(f"Error correcting answer: {e}")
+            return None
+
+    def _apply_smart_rounding(self, question: Dict[str, Any], expert_value: float, original_value: float) -> Optional[Dict[str, Any]]:
+        """
+        Áp dụng làm tròn thông minh khi có sai lệch nhỏ giữa đáp án gốc và đáp án chuyên gia
+        """
+        try:
+            # Thử các cách làm tròn khác nhau để tìm cách phù hợp nhất
+            rounding_options = [
+                {
+                    "rounded": round(expert_value),
+                    "requirement": "làm tròn đến số nguyên",
+                    "decimal_places": 0
+                },
+                {
+                    "rounded": round(expert_value, 1),
+                    "requirement": "làm tròn đến 1 chữ số thập phân",
+                    "decimal_places": 1
+                },
+                {
+                    "rounded": round(expert_value, 2),
+                    "requirement": "làm tròn đến 2 chữ số thập phân",
+                    "decimal_places": 2
+                }
+            ]
+
+            # Tìm cách làm tròn phù hợp nhất với đáp án gốc
+            best_option = None
+            min_difference = float('inf')
+
+            for option in rounding_options:
+                rounded_value = option["rounded"]
+                difference = abs(rounded_value - original_value)
+
+                # Kiểm tra xem đáp án làm tròn có phù hợp không
+                if (difference < min_difference and
+                    len(str(rounded_value)) < 5 and
+                    rounded_value > 0):
+                    min_difference = difference
+                    best_option = option
+
+            if best_option and min_difference / original_value * 100 < 2:  # Sai lệch < 2%
+                corrected_question = question.copy()
+                rounded_answer = str(best_option["rounded"])
+
+                # Cập nhật đáp án
+                corrected_question["target_answer"] = rounded_answer
+                corrected_question["answer"] = {"answer": rounded_answer}
+
+                # Thêm yêu cầu làm tròn vào câu hỏi
+                question_text = question.get("question", "")
+                rounding_requirement = f"({best_option['requirement']})"
+
+                if rounding_requirement.replace("(", "").replace(")", "") not in question_text.lower():
+                    if question_text.endswith("?"):
+                        updated_question = question_text[:-1] + f" {rounding_requirement}?"
+                    else:
+                        updated_question = question_text + f" {rounding_requirement}"
+
+                    corrected_question["question"] = updated_question
+
+                # Cập nhật explanation
+                original_explanation = question.get("explanation", "")
+                if best_option["decimal_places"] == 0:
+                    corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến số nguyên: {rounded_answer}. {original_explanation}"
+                else:
+                    corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến {best_option['decimal_places']} chữ số thập phân: {rounded_answer}. {original_explanation}"
+
+                return corrected_question
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error in smart rounding: {e}")
+            return None
+
+    def _try_smart_rounding_from_validation(self, question: Dict[str, Any], validation_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Thử áp dụng làm tròn thông minh dựa trên kết quả validation khi có sai lệch nhỏ
+        """
+        try:
+            expert_answer = validation_result.get("my_answer", "").strip()
+            original_answer = question.get("target_answer", "")
+
+            if not expert_answer or not original_answer:
+                return None
+
+            try:
+                expert_value = float(expert_answer)
+                original_value = float(original_answer)
+            except ValueError:
+                return None
+
+            # Kiểm tra xem đáp án gốc có thể là kết quả làm tròn của đáp án chuyên gia không
+            rounding_options = [
+                {
+                    "rounded": round(expert_value),
+                    "requirement": "làm tròn đến số nguyên",
+                    "decimal_places": 0
+                },
+                {
+                    "rounded": round(expert_value, 1),
+                    "requirement": "làm tròn đến 1 chữ số thập phân",
+                    "decimal_places": 1
+                },
+                {
+                    "rounded": round(expert_value, 2),
+                    "requirement": "làm tròn đến 2 chữ số thập phân",
+                    "decimal_places": 2
+                }
+            ]
+
+            # Tìm cách làm tròn phù hợp với đáp án gốc
+            for option in rounding_options:
+                rounded_value = option["rounded"]
+
+                # Kiểm tra khớp chính xác
+                if abs(rounded_value - original_value) < 0.01:  # Gần như bằng nhau
+                    corrected_question = question.copy()
+
+                    # Giữ nguyên đáp án gốc nhưng thêm yêu cầu làm tròn vào câu hỏi
+                    question_text = question.get("question", "")
+                    rounding_requirement = f"({option['requirement']})"
+
+                    if rounding_requirement.replace("(", "").replace(")", "") not in question_text.lower():
+                        if question_text.endswith("?"):
+                            updated_question = question_text[:-1] + f" {rounding_requirement}?"
+                        else:
+                            updated_question = question_text + f" {rounding_requirement}"
+
+                        corrected_question["question"] = updated_question
+
+                    # Cập nhật explanation để giải thích việc làm tròn
+                    original_explanation = question.get("explanation", "")
+                    if option["decimal_places"] == 0:
+                        corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến số nguyên: {original_answer}. {original_explanation}"
+                    else:
+                        corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến {option['decimal_places']} chữ số thập phân: {original_answer}. {original_explanation}"
+
+                    logger.info(f"🎯 Smart rounding applied: {expert_value:.3f} → {original_answer} ({option['requirement']})")
+                    return corrected_question
+
+            # Nếu không khớp chính xác, kiểm tra xem có thể là làm tròn với sai lệch nhỏ không
+            for option in rounding_options:
+                rounded_value = option["rounded"]
+                difference_percent = abs(rounded_value - original_value) / max(rounded_value, original_value) * 100
+
+                # Nếu sai lệch < 2% và có thể giải thích được bằng làm tròn
+                if difference_percent < 2:
+                    corrected_question = question.copy()
+
+                    # Giữ nguyên đáp án gốc nhưng thêm yêu cầu làm tròn vào câu hỏi
+                    question_text = question.get("question", "")
+                    rounding_requirement = f"({option['requirement']})"
+
+                    if rounding_requirement.replace("(", "").replace(")", "") not in question_text.lower():
+                        if question_text.endswith("?"):
+                            updated_question = question_text[:-1] + f" {rounding_requirement}?"
+                        else:
+                            updated_question = question_text + f" {rounding_requirement}"
+
+                        corrected_question["question"] = updated_question
+
+                    # Cập nhật explanation để giải thích việc làm tròn
+                    original_explanation = question.get("explanation", "")
+                    if option["decimal_places"] == 0:
+                        corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến số nguyên: {original_answer}. {original_explanation}"
+                    else:
+                        corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến {option['decimal_places']} chữ số thập phân: {original_answer}. {original_explanation}"
+
+                    logger.info(f"🎯 Smart rounding applied (with tolerance): {expert_value:.3f} → {original_answer} ({option['requirement']}, diff: {difference_percent:.1f}%)")
+                    return corrected_question
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Error in smart rounding from validation: {e}")
             return None
 
     def _parse_raw_response(self, response_text: str) -> Optional[Dict[str, Any]]:
@@ -905,10 +1108,25 @@ YÊU CẦU VÀ QUY TẮC (JSON FORMAT):
     "valid_examples": ["12.5", "0.25", "75", "2.4", "1000"],
     "invalid_examples": ["125.6", "35.25", "1234.5"],
     "auto_adjustment_rule": "Nếu kết quả ≥5 ký tự, tự động thêm yêu cầu làm tròn vào đề bài",
+    "rounding_strategy": "Khi tính toán ra kết quả chính xác nhưng cần đáp án ngắn gọn, hãy thêm yêu cầu làm tròn vào đề bài",
     "rounding_options": [
-      "Làm tròn đến 1 chữ số thập phân: 13.22 → 13.2",
-      "Làm tròn đến 2 chữ số thập phân: 13.225 → 13.23",
-      "Làm tròn đến số nguyên: 13.7 → 14"
+      "Làm tròn đến 1 chữ số thập phân: 307.45 → 307.5 (thêm 'làm tròn đến 1 chữ số thập phân' vào đề)",
+      "Làm tròn đến số nguyên: 307.45 → 307 (thêm 'làm tròn đến số nguyên' vào đề)",
+      "Làm tròn đến hàng chục: 307.45 → 310 (thêm 'làm tròn đến hàng chục' vào đề)"
+    ],
+    "rounding_examples": [
+      {
+        "calculation_result": "307.45",
+        "target_answer": "306",
+        "solution": "Thêm '(làm tròn đến số nguyên)' vào câu hỏi và giải thích trong explanation",
+        "question_modification": "Tính khối lượng mol phân tử... (làm tròn đến số nguyên)?"
+      },
+      {
+        "calculation_result": "22.37",
+        "target_answer": "22.4",
+        "solution": "Thêm '(làm tròn đến 1 chữ số thập phân)' vào câu hỏi",
+        "question_modification": "Tính thể tích khí... (làm tròn đến 1 chữ số thập phân)?"
+      }
     ]
   },
   "common_errors_to_avoid": [
@@ -971,10 +1189,17 @@ YÊU CẦU MỨC ĐỘ "{level}":
     "part": 3
 }}
 
-LƯU Ý QUAN TRỌNG VỀ ĐÁP ÁN:
+LƯU Ý QUAN TRỌNG VỀ ĐÁP ÁN VÀ LÀM TRÒN:
 - target_answer phải có ÍT HƠN 5 ký tự để phù hợp với phiếu trắc nghiệm THPT 2025
 - Điều chỉnh dữ kiện đề bài (khối lượng, thể tích, nồng độ) để đáp án <5 ký tự
-- KHÔNG được sửa đáp án sau khi tính toán - phải điều chỉnh từ đầu
+- CHIẾN LƯỢC LÀM TRÒN THÔNG MINH:
+  * Nếu kết quả tính toán chính xác là 307.45 nhưng muốn đáp án là 306:
+    → Thêm "(làm tròn đến số nguyên)" vào câu hỏi
+    → Giải thích trong explanation: "Kết quả chính xác là 307.45, làm tròn đến số nguyên: 306"
+  * Nếu kết quả là 22.37 nhưng muốn đáp án là 22.4:
+    → Thêm "(làm tròn đến 1 chữ số thập phân)" vào câu hỏi
+  * Luôn giải thích rõ ràng việc làm tròn trong explanation
+- KHÔNG được sửa đáp án sau khi tính toán - phải thêm yêu cầu làm tròn vào đề
 
 LƯU Ý QUAN TRỌNG VỀ EXPLANATION:
 - Field "explanation" phải là hướng dẫn giải bài chi tiết, từng bước
@@ -1083,10 +1308,27 @@ VALIDATION PROCESS (JSON FORMAT):
   "final_checklist": [
     "Đáp án có đúng đơn vị đề yêu cầu không? (g, mol, L, %)",
     "Có làm tròn đúng theo yêu cầu đề bài không?",
+    "Nếu kết quả tính toán khác đáp án mong muốn, đã thêm yêu cầu làm tròn vào đề chưa?",
+    "Explanation có giải thích rõ việc làm tròn không? (VD: 'Kết quả chính xác 307.45, làm tròn: 306')",
     "Có nhầm lẫn giữa khối lượng mol và khối lượng chất không?",
     "Tính toán có chính xác từng bước không?",
     "Đáp án có hợp lý về mặt thực tế không?"
-  ]
+  ],
+  "rounding_validation_example": {
+    "scenario": "Tính khối lượng mol của C₁₇H₃₅COONa",
+    "exact_calculation": "17×12.01 + 35×1.01 + 2×16.00 + 22.99 = 307.45",
+    "desired_answer": "306",
+    "correct_approach": {
+      "question": "Tính khối lượng mol phân tử của muối natri stearat (C₁₇H₃₅COONa) (làm tròn đến số nguyên)?",
+      "target_answer": "306",
+      "explanation": "M(C₁₇H₃₅COONa) = 17×12.01 + 35×1.01 + 2×16.00 + 22.99 = 307.45 g/mol. Làm tròn đến số nguyên: 306 g/mol."
+    },
+    "wrong_approach": {
+      "question": "Tính khối lượng mol phân tử của muối natri stearat (C₁₇H₃₅COONa)?",
+      "target_answer": "306",
+      "explanation": "M(C₁₇H₃₅COONa) = 17×12.01 + 35×1.01 + 2×16.00 + 22.99 = 306 g/mol."
+    }
+  }
 }
 
 Lưu ý: Chỉ trả về JSON sau khi đã VALIDATION HOÀN TOÀN. KHÔNG ĐƯỢC TRẢ VỀ CÂU HỎI SAI!
