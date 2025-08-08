@@ -5,7 +5,7 @@ Service cho việc tạo đề thi thông minh theo chuẩn THPT 2025
 import logging
 import json
 import asyncio
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime
 
 from app.models.smart_exam_models import SmartExamRequest, ExamStatistics
@@ -24,7 +24,8 @@ class SmartExamGenerationService:
         self.llm_service._ensure_service_initialized()
 
     async def generate_smart_exam(
-        self, exam_request: SmartExamRequest, lesson_content: Dict[str, Any]
+        self, exam_request: SmartExamRequest, lesson_content: Dict[str, Any],
+        question_callback: Optional[Callable] = None
     ) -> Dict[str, Any]:
         """
         Tạo đề thi thông minh theo chuẩn THPT 2025
@@ -32,6 +33,7 @@ class SmartExamGenerationService:
         Args:
             exam_request: Request chứa ma trận đề thi
             lesson_content: Nội dung bài học từ Qdrant
+            question_callback: Callback function để trả về từng câu hỏi ngay khi tạo xong
 
         Returns:
             Dict chứa đề thi đã được tạo
@@ -52,7 +54,7 @@ class SmartExamGenerationService:
             all_questions = []
             for lesson_matrix in exam_request.matrix:
                 lesson_questions = await self._generate_questions_for_lesson(
-                    lesson_matrix, lesson_content, exam_request.subject
+                    lesson_matrix, lesson_content, exam_request.subject, question_callback
                 )
                 all_questions.extend(lesson_questions)
 
@@ -87,7 +89,8 @@ class SmartExamGenerationService:
             }
 
     async def _generate_questions_for_lesson(
-        self, lesson_matrix, lesson_content: Dict[str, Any], subject: str
+        self, lesson_matrix, lesson_content: Dict[str, Any], subject: str,
+        question_callback: Optional[Callable] = None
     ) -> List[Dict[str, Any]]:
         """Tạo câu hỏi cho một bài học theo ma trận"""
         try:
@@ -112,7 +115,7 @@ class SmartExamGenerationService:
             # Tạo câu hỏi cho từng phần
             for part in lesson_matrix.parts:
                 part_questions = await self._generate_questions_for_part(
-                    part, lesson_data, subject, lesson_id
+                    part, lesson_data, subject, lesson_id, question_callback
                 )
                 all_lesson_questions.extend(part_questions)
 
@@ -123,7 +126,8 @@ class SmartExamGenerationService:
             return []
 
     async def _generate_questions_for_part(
-        self, part, lesson_data: Dict[str, Any], subject: str, lesson_id: str
+        self, part, lesson_data: Dict[str, Any], subject: str, lesson_id: str,
+        question_callback: Optional[Callable] = None
     ) -> List[Dict[str, Any]]:
         """Tạo câu hỏi cho một phần cụ thể"""
         try:
@@ -137,7 +141,7 @@ class SmartExamGenerationService:
                 for level, count in [("Biết", objectives.Biết), ("Hiểu", objectives.Hiểu), ("Vận_dụng", objectives.Vận_dụng)]:
                     if count > 0:
                         level_questions = await self._generate_questions_for_level(
-                            part_num, level, count, lesson_data, subject, lesson_id
+                            part_num, level, count, lesson_data, subject, lesson_id, question_callback
                         )
                         part_questions.extend(level_questions)
             elif part_num == 2:
@@ -145,7 +149,7 @@ class SmartExamGenerationService:
                 for level, count in [("Biết", objectives.Biết), ("Hiểu", objectives.Hiểu), ("Vận_dụng", objectives.Vận_dụng)]:
                     if count > 0:
                         level_questions = await self._generate_questions_for_level(
-                            part_num, level, count, lesson_data, subject, lesson_id
+                            part_num, level, count, lesson_data, subject, lesson_id, question_callback
                         )
                         part_questions.extend(level_questions)
             elif part_num == 3:
@@ -153,7 +157,7 @@ class SmartExamGenerationService:
                 for level, count in [("Biết", objectives.Biết), ("Hiểu", objectives.Hiểu), ("Vận_dụng", objectives.Vận_dụng)]:
                     if count > 0:
                         level_questions = await self._generate_questions_for_level(
-                            part_num, level, count, lesson_data, subject, lesson_id
+                            part_num, level, count, lesson_data, subject, lesson_id, question_callback
                         )
                         part_questions.extend(level_questions)
 
@@ -165,14 +169,14 @@ class SmartExamGenerationService:
 
     async def _generate_questions_for_level(
         self, part_num: int, level: str, count: int, lesson_data: Dict[str, Any],
-        subject: str, lesson_id: str
+        subject: str, lesson_id: str, question_callback: Optional[Callable] = None
     ) -> List[Dict[str, Any]]:
         """Tạo câu hỏi cho một mức độ nhận thức cụ thể"""
         try:
             # Phần 3 sử dụng quy trình tư duy ngược với validation loop
             if part_num == 3:
                 return await self._generate_part3_questions_with_reverse_thinking(
-                    level, count, lesson_data, subject, lesson_id
+                    level, count, lesson_data, subject, lesson_id, question_callback
                 )
 
             # Phần 1 và 2 sử dụng quy trình cũ
@@ -197,6 +201,15 @@ class SmartExamGenerationService:
 
             # Giới hạn số câu hỏi theo yêu cầu
             limited_questions = questions[:count]
+
+            # Gọi callback cho từng câu hỏi nếu có
+            if question_callback and limited_questions:
+                for question in limited_questions:
+                    try:
+                        await question_callback(question)
+                    except Exception as e:
+                        logger.warning(f"Error calling question callback: {e}")
+
             return limited_questions
 
         except Exception as e:
@@ -205,7 +218,7 @@ class SmartExamGenerationService:
 
     async def _generate_part3_questions_with_reverse_thinking(
         self, level: str, count: int, lesson_data: Dict[str, Any],
-        subject: str, lesson_id: str
+        subject: str, lesson_id: str, question_callback: Optional[Callable] = None
     ) -> List[Dict[str, Any]]:
         """
         Tạo câu hỏi phần 3 theo quy trình tư duy ngược với validation loop
@@ -251,6 +264,14 @@ class SmartExamGenerationService:
                             validated_questions.append(final_question)
                             question_created = True
                             logger.info(f"🎉 Successfully created question {i+1}/{count} for level '{level}' after {retry+1} attempts")
+
+                            # Gọi callback cho câu hỏi vừa tạo xong nếu có
+                            if question_callback:
+                                try:
+                                    await question_callback(final_question)
+                                except Exception as e:
+                                    logger.warning(f"Error calling question callback for Part 3: {e}")
+
                             break
                         else:
                             logger.warning(f"❌ Validation failed for question {i+1}/{count}, retry {retry+1}/{max_retries+1}")
@@ -760,6 +781,8 @@ Lưu ý: Chỉ trả về JSON, tập trung vào việc cải thiện chất lư
         except Exception as e:
             logger.error(f"Error parsing improved question response: {e}")
             return original_question
+
+
 
     def _final_answer_validation(self, questions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Final validation để loại bỏ câu hỏi có đáp án quá dài"""
