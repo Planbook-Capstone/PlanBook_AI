@@ -340,12 +340,12 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
             # Tính progress dựa trên số câu đã tạo
             questions_created = len(accumulated_questions)
             if total_questions_needed > 0:
-                # Progress từ 30% (bắt đầu tạo) đến 60% (hoàn thành tạo)
-                # 30% + (30% * questions_created / total_questions_needed)
-                progress = 30 + int(30 * questions_created / total_questions_needed)
-                progress = min(progress, 60)  # Không vượt quá 60%
+                # Progress từ 30% (bắt đầu tạo) đến 90% (hoàn thành tạo)
+                # 30% + (60% * questions_created / total_questions_needed)
+                progress = 30 + int(60 * questions_created / total_questions_needed)
+                progress = min(progress, 90)  # Không vượt quá 90%
             else:
-                progress = 45  # Fallback nếu không tính được
+                progress = 60  # Fallback nếu không tính được
 
             # Format toàn bộ danh sách câu hỏi hiện tại bằng formatter có sẵn
             exam_data = {"questions": accumulated_questions}
@@ -386,14 +386,14 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
             return error_result
 
         generated_questions = len(exam_result.get("questions", []))
-        await progress_callback(60, f"Đã tạo thành công {generated_questions}/{total_questions_needed} câu hỏi")
+        # Không cần progress callback ở đây nữa vì callback cuối cùng đã là 90%
 
         # Kiểm tra isExportDocx để quyết định xử lý
         is_export_docx = exam_request.isExportDocx
 
         if is_export_docx:
             # Bước 4: Tạo file DOCX
-            await progress_callback(65, "Đang tạo file Word (.docx)...")
+            await progress_callback(92, "Đang tạo file Word (.docx)...")
             docx_result = await smart_exam_docx_service.create_smart_exam_docx(exam_result, exam_request.model_dump())
 
             if not docx_result.get("success", False):
@@ -406,10 +406,10 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
 
             file_path = docx_result.get("file_path")
             filename = docx_result.get("filename")
-            await progress_callback(75, f"Đã tạo file Word: {filename}")
+            await progress_callback(94, f"Đã tạo file Word: {filename}")
 
             # Bước 5: Upload lên Google Drive
-            await progress_callback(80, "Đang tải lên Google Drive...")
+            await progress_callback(96, "Đang tải lên Google Drive...")
             google_drive_service = get_google_drive_service()
             upload_result = await google_drive_service.upload_docx_file(
                 file_path, filename or "smart_exam.docx", convert_to_google_docs=True)
@@ -422,7 +422,7 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
                 await task_service.mark_task_completed(task_id=task_id, result=error_result)
                 return error_result
 
-            await progress_callback(90, "Đã tải lên Google Drive thành công")
+            await progress_callback(98, "Đã tải lên Google Drive thành công")
 
             # Bước 6: Dọn dẹp file tạm
             try:
@@ -455,7 +455,7 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
             }
         else:
             # Bước 4: Hoàn thành với JSON format (đã được format trong callback)
-            await progress_callback(70, "Đang hoàn thiện kết quả JSON...")
+            await progress_callback(90, "Đang hoàn thiện kết quả JSON...")
 
             # Sử dụng format đã được tạo trong callback, fallback nếu cần
             if final_formatted_exam:
@@ -464,7 +464,7 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
                 # Fallback nếu không có callback data
                 formatted_json = formatter.format_exam_to_json_response(exam_result)
 
-            await progress_callback(90, "Đã hoàn thành format JSON")
+            await progress_callback(100, "Đã hoàn thành format JSON")
 
             statistics = exam_result.get("statistics", {})
             statistics_dict = statistics.model_dump() if hasattr(statistics, 'model_dump') else statistics
