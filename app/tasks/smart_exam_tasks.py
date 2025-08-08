@@ -316,6 +316,15 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
         from app.services.smart_exam_json_formatter import get_smart_exam_json_formatter
         formatter = get_smart_exam_json_formatter()
 
+        # Tính tổng số câu hỏi cần tạo từ ma trận
+        total_questions_needed = 0
+        for lesson_matrix in exam_request.matrix:
+            for part in lesson_matrix.parts:
+                objectives = part.objectives
+                total_questions_needed += objectives.Biết + objectives.Hiểu + objectives.Vận_dụng
+
+        logger.info(f"📊 Total questions needed: {total_questions_needed}")
+
         # Tạo cấu trúc exam_data tổng thể để append câu hỏi
         accumulated_questions = []
 
@@ -326,6 +335,16 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
                 try:
                     # Thêm câu hỏi vào danh sách tích lũy
                     accumulated_questions.append(question)
+
+                    # Tính progress dựa trên số câu đã tạo
+                    questions_created = len(accumulated_questions)
+                    if total_questions_needed > 0:
+                        # Progress từ 30% (bắt đầu tạo) đến 60% (hoàn thành tạo)
+                        # 30% + (30% * questions_created / total_questions_needed)
+                        progress = 30 + int(30 * questions_created / total_questions_needed)
+                        progress = min(progress, 60)  # Không vượt quá 60%
+                    else:
+                        progress = 45  # Fallback nếu không tính được
 
                     # Format toàn bộ danh sách câu hỏi hiện tại bằng formatter có sẵn
                     exam_data = {"questions": accumulated_questions}
@@ -340,12 +359,12 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
                         tool_log_id=tool_log_id,
                         task_id=task_id,
                         user_id=user_id,
-                        progress=35,  # Progress cố định cho từng câu hỏi
-                        message="Đã tạo xong một câu hỏi",
+                        progress=progress,
+                        message=f"Đã tạo xong {questions_created}/{total_questions_needed} câu hỏi",
                         status="processing",
                         additional_data=response_data
                     )
-                    logger.info(f"✅ Sent accumulated exam data via Kafka for task {task_id} - Total questions: {len(accumulated_questions)}")
+                    logger.info(f"✅ Sent accumulated exam data via Kafka for task {task_id} - Progress: {progress}% - Questions: {questions_created}/{total_questions_needed}")
                 except Exception as e:
                     logger.warning(f"⚠️ Error sending accumulated exam data via Kafka: {e}")
 
@@ -362,7 +381,7 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
             return error_result
 
         generated_questions = len(exam_result.get("questions", []))
-        await progress_callback(60, f"Đã tạo thành công {generated_questions} câu hỏi")
+        await progress_callback(60, f"Đã tạo thành công {generated_questions}/{total_questions_needed} câu hỏi")
 
         # Kiểm tra isExportDocx để quyết định xử lý
         is_export_docx = exam_request.isExportDocx
@@ -461,7 +480,7 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
                 }
             }
 
-        await progress_callback(100, f"Hoàn thành! Đã tạo {generated_questions} câu hỏi từ {len(available_lessons)} bài học")
+        await progress_callback(100, f"Hoàn thành! Đã tạo {generated_questions}/{total_questions_needed} câu hỏi từ {len(available_lessons)} bài học")
         await task_service.mark_task_completed(task_id=task_id, result=result)
 
         # Send Kafka completion notification if user_id is present
