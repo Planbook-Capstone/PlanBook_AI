@@ -327,29 +327,34 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
 
         # Tạo cấu trúc exam_data tổng thể để append câu hỏi
         accumulated_questions = []
+        final_formatted_exam = None  # Lưu format cuối cùng để tái sử dụng
 
         # Tạo callback function để gửi từng câu hỏi qua Kafka
         async def question_callback(question: Dict[str, Any]):
             """Callback để append từng câu hỏi vào danh sách và gửi qua Kafka"""
+            nonlocal final_formatted_exam
+
+            # Thêm câu hỏi vào danh sách tích lũy (luôn luôn, không chỉ khi có user_id)
+            accumulated_questions.append(question)
+
+            # Tính progress dựa trên số câu đã tạo
+            questions_created = len(accumulated_questions)
+            if total_questions_needed > 0:
+                # Progress từ 30% (bắt đầu tạo) đến 60% (hoàn thành tạo)
+                # 30% + (30% * questions_created / total_questions_needed)
+                progress = 30 + int(30 * questions_created / total_questions_needed)
+                progress = min(progress, 60)  # Không vượt quá 60%
+            else:
+                progress = 45  # Fallback nếu không tính được
+
+            # Format toàn bộ danh sách câu hỏi hiện tại bằng formatter có sẵn
+            exam_data = {"questions": accumulated_questions}
+            formatted_exam = formatter.format_exam_to_json_response(exam_data)
+            final_formatted_exam = formatted_exam  # Lưu lại để dùng cuối
+
+            # Gửi qua Kafka nếu có user_id
             if user_id:
                 try:
-                    # Thêm câu hỏi vào danh sách tích lũy
-                    accumulated_questions.append(question)
-
-                    # Tính progress dựa trên số câu đã tạo
-                    questions_created = len(accumulated_questions)
-                    if total_questions_needed > 0:
-                        # Progress từ 30% (bắt đầu tạo) đến 60% (hoàn thành tạo)
-                        # 30% + (30% * questions_created / total_questions_needed)
-                        progress = 30 + int(30 * questions_created / total_questions_needed)
-                        progress = min(progress, 60)  # Không vượt quá 60%
-                    else:
-                        progress = 45  # Fallback nếu không tính được
-
-                    # Format toàn bộ danh sách câu hỏi hiện tại bằng formatter có sẵn
-                    exam_data = {"questions": accumulated_questions}
-                    formatted_exam = formatter.format_exam_to_json_response(exam_data)
-
                     # Wrap trong cấu trúc exam_data
                     response_data = {"exam_data": formatted_exam}
 
@@ -449,17 +454,18 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
                 }
             }
         else:
-            # Bước 4: Chuyển đổi sang JSON format
-            await progress_callback(70, "Đang chuyển đổi sang JSON format...")
-            from app.services.smart_exam_json_formatter import get_smart_exam_json_formatter
+            # Bước 4: Hoàn thành với JSON format (đã được format trong callback)
+            await progress_callback(70, "Đang hoàn thiện kết quả JSON...")
 
-            json_formatter = get_smart_exam_json_formatter()
-            formatted_json = json_formatter.format_exam_to_json_response(exam_result)
+            # Sử dụng format đã được tạo trong callback, fallback nếu cần
+            if final_formatted_exam:
+                formatted_json = final_formatted_exam
+            else:
+                # Fallback nếu không có callback data
+                formatted_json = formatter.format_exam_to_json_response(exam_result)
 
-            await progress_callback(90, "Đã chuyển đổi JSON thành công")
+            await progress_callback(90, "Đã hoàn thành format JSON")
 
-            # Bước 5: Hoàn thành với JSON
-            await progress_callback(95, "Đang hoàn thiện kết quả...")
             statistics = exam_result.get("statistics", {})
             statistics_dict = statistics.model_dump() if hasattr(statistics, 'model_dump') else statistics
 
