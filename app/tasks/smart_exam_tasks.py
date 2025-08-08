@@ -311,7 +311,47 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
         # Bước 3: Tạo đề thi thông minh
         await progress_callback(30, "Đang tạo câu hỏi theo ma trận đề thi...")
         smart_exam_service = get_smart_exam_generation_service()
-        exam_result = await smart_exam_service.generate_smart_exam(exam_request, lessons_content_data)
+
+        # Import formatter service
+        from app.services.smart_exam_json_formatter import get_smart_exam_json_formatter
+        formatter = get_smart_exam_json_formatter()
+
+        # Tạo cấu trúc exam_data tổng thể để append câu hỏi
+        accumulated_questions = []
+
+        # Tạo callback function để gửi từng câu hỏi qua Kafka
+        async def question_callback(question: Dict[str, Any]):
+            """Callback để append từng câu hỏi vào danh sách và gửi qua Kafka"""
+            if user_id:
+                try:
+                    # Thêm câu hỏi vào danh sách tích lũy
+                    accumulated_questions.append(question)
+
+                    # Format toàn bộ danh sách câu hỏi hiện tại bằng formatter có sẵn
+                    exam_data = {"questions": accumulated_questions}
+                    formatted_exam = formatter.format_exam_to_json_response(exam_data)
+
+                    # Wrap trong cấu trúc exam_data
+                    response_data = {"exam_data": formatted_exam}
+
+                    # Gửi toàn bộ cấu trúc đã được cập nhật qua Kafka
+                    safe_kafka_call(
+                        kafka_service.send_progress_update_sync,
+                        tool_log_id=tool_log_id,
+                        task_id=task_id,
+                        user_id=user_id,
+                        progress=35,  # Progress cố định cho từng câu hỏi
+                        message="Đã tạo xong một câu hỏi",
+                        status="processing",
+                        additional_data=response_data
+                    )
+                    logger.info(f"✅ Sent accumulated exam data via Kafka for task {task_id} - Total questions: {len(accumulated_questions)}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Error sending accumulated exam data via Kafka: {e}")
+
+        exam_result = await smart_exam_service.generate_smart_exam(
+            exam_request, lessons_content_data, question_callback
+        )
 
         if not exam_result.get("success", False):
             error_result = create_error_result(task_id,
