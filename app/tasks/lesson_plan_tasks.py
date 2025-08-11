@@ -220,25 +220,98 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
 
         # Update progress: Starting content generation
         await mongodb_task_service.update_task_progress(
-            task_id, 50, "Đang tạo nội dung giáo án với tài liệu tham khảo từ sách giáo khoa..."
+            task_id, 30, "Đang tạo nội dung giáo án với tài liệu tham khảo từ sách giáo khoa..."
         )
         # Send sync progress update to SpringBoot
         if user_id:
             safe_kafka_call(
                 kafka_service.send_progress_update_sync,
-                tool_log_id=tool_log_id,task_id=task_id, user_id=user_id, progress=50,
+                tool_log_id=tool_log_id,task_id=task_id, user_id=user_id, progress=30,
                 message="Đang tạo nội dung giáo án với tài liệu tham khảo từ sách giáo khoa...",
                 status="processing"
             )
 
-        # Generate lesson plan content
+        # Generate lesson plan content với real-time progress
         from app.services.lesson_plan_content_service import get_lesson_plan_content_service
         lesson_plan_content_service = get_lesson_plan_content_service()
 
-        result = await lesson_plan_content_service.generate_lesson_plan_content(
+        # Tạo callback để gửi từng node hoàn thành qua Kafka
+        async def node_completion_callback(completed_structure: Dict[str, Any]):
+            """Callback được gọi khi hoàn thành từng node - gửi toàn bộ cấu trúc hiện tại qua Kafka"""
+            try:
+                if user_id:
+                    # Debug: Log cấu trúc được gửi
+                    logger.info(f"🔍 [DEBUG] Callback received structure with ID: {completed_structure.get('id')}")
+                    logger.info(f"🔍 [DEBUG] Structure has {len(completed_structure.get('children', []))} children")
+
+                    # Đếm nodes có content
+                    def count_nodes_with_content(node):
+                        count = 0
+                        if node.get("content", "").strip():
+                            count += 1
+                        for child in node.get("children", []):
+                            count += count_nodes_with_content(child)
+                        return count
+
+                    nodes_with_content = count_nodes_with_content(completed_structure)
+                    logger.info(f"🔍 [DEBUG] Structure has {nodes_with_content} nodes with content")
+
+                    # Tính toán progress chính xác dựa trên nodes đã hoàn thành
+                    # Progress range: 30% (start) -> 85% (end of content generation)
+                    # Formula: 30 + (55 * nodes_with_content / total_nodes)
+                    if total_nodes > 0:
+                        content_progress = int(30 + (55 * nodes_with_content / total_nodes))
+                        content_progress = min(content_progress, 85)  # Cap at 85%
+                    else:
+                        content_progress = 30  # Fallback
+
+                    logger.info(f"🔍 [DEBUG] Calculated progress: {content_progress}% ({nodes_with_content}/{total_nodes} nodes)")
+
+                    # Tạo result data với cấu trúc hoàn chỉnh hiện tại
+                    partial_result = {
+                        "success": True,
+                        "output": completed_structure,  # Toàn bộ cấu trúc JSON
+                        "task_id": task_id,
+                        "processing_info": {
+                            "processing_method": "realtime_lesson_plan_content_generation",
+                            "lesson_content_used": bool(lesson_id),
+                            "nodes_with_content": nodes_with_content,
+                            "total_nodes": total_nodes,
+                            "progress_calculation": f"{nodes_with_content}/{total_nodes} nodes completed"
+                        }
+                    }
+
+                    logger.info(f"🔍 [DEBUG] Sending partial_result with output ID: {partial_result['output'].get('id')}")
+
+                    # Tạo message với progress và thông tin chi tiết
+                    progress_message = f"Đã xử lý {nodes_with_content}/{total_nodes} node - Processing node {nodes_with_content}/{total_nodes}..."
+
+                    # Gửi partial result qua Kafka với progress chính xác
+                    safe_kafka_call(
+                        kafka_service.send_progress_update_sync,
+                        tool_log_id=tool_log_id,
+                        task_id=task_id,
+                        user_id=user_id,
+                        progress=content_progress,  # Progress tính toán chính xác
+                        message=progress_message,
+                        status="processing",
+                        additional_data={
+                            "partial_result": partial_result,
+                            "realtime_update": True,
+                            "nodes_processed": nodes_with_content,
+                            "total_nodes": total_nodes,
+                            "lesson_id": lesson_id
+                        }
+                    )
+                    logger.info(f"✅ Sent real-time progress update for task {task_id}")
+            except Exception as e:
+                logger.warning(f"⚠️ Error sending real-time progress update: {e}")
+
+        result = await lesson_plan_content_service.generate_lesson_plan_content_with_realtime_progress(
             lesson_plan_json=lesson_plan_json,
             lesson_id=lesson_id,
-            book_id=book_id
+            book_id=book_id,
+            node_completion_callback=node_completion_callback
         )
         logger.info(f"Content generation completed for task {task_id}: success={result.get('success')}")
 
