@@ -467,6 +467,113 @@ class LessonPlanContentService:
                 "error": str(e),
                 "lesson_plan": lesson_plan_json
             }
+
+    async def generate_lesson_plan_content_with_realtime_progress(
+        self,
+        lesson_plan_json: Dict[str, Any],
+        lesson_id: Optional[str] = None,
+        book_id: Optional[str] = None,
+        node_completion_callback: Optional[callable] = None
+    ) -> Dict[str, Any]:
+        """
+        Sinh nội dung chi tiết cho giáo án với real-time progress - trả về từng node ngay khi hoàn thành
+
+        Args:
+            lesson_plan_json: Cấu trúc JSON của giáo án
+            lesson_id: ID của bài học để lấy nội dung tham khảo (optional)
+            book_id: ID của sách giáo khoa để tìm lesson content trong collection cụ thể (optional)
+            node_completion_callback: Callback được gọi khi hoàn thành từng node với toàn bộ cấu trúc hiện tại
+
+        Returns:
+            Dict chứa kết quả xử lý và JSON đã được sinh nội dung
+        """
+        try:
+            logger.info("Starting lesson plan content generation with real-time progress...")
+
+            # 1. Validate đầu vào
+            validation_result = self._validate_input_json(lesson_plan_json)
+            if not validation_result["valid"]:
+                return {
+                    "success": False,
+                    "error": f"Invalid input JSON: {validation_result['error']}",
+                    "lesson_plan": lesson_plan_json
+                }
+
+            # 2. Lấy lesson content nếu có lesson_id
+            lesson_content = ""
+            if lesson_id:
+                try:
+                    if book_id:
+                        logger.info(f"Retrieving lesson content for {lesson_id} from book {book_id}")
+                    content_result = await self.textbook_service.get_lesson_content(lesson_id, book_id)
+                    lesson_content = content_result.get("lesson_content", "")
+                    logger.info(f"Retrieved lesson content: {len(lesson_content)} characters")
+                except Exception as e:
+                    logger.warning(f"Could not retrieve lesson content for {lesson_id}: {e}")
+
+            # 3. Tạo deep copy để không thay đổi input gốc
+            processed_json = deepcopy(lesson_plan_json)
+
+            # 4. Detect format và xử lý phù hợp với real-time callback
+            is_springboot_format = "title" in lesson_plan_json and "sections" in lesson_plan_json
+
+            if is_springboot_format:
+                # Xử lý SpringBoot format với real-time progress
+                processing_result = await self._process_springboot_format_with_realtime_progress(
+                    processed_json,
+                    lesson_content,
+                    node_completion_callback
+                )
+            else:
+                # Xử lý format cũ với real-time progress
+                processing_result = await self._process_lesson_plan_recursive_with_realtime_progress(
+                    processed_json,
+                    lesson_content,
+                    node_completion_callback,
+                    depth=0,
+                    visited_ids=None,
+                    root_json=processed_json  # Truyền toàn bộ cấu trúc làm root
+                )
+
+            if not processing_result["success"]:
+                return {
+                    "success": False,
+                    "error": processing_result["error"],
+                    "lesson_plan": lesson_plan_json
+                }
+
+            # 5. Validate kết quả cuối cùng
+            final_validation = self._validate_output_json(
+                lesson_plan_json,
+                processed_json
+            )
+
+            if not final_validation["valid"]:
+                return {
+                    "success": False,
+                    "error": f"Output validation failed: {final_validation['error']}",
+                    "lesson_plan": lesson_plan_json
+                }
+
+            logger.info("Lesson plan content generation with real-time progress completed successfully")
+
+            return {
+                "success": True,
+                "lesson_plan": processed_json,
+                "statistics": {
+                    "total_nodes": self._count_nodes(processed_json),
+                    "content_nodes_processed": processing_result.get("nodes_processed", 0),
+                    "lesson_content_used": len(lesson_content) > 0
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"Error in lesson plan content generation with real-time progress: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "lesson_plan": lesson_plan_json
+            }
     
     async def _process_lesson_plan_recursive(
         self, 
@@ -672,6 +779,225 @@ class LessonPlanContentService:
 
         except Exception as e:
             logger.error(f"Error processing node with progress at depth {depth}: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _process_springboot_format_with_realtime_progress(
+        self,
+        lesson_plan_json: Dict[str, Any],
+        lesson_content: str,
+        node_completion_callback: Optional[callable] = None
+    ) -> Dict[str, Any]:
+        """
+        Xử lý lesson plan với SpringBoot format với real-time progress
+
+        Args:
+            lesson_plan_json: JSON với format SpringBoot
+            lesson_content: Nội dung bài học tham khảo
+            node_completion_callback: Callback được gọi khi hoàn thành từng node
+
+        Returns:
+            Dict chứa kết quả xử lý
+        """
+        try:
+            logger.info("Processing SpringBoot format lesson plan with real-time progress")
+            nodes_processed = 0
+
+            # Xử lý root level nếu cần
+            if not lesson_plan_json.get("content", "").strip():
+                root_result = await self._process_springboot_node(lesson_plan_json, lesson_content)
+                if root_result.get("content_generated", False):
+                    nodes_processed += 1
+                    # Gọi callback với toàn bộ cấu trúc hiện tại
+                    if node_completion_callback:
+                        await node_completion_callback(deepcopy(lesson_plan_json))
+
+            # Xử lý sections
+            sections = lesson_plan_json.get("sections", [])
+            for section in sections:
+                section_result = await self._process_springboot_section_recursive_with_realtime_progress(
+                    section, lesson_content, node_completion_callback, lesson_plan_json
+                )
+                if not section_result["success"]:
+                    return section_result
+                nodes_processed += section_result.get("nodes_processed", 0)
+
+            return {
+                "success": True,
+                "nodes_processed": nodes_processed
+            }
+
+        except Exception as e:
+            logger.error(f"Error processing SpringBoot format with real-time progress: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _process_springboot_section_recursive_with_realtime_progress(
+        self,
+        section: Dict[str, Any],
+        lesson_content: str,
+        node_completion_callback: Optional[callable] = None,
+        root_json: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Xử lý đệ quy một section trong SpringBoot format với real-time progress
+
+        Args:
+            section: Section cần xử lý
+            lesson_content: Nội dung bài học tham khảo
+            node_completion_callback: Callback được gọi khi hoàn thành từng node
+            root_json: Root JSON để trả về toàn bộ cấu trúc
+
+        Returns:
+            Dict chứa kết quả xử lý
+        """
+        try:
+            nodes_processed = 0
+
+            # Xử lý section hiện tại
+            section_result = await self._process_springboot_node(section, lesson_content)
+            if section_result.get("content_generated", False):
+                nodes_processed += 1
+                # Gọi callback với toàn bộ cấu trúc hiện tại
+                if node_completion_callback and root_json:
+                    await node_completion_callback(deepcopy(root_json))
+
+            # Xử lý subsections
+            subsections = section.get("subsections", [])
+            for subsection in subsections:
+                subsection_result = await self._process_springboot_section_recursive_with_realtime_progress(
+                    subsection, lesson_content, node_completion_callback, root_json
+                )
+                if not subsection_result["success"]:
+                    return subsection_result
+                nodes_processed += subsection_result.get("nodes_processed", 0)
+
+            return {
+                "success": True,
+                "nodes_processed": nodes_processed
+            }
+
+        except Exception as e:
+            logger.error(f"Error processing SpringBoot section with real-time progress: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    async def _process_lesson_plan_recursive_with_realtime_progress(
+        self,
+        node: Dict[str, Any],
+        lesson_content: str,
+        node_completion_callback: Optional[callable] = None,
+        depth: int = 0,
+        visited_ids: Optional[Set[int]] = None,
+        root_json: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Xử lý đệ quy từng node trong cây JSON với real-time progress - trả về từng node ngay khi hoàn thành
+
+        Args:
+            node: Node hiện tại cần xử lý
+            lesson_content: Nội dung bài học tham khảo
+            node_completion_callback: Callback được gọi khi hoàn thành từng node
+            depth: Độ sâu hiện tại
+            visited_ids: Set các ID đã thăm để tránh vòng lặp
+            root_json: Root JSON để trả về toàn bộ cấu trúc
+
+        Returns:
+            Dict chứa kết quả xử lý
+        """
+        try:
+            # Khởi tạo visited_ids nếu chưa có
+            if visited_ids is None:
+                visited_ids = set()
+
+            # Nếu chưa có root_json, sử dụng node hiện tại làm root
+            if root_json is None:
+                root_json = node
+
+            # Kiểm tra độ sâu tối đa
+            if depth > self.MAX_DEPTH:
+                return {
+                    "success": False,
+                    "error": f"Maximum depth {self.MAX_DEPTH} exceeded"
+                }
+
+            # Kiểm tra node có hợp lệ không
+            if not isinstance(node, dict):
+                return {
+                    "success": False,
+                    "error": "Node is not a dictionary"
+                }
+
+            # Kiểm tra các trường bắt buộc
+            required_fields = ["id", "type", "status"]
+            for field in required_fields:
+                if field not in node:
+                    return {
+                        "success": False,
+                        "error": f"Missing required field: {field}"
+                    }
+
+            # Chỉ xử lý node có status ACTIVE
+            if node.get("status") != "ACTIVE":
+                return {"success": True, "nodes_processed": 0}
+
+            # Kiểm tra vòng lặp
+            node_id = node.get("id")
+            if node_id in visited_ids:
+                return {
+                    "success": False,
+                    "error": f"Cycle detected at node {node_id}"
+                }
+
+            # Thêm node_id vào visited_ids
+            visited_ids.add(node_id)
+
+            try:
+                # Xử lý node hiện tại
+                single_node_result = await self._process_single_node(node, lesson_content)
+
+                if not single_node_result["success"]:
+                    return single_node_result
+
+                nodes_processed = 0
+
+                # Nếu node này được xử lý (có content được sinh), gọi callback
+                if single_node_result.get("content_generated", False):
+                    nodes_processed += 1
+                    # Gọi callback với toàn bộ cấu trúc hiện tại
+                    if node_completion_callback:
+                        await node_completion_callback(deepcopy(root_json))
+
+                # Xử lý children nếu có
+                children = node.get("children", [])
+                for child in children:
+                    if child.get("status") == "ACTIVE":
+                        child_result = await self._process_lesson_plan_recursive_with_realtime_progress(
+                            child, lesson_content, node_completion_callback, depth + 1, visited_ids.copy(), root_json
+                        )
+
+                        if not child_result["success"]:
+                            return child_result
+
+                        nodes_processed += child_result.get("nodes_processed", 0)
+
+                return {
+                    "success": True,
+                    "nodes_processed": nodes_processed
+                }
+
+            finally:
+                # Loại bỏ node_id khỏi visited_ids khi hoàn thành
+                visited_ids.discard(node_id)
+
+        except Exception as e:
+            logger.error(f"Error processing node with real-time progress at depth {depth}: {e}")
             return {
                 "success": False,
                 "error": str(e)

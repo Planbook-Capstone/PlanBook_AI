@@ -231,14 +231,68 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
                 status="processing"
             )
 
-        # Generate lesson plan content
+        # Generate lesson plan content với real-time progress
         from app.services.lesson_plan_content_service import get_lesson_plan_content_service
         lesson_plan_content_service = get_lesson_plan_content_service()
 
-        result = await lesson_plan_content_service.generate_lesson_plan_content(
+        # Tạo callback để gửi từng node hoàn thành qua Kafka
+        async def node_completion_callback(completed_structure: Dict[str, Any]):
+            """Callback được gọi khi hoàn thành từng node - gửi toàn bộ cấu trúc hiện tại qua Kafka"""
+            try:
+                if user_id:
+                    # Debug: Log cấu trúc được gửi
+                    logger.info(f"🔍 [DEBUG] Callback received structure with ID: {completed_structure.get('id')}")
+                    logger.info(f"🔍 [DEBUG] Structure has {len(completed_structure.get('children', []))} children")
+
+                    # Đếm nodes có content
+                    def count_nodes_with_content(node):
+                        count = 0
+                        if node.get("content", "").strip():
+                            count += 1
+                        for child in node.get("children", []):
+                            count += count_nodes_with_content(child)
+                        return count
+
+                    nodes_with_content = count_nodes_with_content(completed_structure)
+                    logger.info(f"🔍 [DEBUG] Structure has {nodes_with_content} nodes with content")
+
+                    # Tạo result data với cấu trúc hoàn chỉnh hiện tại
+                    partial_result = {
+                        "success": True,
+                        "output": completed_structure,  # Toàn bộ cấu trúc JSON
+                        "task_id": task_id,
+                        "processing_info": {
+                            "processing_method": "realtime_lesson_plan_content_generation",
+                            "lesson_content_used": bool(lesson_id),
+                            "nodes_with_content": nodes_with_content
+                        }
+                    }
+
+                    logger.info(f"🔍 [DEBUG] Sending partial_result with output ID: {partial_result['output'].get('id')}")
+
+                    # Gửi partial result qua Kafka với additional_data
+                    safe_kafka_call(
+                        kafka_service.send_progress_update_sync,
+                        tool_log_id=tool_log_id,
+                        task_id=task_id,
+                        user_id=user_id,
+                        progress=75,  # Progress cố định cho real-time updates
+                        message="Đã hoàn thành một phần nội dung giáo án...",
+                        status="processing",
+                        additional_data={
+                            "partial_result": partial_result,
+                            "realtime_update": True
+                        }
+                    )
+                    logger.info(f"✅ Sent real-time progress update for task {task_id}")
+            except Exception as e:
+                logger.warning(f"⚠️ Error sending real-time progress update: {e}")
+
+        result = await lesson_plan_content_service.generate_lesson_plan_content_with_realtime_progress(
             lesson_plan_json=lesson_plan_json,
             lesson_id=lesson_id,
-            book_id=book_id
+            book_id=book_id,
+            node_completion_callback=node_completion_callback
         )
         logger.info(f"Content generation completed for task {task_id}: success={result.get('success')}")
 

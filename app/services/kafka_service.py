@@ -205,7 +205,10 @@ class KafkaService:
                 # Convert to JSON string
                 message_json = json.dumps(message_data, ensure_ascii=False)
 
+                # Log message size for debugging
+                message_size = len(message_json.encode('utf-8'))
                 logger.info(f"📤 Sending message to topic '{topic}' (attempt {attempt + 1}/{max_retries + 1})")
+                logger.info(f"📊 Message size: {message_size} bytes ({message_size/1024:.1f} KB)")
 
                 # Send message with shorter timeout
                 future = self.producer.send(
@@ -381,6 +384,28 @@ class KafkaService:
             # Thêm dữ liệu bổ sung nếu có
             if additional_data:
                 progress_data.update(additional_data)
+
+                # Debug logging cho real-time updates
+                if additional_data.get("realtime_update"):
+                    partial_result = additional_data.get("partial_result", {})
+                    output = partial_result.get("output", {})
+                    logger.info(f"🔍 [KAFKA DEBUG] Real-time update for task {task_id}")
+                    logger.info(f"🔍 [KAFKA DEBUG] Output root ID: {output.get('id')}")
+                    logger.info(f"🔍 [KAFKA DEBUG] Output children count: {len(output.get('children', []))}")
+
+                    # Log first few levels of structure
+                    def log_structure(node, level=0, max_level=2):
+                        if level > max_level:
+                            return
+                        indent = "  " * level
+                        content_status = "✅" if node.get("content", "").strip() else "⭕"
+                        logger.info(f"🔍 [KAFKA DEBUG] {indent}{content_status} {node.get('id')} - {node.get('title', '')[:30]}...")
+                        for child in node.get("children", []):
+                            log_structure(child, level + 1, max_level)
+
+                    if output:
+                        logger.info(f"🔍 [KAFKA DEBUG] Structure being sent:")
+                        log_structure(output)
 
             # Tạo Kafka message
             kafka_message = {
