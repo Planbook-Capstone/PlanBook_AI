@@ -1,27 +1,6 @@
 version: "3.8"
 
 services:
-  # FastAPI Application
-  planbook-api:
-    build: .
-    ports:
-      - "8000:8000"
-    environment:
-      - MONGODB_URL=mongodb://mongodb:27017/planbook_db
-      - REDIS_URL=redis://redis:6379/0
-      - QDRANT_URL=http://qdrant:6333
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - KAFKA_TOPIC_NAME=planbook
-    volumes:
-      - ./data:/app/data
-      - ./temp_uploads:/app/temp_uploads
-    depends_on:
-      - mongodb
-      - redis
-      - qdrant
-      - kafka
-
   # MongoDB Database
   mongodb:
     image: mongo:7.0
@@ -29,6 +8,7 @@ services:
       - "27017:27017"
     volumes:
       - mongodb_data:/data/db
+    restart: unless-stopped
 
   # Redis Cache
   redis:
@@ -37,6 +17,7 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    restart: unless-stopped
 
   # Qdrant Vector Database
   qdrant:
@@ -45,6 +26,7 @@ services:
       - "6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
+    restart: unless-stopped
 
   # Zookeeper for Kafka
   zookeeper:
@@ -59,6 +41,7 @@ services:
     volumes:
       - zookeeper_data:/var/lib/zookeeper/data
       - zookeeper_logs:/var/lib/zookeeper/log
+    restart: unless-stopped
 
   # Kafka
   kafka:
@@ -85,41 +68,7 @@ services:
       KAFKA_DELETE_TOPIC_ENABLE: "true"
     volumes:
       - kafka_data:/var/lib/kafka/data
-
-  # Celery Worker
-  celery-worker:
-    build: .
-    command: celery -A app.core.celery_app worker --loglevel=info --pool=solo --concurrency=1
-    environment:
-      - MONGODB_URL=mongodb://mongodb:27017/planbook_db
-      - REDIS_URL=redis://redis:6379/0
-      - QDRANT_URL=http://qdrant:6333
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - KAFKA_TOPIC_NAME=planbook
-    volumes:
-      - ./data:/app/data
-      - ./temp_uploads:/app/temp_uploads
-    depends_on:
-      - mongodb
-      - redis
-      - qdrant
-      - kafka
-
-  # Celery Flower (Monitoring)
-  celery-flower:
-    build: .
-    command: celery -A app.core.celery_app flower --port=5555
-    ports:
-      - "5555:5555"
-    environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    depends_on:
-      - redis
-      - celery-worker
+    restart: unless-stopped
 
 volumes:
   mongodb_data:
