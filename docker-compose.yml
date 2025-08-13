@@ -1,38 +1,122 @@
 version: "3.8"
 
 services:
+  # Main FastAPI Application
+  planbook-ai:
+    build: .
+    container_name: planbook-ai
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URL=mongodb://mongodb:27017/planbook_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - QDRANT_URL=http://qdrant:6333
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    volumes:
+      - ./data:/app/data
+      - ./temp_uploads:/app/temp_uploads
+      - ./logs:/app/logs
+      - ./exports:/app/exports
+    depends_on:
+      - mongodb
+      - redis
+      - qdrant
+      - kafka
+    restart: unless-stopped
+    networks:
+      - planbook-network
+
+  # Celery Worker
+  celery-worker:
+    build: .
+    container_name: celery-worker
+    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=2
+    environment:
+      - MONGODB_URL=mongodb://mongodb:27017/planbook_db
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - QDRANT_URL=http://qdrant:6333
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    volumes:
+      - ./data:/app/data
+      - ./temp_uploads:/app/temp_uploads
+      - ./logs:/app/logs
+      - ./exports:/app/exports
+    depends_on:
+      - mongodb
+      - redis
+      - qdrant
+      - kafka
+    restart: unless-stopped
+    networks:
+      - planbook-network
+
+  # Celery Flower (Monitoring)
+  celery-flower:
+    build: .
+    container_name: celery-flower
+    command: celery -A app.core.celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - planbook-network
   # MongoDB Database
   mongodb:
     image: mongo:7.0
+    container_name: planbook-mongodb
     ports:
       - "27017:27017"
     volumes:
       - mongodb_data:/data/db
+    environment:
+      - MONGO_INITDB_DATABASE=planbook_db
     restart: unless-stopped
+    networks:
+      - planbook-network
 
-  # Redis Cache
+  # Redis Cache & Message Broker
   redis:
     image: redis:7.2-alpine
+    container_name: planbook-redis
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    command: redis-server --appendonly yes
     restart: unless-stopped
+    networks:
+      - planbook-network
 
   # Qdrant Vector Database
   qdrant:
     image: qdrant/qdrant:latest
+    container_name: planbook-qdrant
     ports:
       - "6333:6333"
+      - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
     restart: unless-stopped
+    networks:
+      - planbook-network
 
   # Zookeeper for Kafka
   zookeeper:
     image: confluentinc/cp-zookeeper:7.4.0
     hostname: zookeeper
-    container_name: zookeeper
+    container_name: planbook-zookeeper
     ports:
       - "2181:2181"
     environment:
@@ -42,12 +126,14 @@ services:
       - zookeeper_data:/var/lib/zookeeper/data
       - zookeeper_logs:/var/lib/zookeeper/log
     restart: unless-stopped
+    networks:
+      - planbook-network
 
-  # Kafka
+  # Kafka Message Queue
   kafka:
     image: confluentinc/cp-kafka:7.4.0
     hostname: kafka
-    container_name: kafka
+    container_name: planbook-kafka
     depends_on:
       - zookeeper
     ports:
@@ -57,7 +143,7 @@ services:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -69,6 +155,8 @@ services:
     volumes:
       - kafka_data:/var/lib/kafka/data
     restart: unless-stopped
+    networks:
+      - planbook-network
 
 volumes:
   mongodb_data:
@@ -77,3 +165,7 @@ volumes:
   zookeeper_data:
   zookeeper_logs:
   kafka_data:
+
+networks:
+  planbook-network:
+    driver: bridge
