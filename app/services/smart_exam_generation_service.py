@@ -241,7 +241,8 @@ class SmartExamGenerationService:
                 # Retry logic để đảm bảo tạo đủ câu hỏi
                 for retry in range(max_retries + 1):
                     try:
-                        logger.info(f"🔄 Attempt {retry+1}/{max_retries+1} for question {i+1}/{count}")
+                        attempt_msg = f"🔄 Attempt {retry+1}/{max_retries+1} for question {i+1}/{count}"
+                        logger.info(attempt_msg)
 
                         # Bước 1: Tạo đáp án và câu hỏi ban đầu
                         initial_question = await self._create_initial_part3_question(
@@ -249,7 +250,8 @@ class SmartExamGenerationService:
                         )
 
                         if not initial_question:
-                            logger.warning(f"❌ Failed to create initial question {i+1}/{count}, retry {retry+1}/{max_retries+1}")
+                            fail_msg = f"❌ Failed to create initial question {i+1}/{count}, retry {retry+1}/{max_retries+1}"
+                            logger.warning(fail_msg)
                             continue
 
                         logger.info(f"✅ Created initial question {i+1}/{count}, proceeding to validation")
@@ -263,7 +265,8 @@ class SmartExamGenerationService:
                         if final_question:
                             validated_questions.append(final_question)
                             question_created = True
-                            logger.info(f"🎉 Successfully created question {i+1}/{count} for level '{level}' after {retry+1} attempts")
+                            success_msg = f"🎉 Successfully created question {i+1}/{count} for level '{level}' after {retry+1} attempts"
+                            logger.info(success_msg)
 
                             # Gọi callback cho câu hỏi vừa tạo xong nếu có
                             if question_callback:
@@ -274,14 +277,17 @@ class SmartExamGenerationService:
 
                             break
                         else:
-                            logger.warning(f"❌ Validation failed for question {i+1}/{count}, retry {retry+1}/{max_retries+1}")
+                            validation_fail_msg = f"❌ Validation failed for question {i+1}/{count}, retry {retry+1}/{max_retries+1}"
+                            logger.warning(validation_fail_msg)
 
                     except Exception as e:
-                        logger.error(f"💥 Error creating question {i+1}/{count}, retry {retry+1}/{max_retries+1}: {e}")
+                        error_msg = f"💥 Error creating question {i+1}/{count}, retry {retry+1}/{max_retries+1}: {e}"
+                        logger.error(error_msg)
                         continue
 
                 if not question_created:
-                    logger.error(f"🚫 FAILED to create question {i+1}/{count} after {max_retries+1} attempts")
+                    final_fail_msg = f"🚫 FAILED to create question {i+1}/{count} after {max_retries+1} attempts"
+                    logger.error(final_fail_msg)
 
             logger.info(f"📊 Final result: Generated {len(validated_questions)}/{count} questions for level '{level}'")
             return validated_questions
@@ -402,7 +408,8 @@ class SmartExamGenerationService:
                         return smart_rounded_question
 
                 if is_overall_valid and is_score_valid and is_calculation_valid:
-                    logger.info(f"✅ Question validated successfully after {iteration + 1} iterations (score: {accuracy_score}/{min_score}, diff: {answer_diff}%)")
+                    validation_success_msg = f"✅ Question validated successfully after {iteration + 1} iterations (score: {accuracy_score}/{min_score}, diff: {answer_diff}%)"
+                    logger.info(validation_success_msg)
                     return current_question
                 elif not is_calculation_valid:
                     logger.warning(f"❌ Answer difference too large: {answer_diff}% > {max_answer_diff}%")
@@ -556,7 +563,9 @@ class SmartExamGenerationService:
                             if option["decimal_places"] == 0:
                                 question_data["explanation"] = f"Kết quả tính toán được làm tròn đến số nguyên: {rounded_answer}. {original_explanation}"
                             else:
-                                question_data["explanation"] = f"Kết quả tính toán được làm tròn đến {option['decimal_places']} chữ số thập phân: {rounded_answer}. {original_explanation}"
+                                decimal_places = option['decimal_places']
+                                explanation_text = f"Kết quả tính toán được làm tròn đến {decimal_places} chữ số thập phân: {rounded_answer}. {original_explanation}"
+                                question_data["explanation"] = explanation_text
 
                             return question_data
 
@@ -598,7 +607,9 @@ class SmartExamGenerationService:
                 if difference_percent < 5:
                     smart_rounded_question = self._apply_smart_rounding(question, expert_answer_value, original_value)
                     if smart_rounded_question:
-                        logger.info(f"🎯 Applied smart rounding: {original_answer} → {smart_rounded_question['target_answer']} (expert: {my_answer})")
+                        smart_target = smart_rounded_question['target_answer']
+                        smart_rounding_msg = f"🎯 Applied smart rounding: {original_answer} → {smart_target} (expert: {my_answer})"
+                        logger.info(smart_rounding_msg)
                         return smart_rounded_question
             except ValueError:
                 pass
@@ -684,7 +695,9 @@ class SmartExamGenerationService:
                 if best_option["decimal_places"] == 0:
                     corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến số nguyên: {rounded_answer}. {original_explanation}"
                 else:
-                    corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến {best_option['decimal_places']} chữ số thập phân: {rounded_answer}. {original_explanation}"
+                    decimal_places = best_option['decimal_places']
+                    explanation_text = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến {decimal_places} chữ số thập phân: {rounded_answer}. {original_explanation}"
+                    corrected_question["explanation"] = explanation_text
 
                 return corrected_question
 
@@ -755,7 +768,9 @@ class SmartExamGenerationService:
                     if option["decimal_places"] == 0:
                         corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến số nguyên: {original_answer}. {original_explanation}"
                     else:
-                        corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến {option['decimal_places']} chữ số thập phân: {original_answer}. {original_explanation}"
+                        decimal_places = option['decimal_places']
+                        explanation_text = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến {decimal_places} chữ số thập phân: {original_answer}. {original_explanation}"
+                        corrected_question["explanation"] = explanation_text
 
                     logger.info(f"🎯 Smart rounding applied: {expert_value:.3f} → {original_answer} ({option['requirement']})")
                     return corrected_question
@@ -786,9 +801,13 @@ class SmartExamGenerationService:
                     if option["decimal_places"] == 0:
                         corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến số nguyên: {original_answer}. {original_explanation}"
                     else:
-                        corrected_question["explanation"] = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến {option['decimal_places']} chữ số thập phân: {original_answer}. {original_explanation}"
+                        decimal_places = option['decimal_places']
+                        explanation_text = f"Kết quả tính toán chính xác là {expert_value:.3f}, được làm tròn đến {decimal_places} chữ số thập phân: {original_answer}. {original_explanation}"
+                        corrected_question["explanation"] = explanation_text
 
-                    logger.info(f"🎯 Smart rounding applied (with tolerance): {expert_value:.3f} → {original_answer} ({option['requirement']}, diff: {difference_percent:.1f}%)")
+                    requirement = option['requirement']
+                    tolerance_msg = f"🎯 Smart rounding applied (with tolerance): {expert_value:.3f} → {original_answer} ({requirement}, diff: {difference_percent:.1f}%)"
+                    logger.info(tolerance_msg)
                     return corrected_question
 
             return None
@@ -1091,7 +1110,9 @@ LƯU Ý: Hãy tuân thủ nghiêm ngặt các rules trên khi tạo câu hỏi.
 
     def _create_reverse_thinking_prompt(self, level: str, content: str, lesson_id: str) -> str:
         """Tạo prompt cho quy trình tư duy ngược"""
-        return f"""
+        requirements = self._get_reverse_thinking_requirements(level)
+
+        prompt = f"""
 Bạn là chuyên gia tạo đề thi Hóa học THPT 2025. Hãy áp dụng phương pháp TƯ DUY NGƯỢC để tạo câu hỏi tự luận tính toán.
 
 QUY TRÌNH TƯ DUY NGƯỢC VỚI VALIDATION:
@@ -1100,80 +1121,12 @@ QUY TRÌNH TƯ DUY NGƯỢC VỚI VALIDATION:
 3. TỰ KIỂM TRA: Tính toán ngược từ dữ kiện để xác minh đáp án
 4. ĐIỀU CHỈNH: Nếu không khớp, sửa dữ kiện hoặc đáp án
 
-YÊU CẦU VÀ QUY TẮC (JSON FORMAT):
-{
-  "answer_requirements": {
-    "max_characters": 4,
-    "format": "Số thực dương với tối đa 4 ký tự bao gồm dấu thập phân",
-    "valid_examples": ["12.5", "0.25", "75", "2.4", "1000"],
-    "invalid_examples": ["125.6", "35.25", "1234.5"],
-    "auto_adjustment_rule": "Nếu kết quả ≥5 ký tự, tự động thêm yêu cầu làm tròn vào đề bài",
-    "rounding_strategy": "Khi tính toán ra kết quả chính xác nhưng cần đáp án ngắn gọn, hãy thêm yêu cầu làm tròn vào đề bài",
-    "rounding_options": [
-      "Làm tròn đến 1 chữ số thập phân: 307.45 → 307.5 (thêm 'làm tròn đến 1 chữ số thập phân' vào đề)",
-      "Làm tròn đến số nguyên: 307.45 → 307 (thêm 'làm tròn đến số nguyên' vào đề)",
-      "Làm tròn đến hàng chục: 307.45 → 310 (thêm 'làm tròn đến hàng chục' vào đề)"
-    ],
-    "rounding_examples": [
-      {
-        "calculation_result": "307.45",
-        "target_answer": "306",
-        "solution": "Thêm '(làm tròn đến số nguyên)' vào câu hỏi và giải thích trong explanation",
-        "question_modification": "Tính khối lượng mol phân tử... (làm tròn đến số nguyên)?"
-      },
-      {
-        "calculation_result": "22.37",
-        "target_answer": "22.4",
-        "solution": "Thêm '(làm tròn đến 1 chữ số thập phân)' vào câu hỏi",
-        "question_modification": "Tính thể tích khí... (làm tròn đến 1 chữ số thập phân)?"
-      }
-    ]
-  },
-  "common_errors_to_avoid": [
-    {
-      "error_type": "unit_confusion",
-      "description": "Nhầm lẫn giữa các đại lượng có cùng đơn vị",
-      "prevention": "Luôn kiểm tra đề yêu cầu tính đại lượng nào cụ thể"
-    },
-    {
-      "error_type": "calculation_mistake",
-      "description": "Sai trong quá trình tính toán",
-      "prevention": "Kiểm tra từng bước tính toán và sử dụng đúng công thức"
-    },
-    {
-      "error_type": "efficiency_error",
-      "description": "Sai logic về hiệu suất hoặc tỉ lệ",
-      "prevention": "Hiệu suất/tỉ lệ phải hợp lý (thường ≤ 100%)"
-    },
-    {
-      "error_type": "formula_application",
-      "description": "Áp dụng sai công thức hoặc thiếu bước",
-      "prevention": "Xác minh công thức phù hợp với dạng bài"
-    },
-    {
-      "error_type": "rounding_error",
-      "description": "Không làm tròn theo yêu cầu đề bài",
-      "prevention": "Đọc kỹ yêu cầu làm tròn trong đề"
-    },
-    {
-      "error_type": "unit_mismatch",
-      "description": "Trả về sai đơn vị so với yêu cầu",
-      "prevention": "Kiểm tra đơn vị đề yêu cầu và đổi đơn vị nếu cần"
-    },
-    {
-      "error_type": "data_interpretation",
-      "description": "Hiểu sai dữ kiện hoặc yêu cầu đề bài",
-      "prevention": "Đọc kỹ đề bài và xác định chính xác những gì cần tính"
-    }
-  ]
-}
-
 THÔNG TIN BÀI HỌC:
 - Lesson ID: {lesson_id}
 - Nội dung: {content}
 
 YÊU CẦU MỨC ĐỘ "{level}":
-{self._get_reverse_thinking_requirements(level)}
+{requirements}
 
 ĐỊNH DẠNG JSON TRẢ VỀ:
 {{
@@ -1237,102 +1190,9 @@ LƯU Ý QUAN TRỌNG VỀ HÓA HỌC - NGUYÊN TẮC CHUNG:
    - Bước 5: Tính khối lượng/thể tích sản phẩm
    - Bước 6: Kiểm tra tính hợp lý của kết quả
 
-VALIDATION PROCESS (JSON FORMAT):
-{
-  "mandatory_validation_steps": [
-    {
-      "step": 1,
-      "action": "Kiểm tra lại",
-      "description": "Đọc câu hỏi vừa tạo và xác định tất cả dữ kiện"
-    },
-    {
-      "step": 2,
-      "action": "Tính toán ngược",
-      "description": "Từ dữ kiện đề bài, tính toán để ra đáp án"
-    },
-    {
-      "step": 3,
-      "action": "So sánh",
-      "description": "Đáp án tính được có khớp với target_answer không?"
-    },
-    {
-      "step": 4,
-      "action": "Kiểm tra đơn vị",
-      "description": "Đề hỏi gì (g, mol, L, %) thì trả về đúng đơn vị đó"
-    },
-    {
-      "step": 5,
-      "action": "Kiểm tra độ dài đáp án",
-      "description": "Nếu đáp án ≥5 ký tự, thêm yêu cầu làm tròn vào đề bài"
-    },
-    {
-      "step": 6,
-      "action": "Kiểm tra làm tròn",
-      "description": "Nếu đề có yêu cầu làm tròn, phải tuân thủ chính xác"
-    },
-    {
-      "step": 7,
-      "action": "Điều chỉnh",
-      "description": "Nếu sai lệch > 5%, sửa lại dữ kiện hoặc target_answer"
-    },
-    {
-      "step": 8,
-      "action": "Đảm bảo",
-      "description": "Tất cả số liệu hợp lý (không âm, không quá lớn, đơn vị đúng)"
-    }
-  ],
-  "validation_examples": [
-    {
-      "scenario": "Tính toán với đơn vị cụ thể",
-      "validation_principle": "Xác định đúng đại lượng cần tính và áp dụng công thức phù hợp",
-      "validation_steps": [
-        "Xác định dữ kiện đã cho và đơn vị",
-        "Chọn công thức phù hợp với dạng bài",
-        "Thực hiện tính toán từng bước",
-        "Kiểm tra đơn vị kết quả có khớp với yêu cầu đề"
-      ],
-      "common_mistake": "Nhầm lẫn giữa các đại lượng có liên quan"
-    },
-    {
-      "scenario": "Làm tròn theo yêu cầu",
-      "validation_principle": "Tuân thủ chính xác yêu cầu làm tròn trong đề bài",
-      "validation_steps": [
-        "Đọc kỹ yêu cầu làm tròn (số chữ số thập phân, số có nghĩa...)",
-        "Thực hiện tính toán với độ chính xác cao",
-        "Áp dụng quy tắc làm tròn đúng",
-        "Kiểm tra kết quả cuối có đúng format yêu cầu"
-      ],
-      "common_mistake": "Không tuân thủ yêu cầu làm tròn hoặc làm tròn sai"
-    }
-  ],
-  "final_checklist": [
-    "Đáp án có đúng đơn vị đề yêu cầu không? (g, mol, L, %)",
-    "Có làm tròn đúng theo yêu cầu đề bài không?",
-    "Nếu kết quả tính toán khác đáp án mong muốn, đã thêm yêu cầu làm tròn vào đề chưa?",
-    "Explanation có giải thích rõ việc làm tròn không? (VD: 'Kết quả chính xác 307.45, làm tròn: 306')",
-    "Có nhầm lẫn giữa khối lượng mol và khối lượng chất không?",
-    "Tính toán có chính xác từng bước không?",
-    "Đáp án có hợp lý về mặt thực tế không?"
-  ],
-  "rounding_validation_example": {
-    "scenario": "Tính khối lượng mol của C₁₇H₃₅COONa",
-    "exact_calculation": "17×12.01 + 35×1.01 + 2×16.00 + 22.99 = 307.45",
-    "desired_answer": "306",
-    "correct_approach": {
-      "question": "Tính khối lượng mol phân tử của muối natri stearat (C₁₇H₃₅COONa) (làm tròn đến số nguyên)?",
-      "target_answer": "306",
-      "explanation": "M(C₁₇H₃₅COONa) = 17×12.01 + 35×1.01 + 2×16.00 + 22.99 = 307.45 g/mol. Làm tròn đến số nguyên: 306 g/mol."
-    },
-    "wrong_approach": {
-      "question": "Tính khối lượng mol phân tử của muối natri stearat (C₁₇H₃₅COONa)?",
-      "target_answer": "306",
-      "explanation": "M(C₁₇H₃₅COONa) = 17×12.01 + 35×1.01 + 2×16.00 + 22.99 = 306 g/mol."
-    }
-  }
-}
-
 Lưu ý: Chỉ trả về JSON sau khi đã VALIDATION HOÀN TOÀN. KHÔNG ĐƯỢC TRẢ VỀ CÂU HỎI SAI!
 """
+        return prompt
 
     def _get_reverse_thinking_requirements(self, level: str) -> str:
         """Yêu cầu cụ thể cho từng mức độ trong tư duy ngược"""
