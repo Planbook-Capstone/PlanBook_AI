@@ -41,13 +41,18 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Download NLTK data with SSL fix and specific download directory
-RUN python -c "import nltk; import ssl; \
-    try: _create_unverified_https_context = ssl._create_unverified_context; \
-    except AttributeError: pass; \
-    else: ssl._create_default_https_context = _create_unverified_https_context; \
-    nltk.download('punkt', download_dir='/usr/local/nltk_data'); \
-    nltk.download('punkt_tab', download_dir='/usr/local/nltk_data'); \
-    nltk.download('stopwords', download_dir='/usr/local/nltk_data')"
+RUN python -c "\
+import nltk; \
+import ssl; \
+try: \
+    _create_unverified_https_context = ssl._create_unverified_context; \
+except AttributeError: \
+    pass; \
+else: \
+    ssl._create_default_https_context = _create_unverified_https_context; \
+nltk.download('punkt', download_dir='/usr/local/nltk_data'); \
+nltk.download('punkt_tab', download_dir='/usr/local/nltk_data'); \
+nltk.download('stopwords', download_dir='/usr/local/nltk_data')"
 
 # Copy application code
 COPY . .
