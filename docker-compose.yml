@@ -21,6 +21,7 @@ services:
       - ./temp_uploads:/app/temp_uploads
       - ./logs:/app/logs
       - ./exports:/app/exports
+      - /root/nltk_data:/usr/local/nltk_data
     depends_on:
       - mongodb
       - redis
@@ -49,6 +50,7 @@ services:
       - ./temp_uploads:/app/temp_uploads
       - ./logs:/app/logs
       - ./exports:/app/exports
+      - /root/nltk_data:/usr/local/nltk_data
     depends_on:
       - mongodb
       - redis
