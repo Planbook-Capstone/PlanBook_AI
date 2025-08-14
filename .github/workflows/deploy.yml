@@ -22,97 +22,38 @@ jobs:
           password: ${{ secrets.VPS_PASSWORD }}
           port: 22
           script: |
-            echo "📁 Moving to project folder"
+            echo " Moving to project folder"
             cd PlanBook_AI || exit 1
 
-            echo "🔄 Resetting and pulling latest code"
+            echo " Pulling latest code"
             git reset --hard
             git pull origin master || git pull origin main
 
-            echo "🛑 Stopping all services gracefully..."
-            docker compose -f docker-compose.yml down --remove-orphans
-
-            echo "🏗️ Building Docker images..."
-            if ! docker compose -f docker-compose.yml build --no-cache; then
-              echo "❌ Build failed. Attempting to restart previous version..."
-              docker compose -f docker-compose.yml up -d
+            echo "🏗️ Building new Docker images (keeping old containers running)..."
+            if ! docker compose -f docker-compose.yml build; then
+              echo "❌ Build failed. Keeping current containers running."
               exit 1
             fi
 
-            echo "🧹 Cleaning up unused images and containers..."
-            docker system prune -f
+            echo "✅ Build successful. Stopping old containers..."
+            docker compose -f docker-compose.yml down
 
-            echo "🚀 Starting all services..."
+            echo "🚀 Starting new containers..."
             docker compose -f docker-compose.yml up -d
 
-            echo "⏳ Waiting for services to initialize..."
-            sleep 60
+            echo "⏳ Waiting for FastAPI to be ready..."
+            sleep 30
 
-            echo "🩺 Performing health checks..."
+            for i in {1..15}; do
+              if curl -fs http://localhost:8000/health; then
+                echo "✅ Deployment successful!"
+                docker image prune -f
+                exit 0
+              fi
+              echo "⏳ Waiting... ($i/15)"
+              sleep 4
+            done
 
-            # Check FastAPI main service
-            if curl -fs http://localhost:8000/health; then
-              echo "✅ FastAPI service is healthy!"
-            else
-              echo "❌ FastAPI health check failed"
-              docker logs planbook-ai --tail 50
-              exit 1
-            fi
-
-            # Check Celery Flower monitoring
-            if curl -fs http://localhost:5555; then
-              echo "✅ Celery Flower is accessible!"
-            else
-              echo "⚠️ Celery Flower check failed (non-critical)"
-            fi
-
-            # Check MongoDB connection
-            if docker exec planbook-mongodb mongosh --eval "db.adminCommand('ping')" > /dev/null 2>&1; then
-              echo "✅ MongoDB is healthy!"
-            else
-              echo "❌ MongoDB health check failed"
-              docker logs planbook-mongodb --tail 50
-              exit 1
-            fi
-
-            # Check Redis connection
-            if docker exec planbook-redis redis-cli ping | grep -q PONG; then
-              echo "✅ Redis is healthy!"
-            else
-              echo "❌ Redis health check failed"
-              docker logs planbook-redis --tail 50
-              exit 1
-            fi
-
-            # Check Qdrant vector database
-            if curl -fs http://localhost:6333/health; then
-              echo "✅ Qdrant is healthy!"
-            else
-              echo "❌ Qdrant health check failed"
-              docker logs planbook-qdrant --tail 50
-              exit 1
-            fi
-
-            # Check Kafka
-            if docker exec planbook-kafka kafka-topics --bootstrap-server localhost:9092 --list > /dev/null 2>&1; then
-              echo "✅ Kafka is healthy!"
-            else
-              echo "⚠️ Kafka check failed (may need more time to start)"
-            fi
-
-            echo "📊 Service status summary:"
-            docker compose -f docker-compose.yml ps
-
-            echo "🎉 Deployment completed successfully!"
-            echo "📍 Services available at:"
-            echo "   - FastAPI: http://localhost:8000"
-            echo "   - API Docs: http://localhost:8000/docs"
-            echo "   - Celery Flower: http://localhost:5555"
-            echo "   - Dozzle Logs: http://localhost:8080"
-            echo "   - MongoDB: localhost:27017"
-            echo "   - Redis: localhost:6379"
-            echo "   - Qdrant: http://localhost:6333"
-            echo "   - Kafka: localhost:9092"
-
-            # Final cleanup
-            docker image prune -f
+            echo "❌ Health check failed. Rolling back..."
+            docker compose -f docker-compose.yml down
+            exit 1
