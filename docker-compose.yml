@@ -15,7 +15,6 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - QDRANT_URL=http://qdrant:6333
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
     volumes:
       - ./data:/app/data
       - ./temp_uploads:/app/temp_uploads
@@ -26,7 +25,6 @@ services:
       - mongodb
       - redis
       - qdrant
-      - kafka
     restart: unless-stopped
     networks:
       - planbook-network
@@ -44,7 +42,6 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/1
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
       - QDRANT_URL=http://qdrant:6333
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
     volumes:
       - ./data:/app/data
       - ./temp_uploads:/app/temp_uploads
@@ -55,7 +52,6 @@ services:
       - mongodb
       - redis
       - qdrant
-      - kafka
     restart: unless-stopped
     networks:
       - planbook-network
@@ -92,7 +88,7 @@ services:
   # Redis Cache & Message Broker
   redis:
     image: redis:7.2-alpine
-    container_name: planbook-redis
+    container_name: redis
     ports:
       - "6379:6379"
     volumes:
@@ -118,59 +114,10 @@ services:
     networks:
       - planbook-network
 
-  # Zookeeper for Kafka
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.4.0
-    hostname: zookeeper
-    container_name: planbook-zookeeper
-    ports:
-      - "2181:2181"
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    volumes:
-      - zookeeper_data:/var/lib/zookeeper/data
-      - zookeeper_logs:/var/lib/zookeeper/log
-    restart: unless-stopped
-    networks:
-      - planbook-network
-
-  # Kafka Message Queue
-  kafka:
-    image: confluentinc/cp-kafka:7.4.0
-    hostname: kafka
-    container_name: planbook-kafka
-    depends_on:
-      - zookeeper
-    ports:
-      - "9092:9092"
-      - "9101:9101"
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_JMX_PORT: 9101
-      KAFKA_JMX_HOSTNAME: localhost
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_DELETE_TOPIC_ENABLE: "true"
-    volumes:
-      - kafka_data:/var/lib/kafka/data
-    restart: unless-stopped
-    networks:
-      - planbook-network
-
 volumes:
   mongodb_data:
   redis_data:
   qdrant_data:
-  zookeeper_data:
-  zookeeper_logs:
-  kafka_data:
 
 networks:
   planbook-network:
