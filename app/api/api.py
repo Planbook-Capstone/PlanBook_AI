@@ -91,6 +91,19 @@ async def root():
     }
 
 
+@app.get("/health")
+async def health_check():
+    """
+    Root level health check endpoint for deployment verification
+    """
+    return {
+        "status": "healthy",
+        "message": "PlanBook AI Service is running",
+        "service": "PlanBook AI",
+        "api_docs": f"{settings.API_PREFIX}/docs"
+    }
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize only essential services on startup"""
