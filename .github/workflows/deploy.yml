@@ -23,7 +23,7 @@ jobs:
           port: 22
           script: |
             echo "📁 Moving to project folder"
-            cd /***/be/PlanBook_AI || exit 1
+            cd PlanBook_AI || exit 1
 
             echo "🔄 Resetting and pulling latest code"
             git reset --hard
@@ -49,7 +49,7 @@ jobs:
             sleep 60
 
             echo "🩺 Performing health checks..."
-            
+
             # Check FastAPI main service
             if curl -fs http://localhost:8000/health; then
               echo "✅ FastAPI service is healthy!"
