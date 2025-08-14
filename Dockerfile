@@ -45,11 +45,9 @@ RUN python -c "import nltk; nltk.download('punkt')"
 # Copy application code
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p temp_uploads logs data exports
-
-# Set permissions
-RUN chmod -R 755 /app
+# Create necessary directories with proper permissions
+RUN mkdir -p temp_uploads logs data exports && \
+    chmod 755 temp_uploads logs data exports
 
 # Expose ports
 EXPOSE 8000 5555
