@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     SUPABASE_BUCKET_NAME: str = os.getenv("SUPABASE_BUCKET_NAME", "pdf-documents")
 
     # Kafka Configuration
-    KAFKA_BOOTSTRAP_SERVERS: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+    KAFKA_BOOTSTRAP_SERVERS: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     KAFKA_TOPIC_NAME: str = os.getenv("KAFKA_TOPIC_NAME", "planbook")
     KAFKA_CONNECTION_TIMEOUT: int = int(os.getenv("KAFKA_CONNECTION_TIMEOUT", "10"))
     KAFKA_REQUEST_TIMEOUT: int = int(os.getenv("KAFKA_REQUEST_TIMEOUT", "30"))
