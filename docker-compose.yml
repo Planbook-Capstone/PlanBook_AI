@@ -25,7 +25,7 @@ services:
       - qdrant
     restart: unless-stopped
     networks:
-      - planbook-network
+      - planbook
 
   # Celery Worker
   celery-worker:
@@ -52,7 +52,7 @@ services:
       - qdrant
     restart: unless-stopped
     networks:
-      - planbook-network
+      - planbook
 
   # Celery Flower (Monitoring)
   celery-flower:
@@ -68,7 +68,7 @@ services:
       - redis
     restart: unless-stopped
     networks:
-      - planbook-network
+      - planbook
   # MongoDB Database
   mongodb:
     image: mongo:7.0
@@ -81,7 +81,7 @@ services:
       - MONGO_INITDB_DATABASE=planbook_db
     restart: unless-stopped
     networks:
-      - planbook-network
+      - planbook
 
   # Redis Cache & Message Broker
   redis:
@@ -94,7 +94,7 @@ services:
     command: redis-server --appendonly yes
     restart: unless-stopped
     networks:
-      - planbook-network
+      - planbook
 
   # Qdrant Vector Database
   qdrant:
@@ -110,7 +110,7 @@ services:
       - QDRANT__SERVICE__GRPC_PORT=6334
     restart: unless-stopped
     networks:
-      - planbook-network
+      - planbook
 
 volumes:
   mongodb_data:
@@ -118,5 +118,5 @@ volumes:
   qdrant_data:
 
 networks:
-  planbook-network:
-    driver: bridge
+  planbook:
+    external: true
