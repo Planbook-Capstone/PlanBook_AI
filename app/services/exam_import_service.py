@@ -350,6 +350,9 @@ NỘI DUNG ĐỀ THI:
 YÊU CẦU:
 1. Phân tích và trích xuất thông tin đề thi thành JSON với cấu trúc chính xác như mẫu
 2. Xác định môn học, lớp, thời gian làm bài, tên trường:
+   - subject: PHẢI xác định môn học (VD: "Hóa học", "Toán học", "Vật lý"), KHÔNG được để null
+   - grade: PHẢI xác định lớp (số từ 1-12), nếu không rõ thì mặc định là 12, KHÔNG được để null
+   - duration_minutes: PHẢI xác định thời gian (số phút), nếu không rõ thì mặc định 90, KHÔNG được để null
    - school: Tìm và trích xuất tên trường từ phần đầu đề thi (thường nằm dưới "BỘ GIÁO DỤC VÀ ĐÀO TẠO")
    - Ví dụ: "TRƯỜNG THPT HONG THINH" → "TRƯỜNG THPT HONG THINH"
 3. Phân chia câu hỏi theo các phần có sẵn trong đề thi:
@@ -434,6 +437,11 @@ YÊU CẦU:
 LưU Ý QUAN TRỌNG VỀ CẤU TRÚC:
 - Chỉ trả về JSON hợp lệ, không thêm text giải thích
 - Đảm bảo tất cả câu hỏi và đáp án được trích xuất chính xác
+- QUAN TRỌNG: KHÔNG ĐƯỢC TRẢ VỀ NULL CHO CÁC TRƯỜNG BẮT BUỘC:
+  * subject: PHẢI là string không rỗng (VD: "Hóa học")
+  * grade: PHẢI là số nguyên từ 1-12 (VD: 12)
+  * duration_minutes: PHẢI là số nguyên dương (VD: 90)
+  * Nếu không xác định được, sử dụng giá trị mặc định thay vì null
 - QUAN TRỌNG: ID câu hỏi trong mỗi phần bắt đầu từ 1
   * Ví dụ: Phần I có câu 1-6, Phần II có câu 1-6, Phần III có câu 1-6
 - QUAN TRỌNG: Mỗi loại câu hỏi có cấu trúc khác nhau:
@@ -635,10 +643,32 @@ Hãy phân tích và trả về JSON:
                     return result
 
             # 2. Clean basic data
+            # Xử lý grade - đảm bảo không bị None
+            grade_value = exam_data.get("grade")
+            if grade_value is None or grade_value == "":
+                grade_value = 12  # Default grade
+            try:
+                grade_value = int(grade_value)
+                if grade_value < 1 or grade_value > 12:
+                    grade_value = 12
+            except (ValueError, TypeError):
+                grade_value = 12
+
+            # Xử lý duration_minutes - đảm bảo không bị None
+            duration_value = exam_data.get("duration_minutes")
+            if duration_value is None or duration_value == "":
+                duration_value = 90  # Default duration
+            try:
+                duration_value = int(duration_value)
+                if duration_value <= 0:
+                    duration_value = 90
+            except (ValueError, TypeError):
+                duration_value = 90
+
             cleaned_data = {
                 "subject": str(exam_data.get("subject") or "").strip(),
-                "grade": int(exam_data.get("grade", 12)),
-                "duration_minutes": int(exam_data.get("duration_minutes", 90)),
+                "grade": grade_value,
+                "duration_minutes": duration_value,
                 "school": str(exam_data.get("school") or "").strip(),
                 "exam_code": str(exam_data.get("exam_code") or "").strip() if exam_data.get("exam_code") else None,
                 "atomic_masses": str(exam_data.get("atomic_masses") or "").strip() if exam_data.get("atomic_masses") else None,
@@ -1084,12 +1114,12 @@ Hãy phân tích và trả về JSON:
             # Tính tổng điểm
             total_score = 10.0
 
-            # Tạo response theo format FE
+            # Tạo response theo format FE - sử dụng dữ liệu đã được clean
             fe_data = {
                 "name": f"Template {exam_data.get('subject', 'Chưa xác định')}",
                 "subject": exam_data.get("subject", "Chưa xác định"),
-                "grade": exam_data.get("grade", "Chưa xác định"),
-                "durationMinutes": exam_data.get("duration_minutes", 90),
+                "grade": exam_data.get("grade", "Chưa xác định"),  # Sử dụng giá trị đã clean hoặc default
+                "durationMinutes": exam_data.get("duration_minutes", 90),  # Sử dụng giá trị đã clean hoặc default
                 "parts": fe_parts,
                 "totalScore": total_score,
                 "version": 1,
