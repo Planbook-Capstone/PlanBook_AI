@@ -50,7 +50,7 @@ class ExamImportService:
             if not extracted_text or len(extracted_text.strip()) < 100:
                 return {
                     "statusCode": 400,
-                    "message": "File extraction failed",
+                    "message": "Trích xuất file thất bại",
                     "error": "Không thể trích xuất nội dung từ file DOCX hoặc nội dung quá ngắn",
                     "details": {"filename": filename, "extracted_length": len(extracted_text)}
                 }
@@ -64,7 +64,7 @@ class ExamImportService:
             if not format_validation["is_valid"]:
                 return {
                     "statusCode": 400,
-                    "message": "Invalid exam format",
+                    "message": "Format đề thi không hợp lệ",
                     "error": f"Đề thi không đúng format chuẩn: {format_validation['error']}",
                     "details": {
                         "filename": filename,
@@ -84,7 +84,7 @@ class ExamImportService:
             if not llm_result.get("success", False):
                 return {
                     "statusCode": 500,
-                    "message": "LLM analysis failed",
+                    "message": "Phân tích đề thi thất bại",
                     "error": f"Không thể phân tích đề thi: {llm_result.get('error', 'Unknown error')}",
                     "details": {"filename": filename}
                 }
@@ -94,7 +94,7 @@ class ExamImportService:
             if not exam_data:
                 return {
                     "statusCode": 500,
-                    "message": "No exam data returned",
+                    "message": "Không có dữ liệu đề thi",
                     "error": "LLM không trả về dữ liệu đề thi",
                     "details": {"filename": filename}
                 }
@@ -109,7 +109,7 @@ class ExamImportService:
             if not validation_result["is_valid"]:
                 return {
                     "statusCode": 422,
-                    "message": "Invalid exam data from LLM",
+                    "message": "Dữ liệu đề thi không hợp lệ",
                     "error": f"Dữ liệu từ LLM không hợp lệ: {validation_result['error']}",
                     "details": {
                         "filename": filename,
@@ -121,29 +121,34 @@ class ExamImportService:
 
             # Sử dụng dữ liệu đã được clean
             exam_data = validation_result["cleaned_data"]
+            validation_warnings = validation_result.get("warnings", [])
 
             # 5. Chuyển đổi sang format phù hợp
             if staff_import:
                 # Format cho SpringBoot staff
                 formatted_data = self._convert_to_staff_format(exam_data)
-                success_message = "Question bank data imported successfully"
+                success_message = "Import đề thi thành công"
             else:
                 # Format cho Frontend
                 formatted_data = self._convert_to_fe_format(exam_data)
-                success_message = "Template updated successfully"
+                success_message = "Cập nhật template thành công"
 
             # 6. Validate và tạo response
             processing_time = time.time() - start_time
 
+            # Tổng hợp tất cả warnings
+            all_warnings = format_warnings + validation_warnings
+
             # Tạo message với thông tin về các phần thiếu
-            if format_warnings:
-                success_message += f" (Lưu ý: {'; '.join(format_warnings)})"
+            if all_warnings:
+                success_message += f" (Lưu ý: {'; '.join(all_warnings)})"
 
             # Tạo response theo format phù hợp
             response_data = {
                 "statusCode": 200,
                 "message": success_message,
-                "data": formatted_data
+                "data": formatted_data,
+                "warnings": all_warnings if all_warnings else []
             }
 
             return response_data
@@ -154,7 +159,7 @@ class ExamImportService:
             
             return {
                 "statusCode": 500,
-                "message": "Import failed",
+                "message": "Import thất bại",
                 "error": f"Lỗi trong quá trình import: {str(e)}",
                 "details": {
                     "filename": filename,
@@ -626,13 +631,22 @@ Hãy phân tích và trả về JSON:
                 "warnings": []  # Thêm mảng warnings thay vì trả lỗi
             }
 
-            # 1. Validate basic fields
+            # 1. Validate basic fields - tạo warnings thay vì fail
             required_fields = ["subject", "grade", "duration_minutes", "school", "parts"]
             for field in required_fields:
                 if field not in exam_data:
-                    result["is_valid"] = False
-                    result["error"] = f"Missing required field: {field}"
-                    return result
+                    result["warnings"].append(f"Thiếu trường '{field}', sử dụng giá trị mặc định")
+                    # Thêm default value thay vì fail
+                    if field == "subject":
+                        exam_data[field] = None
+                    elif field == "grade":
+                        exam_data[field] = None
+                    elif field == "duration_minutes":
+                        exam_data[field] = None
+                    elif field == "school":
+                        exam_data[field] = None
+                    elif field == "parts":
+                        exam_data[field] = []
 
             # 2. Clean basic data
             # Xử lý grade - giữ None nếu không xác định được
@@ -671,7 +685,7 @@ Hãy phân tích và trả về JSON:
             # 3. Validate và clean parts
             parts = exam_data.get("parts", [])
             if not isinstance(parts, list):
-                result["warnings"].append(f"Parts field is not a list (got {type(parts)}), using empty array")
+                result["warnings"].append(f"Trường parts không phải là list (nhận được {type(parts)}), sử dụng mảng rỗng")
                 parts = []
 
             cleaned_parts = []
@@ -808,7 +822,7 @@ Hãy phân tích và trả về JSON:
             # Validate và clean questions
             questions = part_data.get("questions", [])
             if not isinstance(questions, list):
-                result["warnings"].append(f"Questions field is not a list (got {type(questions)}), using empty array")
+                result["warnings"].append(f"Trường questions không phải là list (nhận được {type(questions)}), sử dụng mảng rỗng")
                 questions = []
 
             cleaned_questions = []
@@ -838,9 +852,9 @@ Hãy phân tích và trả về JSON:
 
             # Không fail part nếu không có câu hỏi, chỉ tạo part rỗng với warnings
             if not cleaned_questions and questions:
-                result["warnings"].append(f"No valid questions found in part (had {len(questions)} invalid questions)")
+                result["warnings"].append(f"Không tìm thấy câu hỏi hợp lệ trong phần (có {len(questions)} câu hỏi không hợp lệ)")
             elif not questions:
-                result["warnings"].append("Part has no questions")
+                result["warnings"].append("Phần không có câu hỏi")
 
             cleaned_part["questions"] = cleaned_questions
             result["data"] = cleaned_part
@@ -881,7 +895,7 @@ Hãy phân tích và trả về JSON:
             # Clean basic question data với default values
             question_text = question_data.get("question")
             if not question_text or question_text is None or str(question_text).strip() == "":
-                result["warnings"].append("Question text is empty or null")
+                result["warnings"].append("Nội dung câu hỏi rỗng hoặc null")
                 question_text = f"Câu hỏi {question_index + 1}"
 
             cleaned_question = {
@@ -902,10 +916,10 @@ Hãy phân tích và trả về JSON:
                 answer = question_data.get("answer", "")
 
                 if not options:
-                    result["warnings"].append("No options provided for multiple choice question")
+                    result["warnings"].append("Không có lựa chọn cho câu hỏi trắc nghiệm")
                     cleaned_question["options"] = {}
                 elif not isinstance(options, dict):
-                    result["warnings"].append(f"Options must be a dictionary, got {type(options)}")
+                    result["warnings"].append(f"Lựa chọn phải là dictionary, nhận được {type(options)}")
                     cleaned_question["options"] = {}
                 else:
                     # Linh hoạt với số đáp án - lấy bao nhiêu có bấy nhiêu
@@ -917,12 +931,12 @@ Hãy phân tích và trả về JSON:
                             cleaned_options[opt] = str(options[opt]).strip()
 
                     if len(cleaned_options) < 2:
-                        result["warnings"].append(f"Multiple choice question should have at least 2 options, found {len(cleaned_options)}")
+                        result["warnings"].append(f"Câu hỏi trắc nghiệm cần ít nhất 2 lựa chọn, tìm thấy {len(cleaned_options)}")
 
                     cleaned_question["options"] = cleaned_options
 
                 if not answer:
-                    result["warnings"].append("No answer provided for multiple choice question")
+                    result["warnings"].append("Không có đáp án cho câu hỏi trắc nghiệm")
                     cleaned_question["answer"] = ""
                 else:
                     cleaned_question["answer"] = str(answer).strip()
@@ -932,10 +946,10 @@ Hãy phân tích và trả về JSON:
                 statements = question_data.get("statements", {})
 
                 if not statements:
-                    result["warnings"].append("No statements provided for true/false question")
+                    result["warnings"].append("Không có phát biểu cho câu hỏi đúng/sai")
                     cleaned_question["statements"] = {}
                 elif not isinstance(statements, dict):
-                    result["warnings"].append(f"Statements must be a dictionary, got {type(statements)}")
+                    result["warnings"].append(f"Phát biểu phải là dictionary, nhận được {type(statements)}")
                     cleaned_question["statements"] = {}
                 else:
                     # Linh hoạt với số statements - lấy bao nhiêu có bấy nhiêu
@@ -955,12 +969,12 @@ Hãy phân tích và trả về JSON:
                                         "answer": bool(answer) if answer is not None else False
                                     }
                                 else:
-                                    result["warnings"].append(f"Statement {key} has empty text")
+                                    result["warnings"].append(f"Phát biểu {key} có nội dung rỗng")
                             else:
-                                result["warnings"].append(f"Statement {key} must be a dictionary, got {type(stmt)}")
+                                result["warnings"].append(f"Phát biểu {key} phải là dictionary, nhận được {type(stmt)}")
 
                     if len(cleaned_statements) < 2:
-                        result["warnings"].append(f"True/false question should have at least 2 statements, found {len(cleaned_statements)}")
+                        result["warnings"].append(f"Câu hỏi đúng/sai cần ít nhất 2 phát biểu, tìm thấy {len(cleaned_statements)}")
 
                     cleaned_question["statements"] = cleaned_statements
 
@@ -971,14 +985,14 @@ Hãy phân tích và trả về JSON:
                 answer = question_data.get("answer", "")
 
                 if not answer:
-                    result["warnings"].append("No answer provided for short answer question")
+                    result["warnings"].append("Không có đáp án cho câu hỏi tự luận")
                     cleaned_question["answer"] = ""
                 else:
                     cleaned_question["answer"] = str(answer).strip()
 
             else:
                 # Không fail cho unknown part type, chỉ warning
-                result["warnings"].append(f"Unknown part type: {part_name}, treating as generic question")
+                result["warnings"].append(f"Loại phần không xác định: {part_name}, xử lý như câu hỏi chung")
                 # Cố gắng xử lý như short answer
                 answer = question_data.get("answer", "")
                 cleaned_question["answer"] = str(answer).strip() if answer else ""
