@@ -631,7 +631,8 @@ Hãy phân tích và trả về JSON:
                 "is_valid": True,
                 "error": "",
                 "details": {},
-                "cleaned_data": {}
+                "cleaned_data": {},
+                "warnings": []  # Thêm mảng warnings thay vì trả lỗi
             }
 
             # 1. Validate basic fields
@@ -678,59 +679,73 @@ Hãy phân tích và trả về JSON:
             # 3. Validate và clean parts
             parts = exam_data.get("parts", [])
             if not isinstance(parts, list):
-                result["is_valid"] = False
-                result["error"] = f"Parts must be a list, got {type(parts)}"
-                result["details"]["parts_type"] = str(type(parts))
-                return result
+                result["warnings"].append(f"Parts field is not a list (got {type(parts)}), using empty array")
+                parts = []
 
             cleaned_parts = []
-            skipped_parts = []
+            part_warnings = []
 
             for i, part in enumerate(parts):
                 try:
                     # Kiểm tra part có phải dict không
                     if not isinstance(part, dict):
                         logger.warning(f"Part {i} is not a dictionary, got {type(part)}: {part}")
-                        skipped_parts.append({
-                            "part_name": f"Part {i}",
-                            "error": f"Part must be a dictionary, got {type(part)}"
-                        })
+                        # Tạo part rỗng thay vì skip
+                        empty_part = {
+                            "part": f"PHẦN {i+1}",
+                            "title": "",
+                            "description": "",
+                            "questions": []
+                        }
+                        cleaned_parts.append(empty_part)
+                        part_warnings.append(f"Phần {i+1}: Part must be a dictionary, got {type(part)}")
                         continue
 
                     cleaned_part = self._clean_exam_part(part, i)
                     if cleaned_part["is_valid"]:
                         cleaned_parts.append(cleaned_part["data"])
+                        # Thêm warnings từ part
+                        if cleaned_part.get("warnings"):
+                            part_warnings.extend(cleaned_part["warnings"])
                     else:
-                        # Log warning và skip part này thay vì fail toàn bộ
-                        part_name = part.get("part", f"Part {i}")
-                        logger.warning(f"Skipping invalid part '{part_name}': {cleaned_part['error']}")
-                        skipped_parts.append({
-                            "part_name": part_name,
-                            "error": cleaned_part["error"]
-                        })
+                        # Tạo part rỗng với warnings thay vì skip
+                        part_name = part.get("part", f"PHẦN {i+1}")
+                        empty_part = {
+                            "part": part_name,
+                            "title": part.get("title", ""),
+                            "description": part.get("description", ""),
+                            "questions": []
+                        }
+                        cleaned_parts.append(empty_part)
+                        part_warnings.append(f"{part_name}: {cleaned_part['error']}")
+                        logger.warning(f"Part '{part_name}' has issues: {cleaned_part['error']}")
                 except Exception as e:
                     logger.error(f"Error processing part {i}: {e}")
-                    skipped_parts.append({
-                        "part_name": f"Part {i}",
-                        "error": f"Processing error: {str(e)}"
-                    })
+                    # Tạo part rỗng cho lỗi exception
+                    empty_part = {
+                        "part": f"PHẦN {i+1}",
+                        "title": "",
+                        "description": "",
+                        "questions": []
+                    }
+                    cleaned_parts.append(empty_part)
+                    part_warnings.append(f"Phần {i+1}: Processing error - {str(e)}")
 
-            # Chỉ fail nếu không có part nào hợp lệ
-            if not cleaned_parts:
+            # Kiểm tra phải có ít nhất 1 phần có câu hỏi (PHẦN I, II, hoặc III)
+            has_questions = any(len(part.get("questions", [])) > 0 for part in cleaned_parts)
+            if not has_questions:
                 result["is_valid"] = False
-                result["error"] = "No valid parts found in exam data"
-                result["details"]["skipped_parts"] = skipped_parts
+                result["error"] = "Đề thi phải có ít nhất 1 phần với câu hỏi (PHẦN I, II, hoặc III)"
                 return result
 
             cleaned_data["parts"] = cleaned_parts
             result["cleaned_data"] = cleaned_data
+            result["warnings"].extend(part_warnings)
 
-            # Thêm thông tin về parts bị skip
-            if skipped_parts:
-                result["details"]["skipped_parts"] = skipped_parts
-                logger.info(f"Exam data validation completed - {len(cleaned_parts)} valid parts, {len(skipped_parts)} skipped parts")
+            if part_warnings:
+                logger.info(f"Exam data validation completed - {len(cleaned_parts)} parts processed with {len(part_warnings)} warnings")
             else:
-                logger.info(f"Exam data validation completed - {len(cleaned_parts)} parts validated")
+                logger.info(f"Exam data validation completed - {len(cleaned_parts)} parts validated successfully")
 
             return result
 
@@ -758,20 +773,13 @@ Hãy phân tích và trả về JSON:
             result = {
                 "is_valid": True,
                 "error": "",
-                "data": {}
+                "data": {},
+                "warnings": []
             }
 
-            # Validate basic part fields
-            required_part_fields = ["part", "title", "questions"]
-            for field in required_part_fields:
-                if field not in part_data:
-                    result["is_valid"] = False
-                    result["error"] = f"Missing field '{field}' in part"
-                    return result
-
-            # Clean part basic data
+            # Clean part basic data với default values
             cleaned_part = {
-                "part": str(part_data.get("part", "")).strip(),
+                "part": str(part_data.get("part", f"PHẦN {part_index + 1}")).strip(),
                 "title": str(part_data.get("title", "")).strip(),
                 "description": str(part_data.get("description", "")).strip() if part_data.get("description") else "",
                 "questions": []
@@ -780,49 +788,43 @@ Hãy phân tích và trả về JSON:
             # Validate và clean questions
             questions = part_data.get("questions", [])
             if not isinstance(questions, list):
-                result["is_valid"] = False
-                result["error"] = f"Questions must be a list, got {type(questions)}"
-                return result
+                result["warnings"].append(f"Questions field is not a list (got {type(questions)}), using empty array")
+                questions = []
 
             cleaned_questions = []
-            invalid_questions = []
+            question_warnings = []
 
             for j, question in enumerate(questions):
                 try:
                     # Kiểm tra question có phải dict không
                     if not isinstance(question, dict):
                         logger.warning(f"Question {j} in {cleaned_part['part']} is not a dictionary, got {type(question)}: {question}")
-                        invalid_questions.append({
-                            "question_index": j,
-                            "error": f"Question must be a dictionary, got {type(question)}"
-                        })
+                        question_warnings.append(f"Câu {j+1}: Question must be a dictionary, got {type(question)}")
                         continue
 
                     cleaned_question = self._clean_question(question, cleaned_part["part"], j)
                     if cleaned_question["is_valid"]:
                         cleaned_questions.append(cleaned_question["data"])
+                        # Thêm warnings từ question
+                        if cleaned_question.get("warnings"):
+                            question_warnings.extend([f"Câu {j+1}: {w}" for w in cleaned_question["warnings"]])
                     else:
-                        # Log invalid question nhưng không fail toàn bộ part
-                        logger.warning(f"Skipping invalid question {j} in {cleaned_part['part']}: {cleaned_question['error']}")
-                        invalid_questions.append({
-                            "question_index": j,
-                            "error": cleaned_question["error"]
-                        })
+                        # Thêm warning thay vì skip question
+                        logger.warning(f"Question {j} in {cleaned_part['part']} has issues: {cleaned_question['error']}")
+                        question_warnings.append(f"Câu {j+1}: {cleaned_question['error']}")
                 except Exception as e:
                     logger.error(f"Error processing question {j} in {cleaned_part['part']}: {e}")
-                    invalid_questions.append({
-                        "question_index": j,
-                        "error": f"Processing error: {str(e)}"
-                    })
+                    question_warnings.append(f"Câu {j+1}: Processing error - {str(e)}")
 
-            # Nếu không có câu hỏi hợp lệ nào, fail part này
-            if not cleaned_questions:
-                result["is_valid"] = False
-                result["error"] = f"No valid questions found in part. Invalid questions: {len(invalid_questions)}"
-                return result
+            # Không fail part nếu không có câu hỏi, chỉ tạo part rỗng với warnings
+            if not cleaned_questions and questions:
+                result["warnings"].append(f"No valid questions found in part (had {len(questions)} invalid questions)")
+            elif not questions:
+                result["warnings"].append("Part has no questions")
 
             cleaned_part["questions"] = cleaned_questions
             result["data"] = cleaned_part
+            result["warnings"].extend(question_warnings)
 
             return result
 
@@ -830,7 +832,8 @@ Hãy phân tích và trả về JSON:
             return {
                 "is_valid": False,
                 "error": f"Error cleaning part: {str(e)}",
-                "data": {}
+                "data": {},
+                "warnings": []
             }
 
     def _clean_question(self, question_data: Dict[str, Any], part_name: str, question_index: int) -> Dict[str, Any]:
@@ -852,21 +855,15 @@ Hãy phân tích và trả về JSON:
             result = {
                 "is_valid": True,
                 "error": "",
-                "data": {}
+                "data": {},
+                "warnings": []
             }
 
-            # Validate basic question fields
-            if "id" not in question_data or "question" not in question_data:
-                result["is_valid"] = False
-                result["error"] = "Missing 'id' or 'question' field"
-                return result
-
-            # Clean basic question data
+            # Clean basic question data với default values
             question_text = question_data.get("question")
             if not question_text or question_text is None or str(question_text).strip() == "":
-                result["is_valid"] = False
-                result["error"] = f"Question text cannot be null or empty. Got: {question_text}"
-                return result
+                result["warnings"].append("Question text is empty or null")
+                question_text = f"Câu hỏi {question_index + 1}"
 
             cleaned_question = {
                 "id": int(question_data.get("id", question_index + 1)),
@@ -884,89 +881,92 @@ Hãy phân tích và trả về JSON:
             if part_name_upper == "PHẦN I":
                 logger.info("Processing as MultipleChoice question (PHẦN I)")
                 # MultipleChoiceQuestion
-                if "options" not in question_data or "answer" not in question_data:
-                    result["is_valid"] = False
-                    result["error"] = "MultipleChoice question missing 'options' or 'answer'"
-                    return result
-
                 options = question_data.get("options", {})
-                if not isinstance(options, dict):
-                    result["is_valid"] = False
-                    result["error"] = f"Options must be a dictionary, got {type(options)}"
-                    return result
+                answer = question_data.get("answer", "")
 
-                # Kiểm tra có đủ options A, B, C, D không
-                required_options = ["A", "B", "C", "D"]
-                missing_options = [opt for opt in required_options if opt not in options]
-                if missing_options:
-                    result["is_valid"] = False
-                    result["error"] = f"Options missing: {missing_options}"
-                    return result
+                if not options:
+                    result["warnings"].append("No options provided for multiple choice question")
+                    cleaned_question["options"] = {}
+                elif not isinstance(options, dict):
+                    result["warnings"].append(f"Options must be a dictionary, got {type(options)}")
+                    cleaned_question["options"] = {}
+                else:
+                    # Linh hoạt với số đáp án - lấy bao nhiêu có bấy nhiêu
+                    cleaned_options = {}
+                    available_options = ["A", "B", "C", "D", "E", "F"]  # Hỗ trợ thêm E, F nếu cần
 
-                cleaned_question["options"] = {
-                    "A": str(options.get("A", "")),
-                    "B": str(options.get("B", "")),
-                    "C": str(options.get("C", "")),
-                    "D": str(options.get("D", ""))
-                }
-                cleaned_question["answer"] = str(question_data.get("answer", ""))
+                    for opt in available_options:
+                        if opt in options and options[opt] is not None and str(options[opt]).strip():
+                            cleaned_options[opt] = str(options[opt]).strip()
+
+                    if len(cleaned_options) < 2:
+                        result["warnings"].append(f"Multiple choice question should have at least 2 options, found {len(cleaned_options)}")
+
+                    cleaned_question["options"] = cleaned_options
+
+                if not answer:
+                    result["warnings"].append("No answer provided for multiple choice question")
+                    cleaned_question["answer"] = ""
+                else:
+                    cleaned_question["answer"] = str(answer).strip()
 
             elif part_name_upper == "PHẦN II":
                 logger.info("Processing as TrueFalse question (PHẦN II)")
                 # TrueFalseQuestion
-                if "statements" not in question_data:
-                    result["is_valid"] = False
-                    result["error"] = "TrueFalse question missing 'statements'"
-                    return result
-
                 statements = question_data.get("statements", {})
-                if not isinstance(statements, dict):
-                    result["is_valid"] = False
-                    result["error"] = f"Statements must be a dictionary, got {type(statements)}"
-                    return result
 
-                # Kiểm tra có đủ statements a, b, c, d không
-                required_statements = ["a", "b", "c", "d"]
-                missing_statements = [stmt for stmt in required_statements if stmt not in statements]
-                if missing_statements:
-                    result["is_valid"] = False
-                    result["error"] = f"Statements missing: {missing_statements}"
-                    return result
+                if not statements:
+                    result["warnings"].append("No statements provided for true/false question")
+                    cleaned_question["statements"] = {}
+                elif not isinstance(statements, dict):
+                    result["warnings"].append(f"Statements must be a dictionary, got {type(statements)}")
+                    cleaned_question["statements"] = {}
+                else:
+                    # Linh hoạt với số statements - lấy bao nhiêu có bấy nhiêu
+                    cleaned_statements = {}
+                    available_statements = ["a", "b", "c", "d", "e", "f"]  # Hỗ trợ thêm e, f nếu cần
 
-                cleaned_statements = {}
-                for key in ["a", "b", "c", "d"]:
-                    stmt = statements.get(key, {})
-                    if not isinstance(stmt, dict):
-                        result["is_valid"] = False
-                        result["error"] = f"Statement {key} must be a dictionary, got {type(stmt)}"
-                        return result
+                    for key in available_statements:
+                        if key in statements:
+                            stmt = statements[key]
+                            if isinstance(stmt, dict):
+                                text = stmt.get("text", "")
+                                answer = stmt.get("answer")
 
-                    if "text" not in stmt or "answer" not in stmt:
-                        result["is_valid"] = False
-                        result["error"] = f"Statement {key} missing 'text' or 'answer'"
-                        return result
+                                if text and text.strip():
+                                    cleaned_statements[key] = {
+                                        "text": str(text).strip(),
+                                        "answer": bool(answer) if answer is not None else False
+                                    }
+                                else:
+                                    result["warnings"].append(f"Statement {key} has empty text")
+                            else:
+                                result["warnings"].append(f"Statement {key} must be a dictionary, got {type(stmt)}")
 
-                    cleaned_statements[key] = {
-                        "text": str(stmt.get("text", "")),
-                        "answer": bool(stmt.get("answer", False))
-                    }
+                    if len(cleaned_statements) < 2:
+                        result["warnings"].append(f"True/false question should have at least 2 statements, found {len(cleaned_statements)}")
+
+                    cleaned_question["statements"] = cleaned_statements
 
                 cleaned_question["statements"] = cleaned_statements
 
             elif part_name_upper == "PHẦN III":
                 logger.info("Processing as ShortAnswer question (PHẦN III)")
                 # ShortAnswerQuestion
-                if "answer" not in question_data:
-                    result["is_valid"] = False
-                    result["error"] = "ShortAnswer question missing 'answer'"
-                    return result
+                answer = question_data.get("answer", "")
 
-                cleaned_question["answer"] = str(question_data.get("answer", ""))
+                if not answer:
+                    result["warnings"].append("No answer provided for short answer question")
+                    cleaned_question["answer"] = ""
+                else:
+                    cleaned_question["answer"] = str(answer).strip()
 
             else:
-                result["is_valid"] = False
-                result["error"] = f"Unknown part type: {part_name}"
-                return result
+                # Không fail cho unknown part type, chỉ warning
+                result["warnings"].append(f"Unknown part type: {part_name}, treating as generic question")
+                # Cố gắng xử lý như short answer
+                answer = question_data.get("answer", "")
+                cleaned_question["answer"] = str(answer).strip() if answer else ""
 
             # Thêm explanation nếu có
             if "explanation" in question_data:
@@ -979,7 +979,8 @@ Hãy phân tích và trả về JSON:
             return {
                 "is_valid": False,
                 "error": f"Error cleaning question: {str(e)}",
-                "data": {}
+                "data": {},
+                "warnings": []
             }
 
     def _calculate_import_statistics(self, exam_data: Dict[str, Any]) -> ExamImportStatistics:
