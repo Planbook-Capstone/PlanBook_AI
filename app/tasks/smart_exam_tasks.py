@@ -207,6 +207,7 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
                     user_id=user_id,
                     result=error_result,
                     tool_log_id=tool_log_id
+                    # total_count=None for error cases
                 )
 
             return error_result
@@ -496,7 +497,8 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
                 task_id=task_id,
                 user_id=user_id,
                 result=result,
-                tool_log_id=tool_log_id
+                tool_log_id=tool_log_id,
+                total_count=generated_questions  # Số câu hỏi đã tạo thành công
             )
 
         logger.info(f"Smart exam generation task {task_id} hoàn thành thành công")
@@ -527,6 +529,7 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
                             user_id=user_id,
                             result=error_result,
                             tool_log_id=tool_log_id
+                            # total_count=None for error cases
                         )
             except Exception as kafka_error:
                 logger.error(f"Error sending Kafka error notification for task {task_id}: {kafka_error}")

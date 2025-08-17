@@ -440,17 +440,36 @@ class KafkaService:
         user_id: str,
         result: Dict[str, Any],
         lesson_id: Optional[str] = None,
-        tool_log_id: Optional[Any] = None
+        tool_log_id: Optional[Any] = None,
+        total_count: Optional[Any] = None
     ) -> bool:
         """
         Gửi kết quả cuối cùng của task về SpringBoot (sync version)
         Với fallback mechanism để không block task completion
+
+        Args:
+            task_id: ID của task
+            user_id: ID của user
+            result: Kết quả task
+            lesson_id: ID của lesson (optional)
+            tool_log_id: ID của tool log (optional)
+            total_count: Tổng số item đã tạo thành công (optional) - dùng cho lesson plan, smart exam, slide generation
+
+        Returns:
+            bool: Always True để không block task completion
         """
         try:
             is_success = result.get("success", False)
             error_msg = result.get("error", "")
 
-            logger.info(f"📤 [SYNC] Sending final result - Task: {task_id}, Success: {is_success}")
+            # Ưu tiên sử dụng total_count từ parameter, fallback về result nếu không có
+            if total_count is None:
+                total_count = result.get("total_count")
+
+            log_msg = f"📤 [SYNC] Sending final result - Task: {task_id}, Success: {is_success}"
+            if total_count is not None:
+                log_msg += f", Total items generated: {total_count}"
+            logger.info(log_msg)
 
             # Tạo formatted result với output field
             formatted_result = {
@@ -462,7 +481,7 @@ class KafkaService:
             if not is_success and error_msg:
                 formatted_result["error"] = error_msg
 
-            # Tạo message data
+            # Tạo message data với total_count ở cấp độ ngoài cùng
             progress_data = {
                 "tool_log_id": tool_log_id,
                 "task_id": task_id,
@@ -472,6 +491,10 @@ class KafkaService:
                 "timestamp": datetime.now().isoformat()
             }
 
+            # Thêm total_count ở cấp độ ngoài cùng (cùng cấp với tool_log_id)
+            if total_count is not None:
+                progress_data["total_count"] = total_count
+
             if lesson_id:
                 progress_data["lesson_id"] = lesson_id
 
@@ -479,7 +502,10 @@ class KafkaService:
                 progress_data["message"] = f"Tác vụ hoàn thành với lỗi: {error_msg}"
                 progress_data["status"] = "completed_with_error"
             else:
-                progress_data["message"] = "Tác vụ đã hoàn thành thành công"
+                if total_count is not None:
+                    progress_data["message"] = f"Tác vụ đã hoàn thành thành công. Đã tạo {total_count} item."
+                else:
+                    progress_data["message"] = "Tác vụ đã hoàn thành thành công"
                 progress_data["status"] = "completed"
 
             # Tạo Kafka message

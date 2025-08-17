@@ -560,6 +560,7 @@ class LessonPlanContentService:
             return {
                 "success": True,
                 "lesson_plan": processed_json,
+                "total_count": processing_result.get("nodes_processed", 0),
                 "statistics": {
                     "total_nodes": self._count_nodes(processed_json),
                     "content_nodes_processed": processing_result.get("nodes_processed", 0),

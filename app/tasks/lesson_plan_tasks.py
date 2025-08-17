@@ -129,6 +129,7 @@ def process_lesson_plan_content_generation(self, task_id: str) -> Dict[str, Any]
                         result=error_result,
                         lesson_id=lesson_id,
                         tool_log_id=tool_log_id
+                        # total_count=None for error cases
                     )
                     if success:
                         logger.info(f"✅ Fallback Kafka error notification sent for task {task_id}")
@@ -313,7 +314,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
             book_id=book_id,
             node_completion_callback=node_completion_callback
         )
-        logger.info(f"Content generation completed for task {task_id}: success={result.get('success')}")
+        logger.info(f"Content generation completed for task {task_id}: success={result.get('success')}, total_count={result.get('total_count')}")
 
         # Update progress: Content generation completed
         await mongodb_task_service.update_task_progress(
@@ -341,10 +342,14 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
             )
         
         # Prepare final result
+        total_count_value = result.get("total_count", result.get("statistics", {}).get("content_nodes_processed", 0))
+        logger.info(f"📊 Task {task_id} - Preparing final result with total_count: {total_count_value}")
+
         final_result = {
             "success": result["success"],
             "output": result.get("lesson_plan"),
             "statistics": result.get("statistics", {}),
+            "total_count": total_count_value,
             "task_id": task_id,
             "processing_info": {
                 "total_nodes_processed": result.get("statistics", {}).get("content_nodes_processed", 0),
@@ -375,7 +380,8 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
                     user_id=user_id,
                     result=final_result,
                     lesson_id=lesson_id,
-                    tool_log_id=tool_log_id
+                    tool_log_id=tool_log_id,
+                    total_count=total_count_value
                 )
                 if success:
                     logger.info(f"Sent final result to SpringBoot for task {task_id}")
@@ -422,6 +428,7 @@ async def _process_lesson_plan_content_generation_async(task_id: str) -> Dict[st
                     result=error_result,
                     lesson_id=lesson_id,
                     tool_log_id=tool_log_id
+                    # total_count=None for error cases
                 )
                 if success:
                     logger.info(f"✅ Sent error result to SpringBoot for task {task_id}")

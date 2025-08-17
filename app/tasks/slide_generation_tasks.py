@@ -90,12 +90,15 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
 
                 # Send final Kafka notification
                 if user_id:
+                    # Tính số slide đã tạo thành công
+                    slides_count = len(result.get("processed_template", {}).get("slides", []))
                     safe_kafka_call(
                         kafka_service.send_final_result_sync,
                         task_id=task_id,
                         user_id=user_id,
                         result=final_result,
-                        tool_log_id=tool_log_id
+                        tool_log_id=tool_log_id,
+                        total_count=slides_count  # Số slide đã tạo thành công
                     )
 
                 logger.info(f"✅ Task {task_id} hoàn thành thành công")
@@ -125,6 +128,7 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
                         user_id=user_id,
                         result=error_result,
                         tool_log_id=tool_log_id
+                        # total_count=None for error cases
                     )
 
                 logger.error(f"❌ Task {task_id} thất bại: {error_message}")
@@ -159,6 +163,7 @@ def process_json_template_task(self, task_id: str, lesson_id: str, template_json
                         user_id=user_id,
                         result=error_result,
                         tool_log_id=tool_log_id
+                        # total_count=None for error cases
                     )
 
             except Exception as update_error:
