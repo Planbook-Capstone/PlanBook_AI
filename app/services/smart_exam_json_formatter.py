@@ -48,7 +48,7 @@ class SmartExamJsonFormatter:
         """
         try:
             questions = exam_data.get("questions", [])
-            
+
             # Phân loại câu hỏi theo phần
             part_1_questions = [q for q in questions if q.get("part") == 1]
             part_2_questions = [q for q in questions if q.get("part") == 2]
@@ -56,20 +56,17 @@ class SmartExamJsonFormatter:
 
             parts = []
 
-            # PHẦN I: Trắc nghiệm nhiều phương án
-            if part_1_questions:
-                part_1 = self._format_part_1(part_1_questions)
-                parts.append(part_1)
+            # PHẦN I: Trắc nghiệm nhiều phương án (luôn có, kể cả khi rỗng)
+            part_1 = self._format_part_1(part_1_questions)
+            parts.append(part_1)
 
-            # PHẦN II: Câu hỏi Đúng/Sai
-            if part_2_questions:
-                part_2 = self._format_part_2(part_2_questions)
-                parts.append(part_2)
+            # PHẦN II: Câu hỏi Đúng/Sai (luôn có, kể cả khi rỗng)
+            part_2 = self._format_part_2(part_2_questions)
+            parts.append(part_2)
 
-            # PHẦN III: Câu hỏi tự luận
-            if part_3_questions:
-                part_3 = self._format_part_3(part_3_questions)
-                parts.append(part_3)
+            # PHẦN III: Câu hỏi tự luận (luôn có, kể cả khi rỗng)
+            part_3 = self._format_part_3(part_3_questions)
+            parts.append(part_3)
 
             return {
                 "parts": parts
@@ -77,17 +74,35 @@ class SmartExamJsonFormatter:
 
         except Exception as e:
             logger.error(f"Error formatting exam to JSON response: {e}")
+            # Trả về cấu trúc đầy đủ 3 phần rỗng khi có lỗi
             return {
-                "parts": []
+                "parts": [
+                    {
+                        "part": "PHẦN I",
+                        "title": "Câu trắc nghiệm nhiều phương án lựa chọn",
+                        "questions": []
+                    },
+                    {
+                        "part": "PHẦN II",
+                        "title": "Câu hỏi Đúng/Sai",
+                        "questions": []
+                    },
+                    {
+                        "part": "PHẦN III",
+                        "title": "Câu hỏi tự luận",
+                        "questions": []
+                    }
+                ]
             }
 
     def _format_part_1(self, questions: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Format PHẦN I: Trắc nghiệm nhiều phương án"""
         formatted_questions = []
-        
+
+        # Xử lý từng câu hỏi nếu có
         for i, question in enumerate(questions, 1):
             answer_data = question.get("answer", {})
-            
+
             # Tạo options từ A, B, C, D với chemistry format
             options = {}
             for option in ["A", "B", "C", "D"]:
@@ -115,25 +130,27 @@ class SmartExamJsonFormatter:
 
             formatted_questions.append(formatted_question)
 
+        # Luôn trả về cấu trúc phần, kể cả khi không có câu hỏi
         return {
             "part": "PHẦN I",
             "title": "Câu trắc nghiệm nhiều phương án lựa chọn",
-            "questions": formatted_questions
+            "questions": formatted_questions  # Sẽ là mảng rỗng nếu không có câu hỏi
         }
 
     def _format_part_2(self, questions: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Format PHẦN II: Câu hỏi Đúng/Sai"""
         formatted_questions = []
-        
+
+        # Xử lý từng câu hỏi nếu có
         for i, question in enumerate(questions, 1):
             answer_data = question.get("answer", {})
-            
+
             # Tạo statements từ a, b, c, d
             statements = {}
             for option in ["a", "b", "c", "d"]:
                 if option in answer_data:
                     option_data = answer_data[option]
-                    
+
                     if isinstance(option_data, dict):
                         # Format mới với content và evaluation
                         text = self._docx_service._normalize_chemistry_format(option_data.get("content", ""))
@@ -162,19 +179,21 @@ class SmartExamJsonFormatter:
 
             formatted_questions.append(formatted_question)
 
+        # Luôn trả về cấu trúc phần, kể cả khi không có câu hỏi
         return {
             "part": "PHẦN II",
             "title": "Câu hỏi Đúng/Sai",
-            "questions": formatted_questions
+            "questions": formatted_questions  # Sẽ là mảng rỗng nếu không có câu hỏi
         }
 
     def _format_part_3(self, questions: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Format PHẦN III: Câu hỏi tự luận"""
         formatted_questions = []
-        
+
+        # Xử lý từng câu hỏi nếu có
         for i, question in enumerate(questions, 1):
             answer_data = question.get("answer", {})
-            
+
             # Lấy đáp án từ các field có thể có
             answer = ""
             if isinstance(answer_data, dict):
@@ -195,10 +214,11 @@ class SmartExamJsonFormatter:
 
             formatted_questions.append(formatted_question)
 
+        # Luôn trả về cấu trúc phần, kể cả khi không có câu hỏi
         return {
             "part": "PHẦN III",
             "title": "Câu hỏi tự luận",
-            "questions": formatted_questions
+            "questions": formatted_questions  # Sẽ là mảng rỗng nếu không có câu hỏi
         }
 
 
