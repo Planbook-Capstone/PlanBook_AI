@@ -611,14 +611,15 @@ class QdrantService:
         book_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Lấy bài học từ Qdrant theo loại content và book_id
+        Lấy bài học từ Qdrant theo loại content và book_id - Optimized version
+        Chỉ lấy những thông tin cần thiết để tăng tốc độ response
 
         Args:
             content_type: Loại content ("textbook" hoặc "guide")
             book_id: ID của sách (optional, để filter theo book cụ thể)
 
         Returns:
-            Dict chứa danh sách bài học
+            Dict chứa danh sách bài học với thông tin cơ bản
         """
         from qdrant_client.http import models as qdrant_models
 
@@ -653,7 +654,8 @@ class QdrantService:
 
             for collection_name in target_collections:
                 try:
-                    # Tìm kiếm tất cả metadata points trong collection
+                    # Tối ưu: Chỉ lấy 1 metadata point đầu tiên từ mỗi collection
+                    # vì mỗi collection chỉ chứa 1 lesson/guide
                     search_result = self.qdrant_client.scroll(
                         collection_name=collection_name,
                         scroll_filter=qdrant_models.Filter(
@@ -664,27 +666,30 @@ class QdrantService:
                                 )
                             ]
                         ),
-                        limit=1000,  # Giới hạn số lượng kết quả
-                        with_payload=True
+                        limit=1,  # Chỉ lấy 1 record đầu tiên - tối ưu tốc độ
+                        with_payload=True,
+                        with_vectors=False  # Không cần vectors để tăng tốc
                     )
 
-                    # Xử lý kết quả
-                    for point in search_result[0]:  # search_result[0] chứa danh sách points
+                    # Xử lý kết quả - chỉ lấy point đầu tiên
+                    if search_result[0]:  # Nếu có kết quả
+                        point = search_result[0][0]  # Lấy point đầu tiên
                         payload = point.payload
 
+                        # Chỉ lấy những field cần thiết
                         lesson_info = {
                             "book_id": payload.get("book_id", ""),
                             "lesson_id": payload.get("lesson_id", ""),
                             "file_url": payload.get("file_url", ""),
-                            "uploaded_at": payload.get("uploaded_at", payload.get("processed_at", "")),  # Ưu tiên uploaded_at, fallback processed_at
-                            "processed_at": payload.get("processed_at", ""),  # Giữ lại để backward compatibility
-                            "content_type": payload.get("content_type", ""),
+                            "uploaded_at": payload.get("uploaded_at", payload.get("processed_at", "")),
+                            "processed_at": payload.get("processed_at", ""),
+                            "content_type": payload.get("content_type", content_type),
                             "collection_name": collection_name,
                             "total_chunks": payload.get("total_chunks", 0)
                         }
 
-                        # Chỉ thêm vào danh sách nếu có book_id
-                        if lesson_info["book_id"]:
+                        # Chỉ thêm vào danh sách nếu có book_id và lesson_id
+                        if lesson_info["book_id"] and lesson_info["lesson_id"]:
                             lessons.append(lesson_info)
 
                 except Exception as e:
