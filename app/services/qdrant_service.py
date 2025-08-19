@@ -654,8 +654,7 @@ class QdrantService:
 
             for collection_name in target_collections:
                 try:
-                    # Tối ưu: Chỉ lấy 1 metadata point đầu tiên từ mỗi collection
-                    # vì mỗi collection chỉ chứa 1 lesson/guide
+                    # Tối ưu: Lấy tất cả metadata points nhưng không lấy vectors để tăng tốc
                     search_result = self.qdrant_client.scroll(
                         collection_name=collection_name,
                         scroll_filter=qdrant_models.Filter(
@@ -666,14 +665,13 @@ class QdrantService:
                                 )
                             ]
                         ),
-                        limit=1,  # Chỉ lấy 1 record đầu tiên - tối ưu tốc độ
+                        limit=100,  # Tăng limit để lấy nhiều lessons trong 1 collection
                         with_payload=True,
                         with_vectors=False  # Không cần vectors để tăng tốc
                     )
 
-                    # Xử lý kết quả - chỉ lấy point đầu tiên
-                    if search_result[0]:  # Nếu có kết quả
-                        point = search_result[0][0]  # Lấy point đầu tiên
+                    # Xử lý tất cả metadata points trong collection
+                    for point in search_result[0]:  # search_result[0] chứa danh sách points
                         payload = point.payload
 
                         # Chỉ lấy những field cần thiết
