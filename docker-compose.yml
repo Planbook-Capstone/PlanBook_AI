@@ -18,6 +18,7 @@ services:
       - ./temp_uploads:/app/temp_uploads
       - ./logs:/app/logs
       - ./exports:/app/exports
+      - huggingface_cache:/home/planbook/.cache/huggingface
     depends_on:
       mongodb:
         condition: service_healthy
@@ -53,6 +54,7 @@ services:
       - ./temp_uploads:/app/temp_uploads
       - ./logs:/app/logs
       - ./exports:/app/exports
+      - huggingface_cache:/home/planbook/.cache/huggingface
     depends_on:
       - mongodb
       - redis
@@ -135,6 +137,7 @@ volumes:
   mongodb_data:
   redis_data:
   qdrant_data:
+  huggingface_cache:
 
 networks:
   planbook:

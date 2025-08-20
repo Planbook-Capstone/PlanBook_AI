@@ -48,8 +48,16 @@ RUN mkdir -p temp_uploads logs data exports \
  && find /app -name "*.pyc" -delete \
  && find /app -name "__pycache__" -type d -exec rm -rf {} + || true
 
-RUN groupadd -r planbook && useradd -r -g planbook planbook \
- && chown -R planbook:planbook /app /usr/local/nltk_data
+# Tạo user planbook với home directory và cache directories
+RUN groupadd -r planbook && useradd -r -g planbook -m planbook \
+ && mkdir -p /home/planbook/.cache/huggingface /home/planbook/.cache/torch \
+ && chown -R planbook:planbook /app /usr/local/nltk_data /home/planbook
+
+# Set environment variables for cache directories
+ENV HF_HOME=/home/planbook/.cache/huggingface \
+    TRANSFORMERS_CACHE=/home/planbook/.cache/huggingface \
+    TORCH_HOME=/home/planbook/.cache/torch
+
 USER planbook
 
 EXPOSE 8000 5555
