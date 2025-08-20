@@ -362,6 +362,94 @@ class BackgroundTaskProcessor:
 
         return task_id
 
+    async def update_textbook_content(
+        self,
+        lesson_id: str,
+        book_id: str,
+        pdf_content: bytes,
+        filename: str,
+    ) -> Dict[str, Any]:
+        """
+        Update nội dung textbook - Xóa lesson cũ và import lesson mới
+
+        Args:
+            lesson_id: ID của lesson cần update
+            book_id: ID của book chứa lesson
+            pdf_content: Nội dung file PDF mới
+            filename: Tên file PDF
+
+        Returns:
+            Dict chứa kết quả update với task_id để theo dõi tiến độ
+        """
+        try:
+            from app.services.qdrant_service import get_qdrant_service
+            from app.services.supabase_storage_service import get_supabase_storage_service
+
+            logger.info(f"Starting update for lesson_id: {lesson_id}, book_id: {book_id}, file: {filename}")
+
+            # Bước 1: Xóa lesson cũ sử dụng hàm có sẵn
+            qdrant_service = get_qdrant_service()
+
+            # Lấy file URLs cần xóa từ Supabase trước khi xóa khỏi Qdrant
+            file_urls = await qdrant_service.get_file_urls_for_deletion(book_id, lesson_id)
+
+            # Xóa files từ Supabase sử dụng service có sẵn
+            supabase_results = []
+            if file_urls:
+                try:
+                    supabase_service = get_supabase_storage_service()
+                    if supabase_service.is_available():
+                        for file_url in file_urls:
+                            delete_result = await supabase_service.delete_file_by_url(file_url)
+                            supabase_results.append({
+                                "file_url": file_url,
+                                "success": delete_result.get("success", False)
+                            })
+                except Exception as e:
+                    logger.warning(f"Error deleting old files from Supabase: {e}")
+
+            # Xóa lesson từ Qdrant sử dụng hàm có sẵn
+            delete_result = await qdrant_service.delete_lesson_in_book_clean(book_id, lesson_id)
+            logger.info(f"Deleted lesson result: {delete_result}")
+
+            # Bước 2: Tạo task import lesson mới sử dụng hàm có sẵn
+            logger.info(f"Creating new import task for lesson: {lesson_id}")
+            task_id = await self.create_quick_analysis_task(
+                pdf_content=pdf_content,
+                filename=filename,
+                book_id=book_id,
+                create_embeddings=True,
+                lesson_id=lesson_id,
+            )
+
+            return {
+                "success": True,
+                "operation": "update_lesson",
+                "task_id": task_id,
+                "lesson_id": lesson_id,
+                "book_id": book_id,
+                "filename": filename,
+                "status": "processing",
+                "message": f"Lesson '{lesson_id}' update started successfully. Old content deleted, new content processing.",
+                "delete_details": {
+                    "qdrant_result": delete_result,
+                    "supabase_files_deleted": len([r for r in supabase_results if r["success"]])
+                },
+                "endpoints": {
+                    "check_status": f"/api/v1/tasks/{task_id}/status",
+                    "get_result": f"/api/v1/tasks/{task_id}/result",
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"Error updating textbook content: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "lesson_id": lesson_id,
+                "book_id": book_id
+            }
+
     async def create_lesson_plan_content_task(
         self,
         lesson_plan_json: Dict[str, Any],
