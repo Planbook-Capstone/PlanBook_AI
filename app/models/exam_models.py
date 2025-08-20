@@ -33,7 +33,7 @@ class ExamStatistics(BaseModel):
     """Model cho thống kê đề thi"""
     tong_so_cau: int
     phan_bo_theo_loai: Dict[str, int]  # {"TN": 5, "DT": 3, "DS": 2, "TL": 0}
-    phan_bo_theo_muc_do: Dict[str, int]  # {"Nhận biết": 4, "Thông hiểu": 4, "Vận dụng": 2}
+    phan_bo_theo_muc_do: Dict[str, int]  # {"KNOWLEDGE": 4, "COMPREHENSION": 4, "APPLICATION": 2}
     phan_bo_theo_bai: Dict[str, int]  # {"Bài 1": 5, "Bài 2": 5}
 
 

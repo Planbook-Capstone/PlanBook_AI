@@ -24,11 +24,16 @@ class SmartExamJsonFormatter:
         Map cognitive_level từ smart exam sang DifficultyLevel enum
 
         Args:
-            cognitive_level: Mức độ nhận thức từ smart exam ("Biết", "Hiểu", "Vận_dụng")
+            cognitive_level: Mức độ nhận thức từ smart exam (DifficultyLevel values)
 
         Returns:
             str: DifficultyLevel value ("KNOWLEDGE", "COMPREHENSION", "APPLICATION")
         """
+        # Nếu đã là DifficultyLevel value thì trả về luôn
+        if cognitive_level in [DifficultyLevel.KNOWLEDGE.value, DifficultyLevel.COMPREHENSION.value, DifficultyLevel.APPLICATION.value]:
+            return cognitive_level
+
+        # Mapping cho backward compatibility với tiếng Việt cũ
         mapping = {
             "Biết": DifficultyLevel.KNOWLEDGE.value,
             "Hiểu": DifficultyLevel.COMPREHENSION.value,
@@ -120,7 +125,7 @@ class SmartExamJsonFormatter:
                 "answer": correct_answer,
                 "explanation": self._docx_service._normalize_chemistry_format(question.get("explanation", "")),
                 "difficultyLevel": self._map_cognitive_level_to_difficulty(
-                    question.get("cognitive_level", "Biết")
+                    question.get("cognitive_level", DifficultyLevel.KNOWLEDGE.value)
                 )
             }
 
@@ -208,7 +213,7 @@ class SmartExamJsonFormatter:
                 "answer": answer,  # Đáp án số không cần format chemistry
                 "explanation": self._docx_service._normalize_chemistry_format(question.get("explanation", "")),
                 "difficultyLevel": self._map_cognitive_level_to_difficulty(
-                    question.get("cognitive_level", "Biết")
+                    question.get("cognitive_level", DifficultyLevel.KNOWLEDGE.value)
                 )
             }
 

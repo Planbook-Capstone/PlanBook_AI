@@ -5,22 +5,21 @@ Models cho hệ thống sinh đề thi thông minh theo chuẩn THPT 2025
 from pydantic import BaseModel, Field, validator
 from typing import Dict, Any, List, Optional, Literal
 from datetime import datetime
+from app.constants.difficulty_levels import DifficultyLevel
 
 
 class ObjectivesModel(BaseModel):
     """Model cho mức độ nhận thức trong từng phần"""
-    Biết: int = Field(0, ge=0, description="Số câu hỏi mức độ Biết")
-    Hiểu: int = Field(0, ge=0, description="Số câu hỏi mức độ Hiểu") 
-    Vận_dụng: int = Field(0, ge=0, description="Số câu hỏi mức độ Vận dụng")
+    KNOWLEDGE: int = Field(0, ge=0, description="Số câu hỏi mức độ Nhận biết")
+    COMPREHENSION: int = Field(0, ge=0, description="Số câu hỏi mức độ Thông hiểu")
+    APPLICATION: int = Field(0, ge=0, description="Số câu hỏi mức độ Vận dụng")
 
     class Config:
-        # Cho phép sử dụng alias để map từ "Vận dụng" sang "Vận_dụng"
-        allow_population_by_field_name = True
         schema_extra = {
             "example": {
-                "Biết": 2,
-                "Hiểu": 1,
-                "Vận_dụng": 0
+                "KNOWLEDGE": 2,
+                "COMPREHENSION": 1,
+                "APPLICATION": 0
             }
         }
 
@@ -55,7 +54,7 @@ class LessonMatrixModel(BaseModel):
         # Kiểm tra ít nhất một phần phải có câu hỏi
         total_questions = 0
         for part in v:
-            part_total = part.objectives.Biết + part.objectives.Hiểu + part.objectives.Vận_dụng
+            part_total = part.objectives.KNOWLEDGE + part.objectives.COMPREHENSION + part.objectives.APPLICATION
             total_questions += part_total
 
         if total_questions == 0:
@@ -125,25 +124,25 @@ class SmartExamRequest(BaseModel):
                             {
                                 "part": 1,
                                 "objectives": {
-                                    "Biết": 2,
-                                    "Hiểu": 0,
-                                    "Vận_dụng": 0
+                                    "KNOWLEDGE": 2,
+                                    "COMPREHENSION": 0,
+                                    "APPLICATION": 0
                                 }
                             },
                             {
                                 "part": 2,
                                 "objectives": {
-                                    "Biết": 0,
-                                    "Hiểu": 3,
-                                    "Vận_dụng": 0
+                                    "KNOWLEDGE": 0,
+                                    "COMPREHENSION": 3,
+                                    "APPLICATION": 0
                                 }
                             },
                             {
                                 "part": 3,
                                 "objectives": {
-                                    "Biết": 0,
-                                    "Hiểu": 1,
-                                    "Vận_dụng": 1
+                                    "KNOWLEDGE": 0,
+                                    "COMPREHENSION": 1,
+                                    "APPLICATION": 1
                                 }
                             }
                         ]
@@ -225,9 +224,9 @@ class ExamStatistics(BaseModel):
                 "part_3_questions": 6,
                 "lessons_used": 2,
                 "difficulty_distribution": {
-                    "Biết": 12,
-                    "Hiểu": 10,
-                    "Vận_dụng": 6
+                    "KNOWLEDGE": 12,
+                    "COMPREHENSION": 10,
+                    "APPLICATION": 6
                 },
                 "generation_time": 45.2,
                 "created_at": "2025-06-28T14:30:22"

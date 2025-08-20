@@ -11,6 +11,7 @@ from datetime import datetime
 from app.models.smart_exam_models import SmartExamRequest, ExamStatistics
 from app.services.openrouter_service import get_openrouter_service
 from app.core.config import settings
+from app.constants.difficulty_levels import DifficultyLevel
 
 logger = logging.getLogger(__name__)
 
@@ -137,24 +138,30 @@ class SmartExamGenerationService:
 
             # Tạo câu hỏi theo ma trận đa dạng THPT 2025 - hỗ trợ tất cả mức độ cho Phần 1 và 2
             if part_num == 1:
-                # Phần I: Trắc nghiệm nhiều lựa chọn - hỗ trợ Biết, Hiểu, Vận dụng
-                for level, count in [("Biết", objectives.Biết), ("Hiểu", objectives.Hiểu), ("Vận_dụng", objectives.Vận_dụng)]:
+                # Phần I: Trắc nghiệm nhiều lựa chọn - hỗ trợ KNOWLEDGE, COMPREHENSION, APPLICATION
+                for level, count in [(DifficultyLevel.KNOWLEDGE.value, objectives.KNOWLEDGE),
+                                   (DifficultyLevel.COMPREHENSION.value, objectives.COMPREHENSION),
+                                   (DifficultyLevel.APPLICATION.value, objectives.APPLICATION)]:
                     if count > 0:
                         level_questions = await self._generate_questions_for_level(
                             part_num, level, count, lesson_data, subject, lesson_id, question_callback
                         )
                         part_questions.extend(level_questions)
             elif part_num == 2:
-                # Phần II: Trắc nghiệm Đúng/Sai - hỗ trợ Biết, Hiểu, Vận dụng
-                for level, count in [("Biết", objectives.Biết), ("Hiểu", objectives.Hiểu), ("Vận_dụng", objectives.Vận_dụng)]:
+                # Phần II: Trắc nghiệm Đúng/Sai - hỗ trợ KNOWLEDGE, COMPREHENSION, APPLICATION
+                for level, count in [(DifficultyLevel.KNOWLEDGE.value, objectives.KNOWLEDGE),
+                                   (DifficultyLevel.COMPREHENSION.value, objectives.COMPREHENSION),
+                                   (DifficultyLevel.APPLICATION.value, objectives.APPLICATION)]:
                     if count > 0:
                         level_questions = await self._generate_questions_for_level(
                             part_num, level, count, lesson_data, subject, lesson_id, question_callback
                         )
                         part_questions.extend(level_questions)
             elif part_num == 3:
-                # Phần III: Tự luận tính toán - hỗ trợ Biết, Hiểu, Vận dụng
-                for level, count in [("Biết", objectives.Biết), ("Hiểu", objectives.Hiểu), ("Vận_dụng", objectives.Vận_dụng)]:
+                # Phần III: Tự luận tính toán - hỗ trợ KNOWLEDGE, COMPREHENSION, APPLICATION
+                for level, count in [(DifficultyLevel.KNOWLEDGE.value, objectives.KNOWLEDGE),
+                                   (DifficultyLevel.COMPREHENSION.value, objectives.COMPREHENSION),
+                                   (DifficultyLevel.APPLICATION.value, objectives.APPLICATION)]:
                     if count > 0:
                         level_questions = await self._generate_questions_for_level(
                             part_num, level, count, lesson_data, subject, lesson_id, question_callback
@@ -1197,26 +1204,26 @@ Lưu ý: Chỉ trả về JSON sau khi đã VALIDATION HOÀN TOÀN. KHÔNG ĐƯ�
     def _get_reverse_thinking_requirements(self, level: str) -> str:
         """Yêu cầu cụ thể cho từng mức độ trong tư duy ngược"""
         requirements = {
-            "Biết": """
+            DifficultyLevel.KNOWLEDGE.value: """
 - Đáp án: Số đơn giản <5 ký tự, chính xác theo tính toán hóa học
 - Bối cảnh: Áp dụng trực tiếp công thức cơ bản (n=m/M, C=n/V, pH=-log[H⁺])
 - Ví dụ đáp án hợp lệ: "2.24", "5.6", "12", "0.5", "22.4"
 - Điều chỉnh dữ kiện để đáp án <5 ký tự
 """,
-            "Hiểu": """
+            DifficultyLevel.COMPREHENSION.value: """
 - Đáp án: Số vừa phải <5 ký tự, chính xác theo tính toán hóa học
 - Bối cảnh: Cần hiểu bản chất phản ứng, áp dụng 2-3 bước tính toán
 - Ví dụ đáp án hợp lệ: "16.2", "1.25", "48.6", "3.75"
 - Điều chỉnh dữ kiện để đáp án <5 ký tự
 """,
-            "Vận_dụng": """
+            DifficultyLevel.APPLICATION.value: """
 - Đáp án: Số phức tạp <5 ký tự, chính xác theo tính toán hóa học
 - Bối cảnh: Bài toán nhiều bước, hiệu suất, hỗn hợp, quy trình công nghiệp
 - Ví dụ đáp án hợp lệ: "125", "87.5", "2450", "67.8"
 - Điều chỉnh dữ kiện để đáp án <5 ký tự
 """
         }
-        return requirements.get(level, requirements["Biết"])
+        return requirements.get(level, requirements[DifficultyLevel.KNOWLEDGE.value])
 
     def _create_chemistry_expert_prompt(self, question: Dict[str, Any], lesson_data: Dict[str, Any]) -> str:
         """Tạo prompt cho chuyên gia hóa học xác minh câu hỏi"""
@@ -1547,9 +1554,9 @@ Lưu ý: Chỉ trả về JSON, tập trung vào việc cải thiện chất lư
 
         # Part descriptions theo chuẩn THPT 2025 - đa dạng mức độ
         part_descriptions = {
-            1: "PART I: Trắc nghiệm nhiều lựa chọn (A, B, C, D) - Hỗ trợ mức độ BIẾT, HIỂU, VẬN DỤNG: 18 câu đa dạng từ nhận biết đến tính toán đơn giản",
-            2: "PART II: Trắc nghiệm Đúng/Sai - Hỗ trợ mức độ BIẾT, HIỂU, VẬN DỤNG: 4 câu lớn, mỗi câu có 4 phát biểu a,b,c,d để đánh giá",
-            3: "PART III: Tự luận tính toán - Hỗ trợ mức độ BIẾT, HIỂU, VẬN DỤNG: Bài toán tính toán từ cơ bản đến phức tạp, đòi hỏi tư duy và tổng hợp kiến thức"
+            1: "PART I: Trắc nghiệm nhiều lựa chọn (A, B, C, D) - Hỗ trợ mức độ KNOWLEDGE, COMPREHENSION, APPLICATION: 18 câu đa dạng từ nhận biết đến tính toán đơn giản",
+            2: "PART II: Trắc nghiệm Đúng/Sai - Hỗ trợ mức độ KNOWLEDGE, COMPREHENSION, APPLICATION: 4 câu lớn, mỗi câu có 4 phát biểu a,b,c,d để đánh giá",
+            3: "PART III: Tự luận tính toán - Hỗ trợ mức độ KNOWLEDGE, COMPREHENSION, APPLICATION: Bài toán tính toán từ cơ bản đến phức tạp, đòi hỏi tư duy và tổng hợp kiến thức"
         }
 
         prompt = f"""
@@ -1598,18 +1605,18 @@ VALIDATION NGHIÊM NGẶT - PHẢI KIỂM TRA:
     def _get_part_description(self, part_num: int) -> str:
         """Get detailed description for each part theo chuẩn THPT 2025"""
         descriptions = {
-            1: "Trắc nghiệm nhiều phương án (Hỗ trợ BIẾT, HIỂU, VẬN DỤNG)",
-            2: "Trắc nghiệm đúng/sai (Hỗ trợ BIẾT, HIỂU, VẬN DỤNG)",
-            3: "Tự luận tính toán (Hỗ trợ BIẾT, HIỂU, VẬN DỤNG)"
+            1: "Trắc nghiệm nhiều phương án (Hỗ trợ KNOWLEDGE, COMPREHENSION, APPLICATION)",
+            2: "Trắc nghiệm đúng/sai (Hỗ trợ KNOWLEDGE, COMPREHENSION, APPLICATION)",
+            3: "Tự luận tính toán (Hỗ trợ KNOWLEDGE, COMPREHENSION, APPLICATION)"
         }
         return descriptions.get(part_num, "")
 
     def _get_specific_instructions_by_part(self, part_num: int, level: str) -> str:
         """Hướng dẫn cụ thể cho từng phần theo chuẩn THPT 2025"""
         if part_num == 1:
-            if level == "Biết":
+            if level == DifficultyLevel.KNOWLEDGE.value:
                 return """
-HƯỚNG DẪN PHẦN I - MỨC ĐỘ BIẾT:
+HƯỚNG DẪN PHẦN I - MỨC ĐỘ KNOWLEDGE:
 - Mỗi câu có 4 phương án A, B, C, D với chỉ 1 đáp án đúng
 - Kiểm tra kiến thức lý thuyết nền tảng và khả năng nhận biết các khái niệm cơ bản
 Có thể tham khảo các dạng bên dưới:
@@ -1629,9 +1636,9 @@ DẠNG 3: Nhận biết ứng dụng, vai trò trong đời sống
 - Tác hại và biện pháp phòng chống ô nhiễm
 - Ví dụ: "Chất nào được dùng làm chất tẩy rửa?"
 """
-            elif level == "Hiểu":
+            elif level == DifficultyLevel.COMPREHENSION.value:
                 return """
-HƯỚNG DẪN PHẦN I - MỨC ĐỘ HIỂU (THÔNG HIỂU):
+HƯỚNG DẪN PHẦN I - MỨC ĐỘ COMPREHENSION:
 - Mỗi câu có 4 phương án A, B, C, D với chỉ 1 đáp án đúng
 - Yêu cầu giải thích, so sánh, hoặc áp dụng trực tiếp một khái niệm đã học
 Có thể tham khảo các dạng bên dưới:
@@ -1652,9 +1659,9 @@ DẠNG 4: Danh pháp và Cấu tạo
 - Cho công thức cấu tạo và yêu cầu gọi tên hợp chất hoặc ngược lại
 - Ví dụ: "Hợp chất CH₃-CH(CH₃)-COOH có tên gọi là gì?"
 """
-            elif level == "Vận_dụng":
+            elif level == DifficultyLevel.APPLICATION.value:
                 return """
-HƯỚNG DẪN PHẦN I - MỨC ĐỘ VẬN DỤNG:
+HƯỚNG DẪN PHẦN I - MỨC ĐỘ APPLICATION:
 - Mỗi câu có 4 phương án A, B, C, D với chỉ 1 đáp án đúng
 - Yêu cầu tính toán đơn giản hoặc giải quyết bài toán một hoặc hai bước
 Có thể tham khảo các dạng bên dưới:
@@ -1674,9 +1681,9 @@ DẠNG 3: Xác định công thức phân tử đơn giản
 - Ví dụ: "Đốt cháy hoàn toàn một hiđrocacbon X thu được 4,48 lít CO₂ (đktc) và 3,6 gam H₂O. Tìm công thức phân tử của X."
 """
         elif part_num == 2:
-            if level == "Biết":
+            if level == DifficultyLevel.KNOWLEDGE.value:
                 return """
-HƯỚNG DẪN PHẦN II - MỨC ĐỘ BIẾT:
+HƯỚNG DẪN PHẦN II - MỨC ĐỘ KNOWLEDGE:
 - Tạo câu hỏi chính về một chất hoặc khái niệm cơ bản
 - Sau đó có 4 phát biểu a), b), c), d) để đánh giá đúng/sai
 - Kiểm tra kiến thức lý thuyết nền tảng dưới dạng đúng/sai
@@ -1691,9 +1698,9 @@ DẠNG 1: Chùm phát biểu về định nghĩa và tính chất cơ bản
 
 Format answer: {"a": {"content": "Nội dung phát biểu a", "evaluation": "Đúng/Sai"}, ...}
 """
-            elif level == "Hiểu":
+            elif level == DifficultyLevel.COMPREHENSION.value:
                 return """
-HƯỚNG DẪN PHẦN II - MỨC ĐỘ HIỂU (THÔNG HIỂU):
+HƯỚNG DẪN PHẦN II - MỨC ĐỘ COMPREHENSION:
 
 - Tạo câu hỏi chính về một chất hoặc tình huống cụ thể
 - Sau đó có 4 phát biểu a), b), c), d) để đánh giá đúng/sai
@@ -1710,9 +1717,9 @@ DẠNG 1: Chùm phát biểu về một chất cụ thể
 
 Format answer: {"a": {"content": "Nội dung phát biểu a", "evaluation": "Đúng/Sai"}, ...}
 """
-            elif level == "Vận_dụng":
+            elif level == DifficultyLevel.APPLICATION.value:
                 return """
-HƯỚNG DẪN PHẦN II - MỨC ĐỘ VẬN DỤNG:
+HƯỚNG DẪN PHẦN II - MỨC ĐỘ APPLICATION:
 - Tạo câu hỏi chính về một tình huống thực tiễn hoặc thí nghiệm
 - Sau đó có 4 phát biểu a), b), c), d) để đánh giá đúng/sai
 - Yêu cầu khả năng liên kết kiến thức với thực tiễn hoặc phân tích các bước trong quy trình
@@ -1746,9 +1753,9 @@ Format answer: {"a": {"content": "Nội dung phát biểu a", "evaluation": "Đ�
 """
         elif part_num == 3:
             # PHẦN III - TỰ LUẬN TÍNH TOÁN - HỖ TRỢ TẤT CẢ MỨC ĐỘ
-            if level == "Biết":
+            if level == DifficultyLevel.KNOWLEDGE.value:
                 return """
-HƯỚNG DẪN PHẦN III - MỨC ĐỘ BIẾT:
+HƯỚNG DẪN PHẦN III - MỨC ĐỘ KNOWLEDGE:
 - Câu hỏi tự luận đơn giản, áp dụng trực tiếp công thức cơ bản
 - Đáp án là số thực dương, thường có giá trị đơn giản
 Có thể tham khảo các dạng bên dưới:
@@ -1761,9 +1768,9 @@ DẠNG 2: Tính toán theo phương trình hóa học đơn giản
 
 Yêu cầu: Đáp án phải là số cụ thể, sử dụng công thức cơ bản.
 """
-            elif level == "Hiểu":
+            elif level == DifficultyLevel.COMPREHENSION.value:
                 return """
-HƯỚNG DẪN PHẦN III - MỨC ĐỘ HIỂU:
+HƯỚNG DẪN PHẦN III - MỨC ĐỘ COMPREHENSION:
 - Câu hỏi tự luận yêu cầu hiểu bản chất phản ứng và áp dụng công thức phù hợp
 - Đáp án là số thực dương, có thể cần 2-3 bước tính toán
 Có thể tham khảo các dạng bên dưới:
@@ -1776,9 +1783,9 @@ DẠNG 2: Bài toán dung dịch cơ bản
 
 Yêu cầu: Đáp án phải là số cụ thể, cần hiểu bản chất để chọn công thức đúng.
 """
-            elif level == "Vận_dụng":
+            elif level == DifficultyLevel.APPLICATION.value:
                 return """
-HƯỚNG DẪN PHẦN III - MỨC ĐỘ VẬN DỤNG:
+HƯỚNG DẪN PHẦN III - MỨC ĐỘ APPLICATION:
 - Câu hỏi yêu cầu áp dụng công thức và giải quyết bài toán nhiều bước trong bối cảnh quen thuộc
 - Đáp án là số thực dương, thường có giá trị lớn (kg, tấn, %, mol)
 Có thể tham khảo các dạng bên dưới:
@@ -1898,13 +1905,17 @@ Yêu cầu: Sử dụng phương pháp bảo toàn electron, phân tích kỹ l�
         try:
             # Đếm câu hỏi theo phần
             part_counts = {1: 0, 2: 0, 3: 0}
-            difficulty_counts = {"Biết": 0, "Hiểu": 0, "Vận_dụng": 0}
+            difficulty_counts = {
+                DifficultyLevel.KNOWLEDGE.value: 0,
+                DifficultyLevel.COMPREHENSION.value: 0,
+                DifficultyLevel.APPLICATION.value: 0
+            }
             
             for question in questions:
                 part = question.get("part", 1)
                 part_counts[part] += 1
 
-                level = question.get("cognitive_level", "Biết")
+                level = question.get("cognitive_level", DifficultyLevel.KNOWLEDGE.value)
                 if level in difficulty_counts:
                     difficulty_counts[level] += 1
 
@@ -1927,7 +1938,11 @@ Yêu cầu: Sử dụng phương pháp bảo toàn electron, phân tích kỹ l�
                 part_2_questions=0,
                 part_3_questions=0,
                 lessons_used=0,
-                difficulty_distribution={"Biết": 0, "Hiểu": 0, "Vận_dụng": 0},
+                difficulty_distribution={
+                    DifficultyLevel.KNOWLEDGE.value: 0,
+                    DifficultyLevel.COMPREHENSION.value: 0,
+                    DifficultyLevel.APPLICATION.value: 0
+                },
                 generation_time=generation_time,
                 created_at=datetime.now().isoformat()
             )

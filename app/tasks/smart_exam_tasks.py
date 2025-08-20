@@ -16,6 +16,7 @@ from app.services.smart_exam_docx_service import smart_exam_docx_service
 from app.services.google_drive_service import get_google_drive_service
 from app.services.kafka_service import kafka_service, safe_kafka_call
 from app.models.smart_exam_models import SmartExamRequest
+from app.constants.difficulty_levels import DifficultyLevel
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +263,7 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
         total_questions = 0
         for lesson in exam_request.matrix:
             for part in lesson.parts:
-                total_questions += part.objectives.Biết + part.objectives.Hiểu + part.objectives.Vận_dụng
+                total_questions += part.objectives.KNOWLEDGE + part.objectives.COMPREHENSION + part.objectives.APPLICATION
 
         await progress_callback(15, f"Tìm thấy {total_lessons} bài học, tổng {total_questions} câu hỏi cần tạo")
 
@@ -322,7 +323,7 @@ async def _process_smart_exam_generation_async(task_id: str) -> Dict[str, Any]:
         for lesson_matrix in exam_request.matrix:
             for part in lesson_matrix.parts:
                 objectives = part.objectives
-                total_questions_needed += objectives.Biết + objectives.Hiểu + objectives.Vận_dụng
+                total_questions_needed += objectives.KNOWLEDGE + objectives.COMPREHENSION + objectives.APPLICATION
 
         logger.info(f"📊 Total questions needed: {total_questions_needed}")
 
