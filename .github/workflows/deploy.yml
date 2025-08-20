@@ -23,15 +23,26 @@ jobs:
           port: 22
           command_timeout: 60m
           script: |
-            echo " Moving to project folder"
+            echo "📂 Moving to project folder"
             cd PlanBook_AI || exit 1
 
-            echo " Pulling latest code"
+            echo "📊 Checking disk space before deployment..."
+            df -h
+
+            echo "🧹 Cleaning up Docker to free space..."
+            docker system prune -f --volumes || true
+            docker builder prune -f || true
+            docker image prune -a -f || true
+
+            echo "📊 Disk space after cleanup:"
+            df -h
+
+            echo "📥 Pulling latest code"
             git reset --hard
             git pull origin master || git pull origin main
 
-            echo "🏗️ Building new Docker images (keeping old containers running)..."
-            if ! docker compose -f docker-compose.yml build; then
+            echo "🏗️ Building new Docker images with optimized settings..."
+            if ! docker compose -f docker-compose.yml build --no-cache --parallel; then
               echo "❌ Build failed. Keeping current containers running."
               exit 1
             fi
@@ -48,7 +59,11 @@ jobs:
             for i in {1..15}; do
               if curl -fs http://localhost:8000/health; then
                 echo "✅ Deployment successful!"
+                echo "🧹 Final cleanup..."
                 docker image prune -f
+                docker container prune -f
+                echo "📊 Final disk usage:"
+                df -h
                 exit 0
               fi
               echo "⏳ Waiting... ($i/15)"
@@ -57,4 +72,6 @@ jobs:
 
             echo "❌ Health check failed. Rolling back..."
             docker compose -f docker-compose.yml down
+            echo "🧹 Cleanup after failed deployment..."
+            docker system prune -f
             exit 1

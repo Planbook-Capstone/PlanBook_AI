@@ -63,12 +63,17 @@ COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 
 # Download only essential NLTK data
-RUN python -c "import nltk; import ssl; \
-    try: _create_unverified_https_context = ssl._create_unverified_context; \
-    except AttributeError: pass; \
-    else: ssl._create_default_https_context = _create_unverified_https_context; \
-    nltk.download('punkt', download_dir='/usr/local/nltk_data'); \
-    nltk.download('stopwords', download_dir='/usr/local/nltk_data')" \
+RUN python -c "\
+import nltk; \
+import ssl; \
+try: \
+    _create_unverified_https_context = ssl._create_unverified_context; \
+except AttributeError: \
+    pass; \
+else: \
+    ssl._create_default_https_context = _create_unverified_https_context; \
+nltk.download('punkt', download_dir='/usr/local/nltk_data'); \
+nltk.download('stopwords', download_dir='/usr/local/nltk_data')" \
     && rm -rf /tmp/* /var/tmp/*
 
 # Copy application code selectively (excluding files in .dockerignore)
