@@ -641,6 +641,7 @@ async def health_check():
                 "/search",  # Global content search with book_id/lesson_id filters
                 "/update-lesson-id",  # PUT: Update lesson_id in book
                 "/update-book-id",  # PUT: Update book_id in Qdrant
+                "/update",  # PUT: Update lesson content with new PDF
                 "/textbook",  # DELETE: Flexible textbook deletion
                 "/health",
             ],
@@ -655,7 +656,8 @@ async def health_check():
                 "7": "Global search: GET /search?query=your_query&book_id=book123&lesson_id=lesson456",
                 "8": "Update lesson_id: PUT /update-lesson-id?book_id=xxx&old_lesson_id=yyy&new_lesson_id=zzz",
                 "9": "Update book_id: PUT /update-book-id?old_book_id=xxx&new_book_id=yyy",
-                "10": "Delete textbook: DELETE /textbook?textbook_id=your_id OR DELETE /textbook?lesson_id=your_lesson_id"
+                "10": "Update lesson content: PUT /update (with lesson_id, book_id, and new PDF file)",
+                "11": "Delete textbook: DELETE /textbook?textbook_id=your_id OR DELETE /textbook?lesson_id=your_lesson_id"
             },
         }
     except Exception as e:
@@ -760,6 +762,68 @@ async def update_book_id(
         raise
     except Exception as e:
         logger.error(f"Error updating book_id: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.put("", response_model=Dict[str, Any])
+async def update_textbook_content(
+    lesson_id: str = Form(..., description="ID của lesson cần update"),
+    book_id: str = Form(..., description="ID của book chứa lesson"),
+    file: UploadFile = File(..., description="File PDF mới để thay thế")
+) -> Dict[str, Any]:
+    """
+    Update nội dung textbook - Xóa lesson cũ và import lesson mới
+
+    Endpoint này sẽ:
+    1. Xóa toàn bộ thông tin lesson cũ trong vector database
+    2. Upload và phân tích file PDF mới
+    3. Tạo embeddings và lưu vào collection với lesson_id và book_id đã cho
+
+    Args:
+        lesson_id: ID của lesson cần update
+        book_id: ID của book chứa lesson
+        file: File PDF mới để thay thế
+
+    Returns:
+        Dict chứa kết quả update với task_id để theo dõi tiến độ
+
+    Examples:
+        PUT /api/v1/pdf/update
+        Form data:
+        - lesson_id: hoa12_bai1
+        - book_id: hoa12
+        - file: new_lesson.pdf
+    """
+    try:
+        # Validate file type
+        if not file.filename or not file.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+        # Read file content
+        file_content = await file.read()
+        if len(file_content) == 0:
+            raise HTTPException(status_code=400, detail="Empty file uploaded")
+
+        # Gọi service để xử lý update
+        result = await get_background_task_processor().update_textbook_content(
+            lesson_id=lesson_id,
+            book_id=book_id,
+            pdf_content=file_content,
+            filename=file.filename
+        )
+
+        if not result.get("success"):
+            raise HTTPException(
+                status_code=500,
+                detail=result.get("error", "Failed to update textbook content")
+            )
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in update endpoint: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
