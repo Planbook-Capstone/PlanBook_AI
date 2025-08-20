@@ -155,14 +155,14 @@ async def quick_textbook_analysis(
 @router.get("/lessons", response_model=Dict[str, Any])
 async def get_all_lessons(
     book_id: Optional[str] = None,
-    lessonsID: Optional[Any] = Query(None, description="ID của bài học cụ thể cần lấy thông tin")
+    lesson_id: Optional[Any] = Query(None, description="ID của bài học cụ thể cần lấy thông tin")
 ) -> Dict[str, Any]:
     """
     Lấy tất cả bài học textbook từ Qdrant hoặc thông tin bài học cụ thể
 
     Endpoint này trả về:
-    - Nếu có lessonsID: Thông tin chi tiết của bài học cụ thể (limit 1), chủ yếu để lấy file_url
-    - Nếu không có lessonsID: Danh sách tất cả bài học textbook đã được import vào hệ thống
+    - Nếu có lesson_id: Thông tin chi tiết của bài học cụ thể (limit 1), chủ yếu để lấy file_url
+    - Nếu không có lesson_id: Danh sách tất cả bài học textbook đã được import vào hệ thống
 
     Thông tin trả về bao gồm:
     - bookId: ID của sách
@@ -175,7 +175,7 @@ async def get_all_lessons(
 
     Args:
         book_id: Optional - Filter theo book ID cụ thể
-        lessonsID: Optional - ID của bài học cụ thể cần lấy thông tin
+        lesson_id: Optional - ID của bài học cụ thể cần lấy thông tin
 
     Returns:
         Dict chứa thông tin bài học hoặc danh sách bài học textbook
@@ -183,24 +183,24 @@ async def get_all_lessons(
     Examples:
         curl -X GET "http://localhost:8000/api/v1/pdf/lessons"
         curl -X GET "http://localhost:8000/api/v1/pdf/lessons?book_id=hoa12"
-        curl -X GET "http://localhost:8000/api/v1/pdf/lessons?lessonsID=hoa12_bai1"
+        curl -X GET "http://localhost:8000/api/v1/pdf/lessons?lesson_id=hoa12_bai1"
     """
     try:
         from app.services.qdrant_service import get_qdrant_service
 
         qdrant_service = get_qdrant_service()
 
-        # Nếu có lessonsID, lấy thông tin bài học cụ thể
-        if lessonsID:
-            logger.info(f"Getting specific lesson info for lessonsID: {lessonsID}" + (f" in book_id: {book_id}" if book_id else ""))
+        # Nếu có lesson_id, lấy thông tin bài học cụ thể
+        if lesson_id:
+            logger.info(f"Getting specific lesson info for lesson_id: {lesson_id}" + (f" in book_id: {book_id}" if book_id else ""))
             # Truyền book_id vào hàm để tối ưu hóa tìm kiếm
-            result = await qdrant_service.get_lesson_info_by_lesson_id(lessonsID, book_id=book_id)
+            result = await qdrant_service.get_lesson_info_by_lesson_id(lesson_id, book_id=book_id)
 
             if not result.get("success"):
                 if "not found" in result.get("error", "").lower():
                     raise HTTPException(
                         status_code=404,
-                        detail=f"Lesson with ID '{lessonsID}' not found" + (f" in book '{book_id}'" if book_id else "")
+                        detail=f"Lesson with ID '{lesson_id}' not found" + (f" in book '{book_id}'" if book_id else "")
                     )
                 else:
                     raise HTTPException(
@@ -217,14 +217,14 @@ async def get_all_lessons(
                     "total_lessons": 1 if lesson_data else 0,
                     "collections_processed": 1,
                     "content_type": "textbook",
-                    "lesson_id": lessonsID,
+                    "lesson_id": lesson_id,
                     "book_id": book_id,
                     "specific_lesson": True
                 },
-                "message": f"Retrieved lesson '{lessonsID}' successfully" + (f" from book '{book_id}'" if book_id else "")
+                "message": f"Retrieved lesson '{lesson_id}' successfully" + (f" from book '{book_id}'" if book_id else "")
             }
 
-        # Nếu không có lessonsID, lấy tất cả bài học
+        # Nếu không có lesson_id, lấy tất cả bài học
         logger.info(f"Getting textbook lessons from Qdrant" + (f" for book_id={book_id}" if book_id else "..."))
         result = await qdrant_service.get_lessons_by_type(content_type="textbook", book_id=book_id)
 
@@ -421,7 +421,7 @@ async def search_all_textbooks(
 
 
 
-@router.get("/textbook/{book_id}/info", response_model=Dict[str, Any])
+# @router.get("/textbook/{book_id}/info", response_model=Dict[str, Any])
 async def get_textbook_info(book_id: str) -> Dict[str, Any]:
     """
     Lấy thông tin chi tiết về textbook theo book_id với metadata đầy đủ
@@ -502,7 +502,7 @@ async def get_textbook_lessons(book_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.get("/lesson/{lesson_id}/check", response_model=Dict[str, Any])
+# @router.get("/lesson/{lesson_id}/check", response_model=Dict[str, Any])
 async def check_lesson_id_exists(lesson_id: str) -> Dict[str, Any]:
     """
     Kiểm tra lesson_id đã tồn tại chưa
@@ -548,7 +548,7 @@ async def check_lesson_id_exists(lesson_id: str) -> Dict[str, Any]:
             "lesson_id": lesson_id
         }
 
-@router.get("/lesson/{lesson_id}/info", response_model=Dict[str, Any])
+# @router.get("/lesson/{lesson_id}/info", response_model=Dict[str, Any])
 async def get_lesson_info(lesson_id: str) -> Dict[str, Any]:
     """
     Lấy thông tin chi tiết về lesson theo lesson_id
