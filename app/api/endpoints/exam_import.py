@@ -103,7 +103,7 @@ async def import_exam_from_docx(
             )
         
         # 3. Import và xử lý file
-        logger.info(f"Processing DOCX file... (staff_import={staff_import})")
+        logger.info(f"Đang xử lý file DOCX... (staff_import={staff_import})")
         try:
             import_service = get_exam_import_service()
             result = await import_service.import_exam_from_docx_content(
@@ -159,7 +159,7 @@ async def import_exam_from_docx(
             processing_time = time.time() - start_time
             
             error_response = ExamImportError(
-                message="Processing failed",
+                message="Xử lý thất bại",
                 error=f"Lỗi xử lý file: {str(e)}",
                 error_code="PROCESSING_ERROR",
                 details={
@@ -182,7 +182,7 @@ async def import_exam_from_docx(
         processing_time = time.time() - start_time
         
         error_response = ExamImportError(
-            message="System error",
+            message="Lỗi hệ thống",
             error=f"Lỗi hệ thống: {str(e)}",
             error_code="SYSTEM_ERROR",
             details={
