@@ -69,7 +69,7 @@ async def process_guide_import_task(task_id: str) -> Dict[str, Any]:
         book_id = task["data"]["book_id"]
         create_embeddings = task["data"].get("create_embeddings", True)
 
-        await task_service.update_task_progress(task_id, 10, "Starting DOCX guide import...")
+        await task_service.update_task_progress(task_id, 10, "Bắt đầu import hướng dẫn DOCX...")
 
         # Import services
         from app.services.exam_import_service import get_exam_import_service
@@ -81,17 +81,17 @@ async def process_guide_import_task(task_id: str) -> Dict[str, Any]:
         qdrant_service = get_qdrant_service()
 
         # Bước 1: Trích xuất text từ DOCX
-        await task_service.update_task_progress(task_id, 15, "Extracting text from DOCX...")
+        await task_service.update_task_progress(task_id, 15, "Đang trích xuất văn bản từ DOCX...")
 
         extracted_text = exam_import_service._extract_text_from_docx_bytes(file_content)
 
         if not extracted_text or len(extracted_text.strip()) < 50:
             raise Exception("Không thể trích xuất nội dung từ file DOCX hoặc nội dung quá ngắn")
 
-        await task_service.update_task_progress(task_id, 25, "Text extraction completed")
+        await task_service.update_task_progress(task_id, 25, "Hoàn thành trích xuất văn bản")
 
         # Bước 2: LLM formatting để cấu trúc lại nội dung
-        await task_service.update_task_progress(task_id, 35, "Formatting content with LLM...")
+        await task_service.update_task_progress(task_id, 35, "Đang định dạng nội dung với LLM...")
 
         # Sử dụng format_document_text với document_type="guide" để tối ưu cho guide content
         format_result = await llm_service.format_document_text(
@@ -106,10 +106,10 @@ async def process_guide_import_task(task_id: str) -> Dict[str, Any]:
             raise Exception(error_msg)
 
         formatted_text = format_result["formatted_text"]
-        await task_service.update_task_progress(task_id, 50, "Content formatting completed")
+        await task_service.update_task_progress(task_id, 50, "Hoàn thành định dạng nội dung")
 
         # Bước 3: Upload DOCX file lên Supabase Storage
-        await task_service.update_task_progress(task_id, 50, "Uploading DOCX to Supabase Storage...")
+        await task_service.update_task_progress(task_id, 50, "Đang tải DOCX lên Supabase Storage...")
 
         file_url = None
         uploaded_at = None
@@ -143,7 +143,7 @@ async def process_guide_import_task(task_id: str) -> Dict[str, Any]:
         # Bước 4: Tạo embeddings với smart chunking nếu được yêu cầu
         embeddings_result = None
         if create_embeddings:
-            await task_service.update_task_progress(task_id, 70, "Creating embeddings with smart chunking...")
+            await task_service.update_task_progress(task_id, 70, "Đang tạo embeddings với smart chunking...")
 
             # Log metadata trước khi tạo embeddings
             logger.info(f"🔍 Creating embeddings with metadata:")
@@ -169,7 +169,7 @@ async def process_guide_import_task(task_id: str) -> Dict[str, Any]:
                 logger.error(error_msg)
                 raise Exception(error_msg)
 
-            await task_service.update_task_progress(task_id, 85, "Embeddings created successfully")
+            await task_service.update_task_progress(task_id, 85, "Tạo embeddings thành công")
 
         # Tạo kết quả cuối cùng
         result = {
@@ -198,10 +198,10 @@ async def process_guide_import_task(task_id: str) -> Dict[str, Any]:
                 "vector_count": embeddings_result.get("total_chunks", 0) if embeddings_result else 0,
                 "vector_dimension": embeddings_result.get("vector_dimension") if embeddings_result else None,
             },
-            "message": "Guide imported successfully with LLM formatting, smart chunking, and uploaded to Supabase storage, ready for RAG search"
+            "message": "Import hướng dẫn thành công với định dạng LLM, smart chunking và tải lên Supabase storage, sẵn sàng cho RAG search"
         }
 
-        await task_service.update_task_progress(task_id, 100, "Guide import completed successfully")
+        await task_service.update_task_progress(task_id, 100, "Hoàn thành import hướng dẫn")
         await task_service.mark_task_completed(task_id, result)
         return result
 
