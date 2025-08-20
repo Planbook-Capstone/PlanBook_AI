@@ -1959,15 +1959,19 @@ class QdrantService:
                 "book_id": book_id
             }
 
-    async def get_lesson_info_by_lesson_id(self, lesson_id: str) -> Dict[str, Any]:
+    async def get_lesson_info_by_lesson_id(self, lesson_id: str, book_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Lấy thông tin chi tiết về lesson theo lesson_id từ các textbook collections
 
+        Tối ưu hóa: Nếu có book_id thì tìm trực tiếp trong collection đó,
+        chỉ trả về metadata (đặc biệt là file_url) mà không cần chunks để tiết kiệm thời gian
+
         Args:
             lesson_id: ID của lesson
+            book_id: Optional - ID của book để tìm trực tiếp trong collection cụ thể
 
         Returns:
-            Dict chứa thông tin chi tiết về lesson
+            Dict chứa thông tin metadata của lesson (không bao gồm chunks)
         """
         self._ensure_service_initialized()
 
@@ -1980,19 +1984,27 @@ class QdrantService:
         try:
             from qdrant_client.http import models as qdrant_models
 
-            # Lấy tất cả collections
-            collections = self.qdrant_client.get_collections().collections
-            existing_names = [c.name for c in collections]
-            textbook_collections = [name for name in existing_names if name.startswith("textbook_")]
+            # Xác định collections cần tìm
+            if book_id:
+                # Nếu có book_id, tìm trực tiếp trong collection cụ thể
+                target_collections = [f"textbook_{book_id}"]
+                logger.info(f"Searching for lesson_id '{lesson_id}' in specific collection: textbook_{book_id}")
+            else:
+                # Nếu không có book_id, tìm trong tất cả textbook collections
+                collections = self.qdrant_client.get_collections().collections
+                existing_names = [c.name for c in collections]
+                target_collections = [name for name in existing_names if name.startswith("textbook_")]
+                logger.info(f"Searching for lesson_id '{lesson_id}' in all textbook collections: {target_collections}")
 
-            if not textbook_collections:
+            if not target_collections:
                 return {
                     "success": False,
-                    "error": "No textbook collections found",
-                    "lesson_id": lesson_id
+                    "error": "No textbook collections found" + (f" for book_id '{book_id}'" if book_id else ""),
+                    "lesson_id": lesson_id,
+                    "book_id": book_id
                 }
 
-            # Tìm lesson trong từng collection
+            # Tìm lesson trong collections (chỉ lấy 1 point để có metadata)
             lesson_filter = qdrant_models.Filter(
                 must=[
                     qdrant_models.FieldCondition(
@@ -2007,80 +2019,83 @@ class QdrantService:
             )
 
             found_collection = None
-            lesson_result = None
+            lesson_point = None
 
-            for collection_name in textbook_collections:
+            for collection_name in target_collections:
                 try:
                     result = self.qdrant_client.scroll(
                         collection_name=collection_name,
                         scroll_filter=lesson_filter,
-                        limit=1000,
+                        limit=1,  # Chỉ lấy 1 point để có metadata
                         with_payload=True,
-                        with_vectors=False
+                        with_vectors=False  # Không cần vectors
                     )
 
                     if result[0]:  # Tìm thấy lesson
                         found_collection = collection_name
-                        lesson_result = result
+                        lesson_point = result[0][0]  # Lấy point đầu tiên
                         break
                 except Exception as e:
                     logger.warning(f"Error checking collection {collection_name}: {e}")
                     continue
 
-            if not lesson_result or not lesson_result[0]:
+            if not lesson_point:
                 return {
                     "success": False,
-                    "error": f"Lesson with lesson_id '{lesson_id}' not found",
-                    "lesson_id": lesson_id
+                    "error": f"Lesson with lesson_id '{lesson_id}' not found" + (f" in book '{book_id}'" if book_id else ""),
+                    "lesson_id": lesson_id,
+                    "book_id": book_id
                 }
 
-            # Tổng hợp thông tin lesson
-            chunks = []
-            semantic_tags = set()
-            key_concepts = set()
-            lesson_info = None
+            # Lấy metadata từ point đầu tiên (không cần lấy tất cả chunks)
+            payload = lesson_point.payload or {}
 
-            for point in lesson_result[0]:
-                payload = point.payload or {}
+            # Đếm tổng số chunks trong lesson (nếu cần)
+            count_filter = qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="lesson_id",
+                        match=qdrant_models.MatchValue(value=lesson_id)
+                    ),
+                    qdrant_models.FieldCondition(
+                        key="type",
+                        match=qdrant_models.MatchValue(value="content")
+                    )
+                ]
+            )
 
-                # Lấy lesson info từ point đầu tiên
-                if lesson_info is None:
-                    lesson_info = {
-                        "lesson_id": lesson_id,
-                        "book_id": payload.get("book_id", "Unknown"),
-                    }
+            try:
+                count_result = self.qdrant_client.count(
+                    collection_name=found_collection,
+                    count_filter=count_filter
+                )
+                total_chunks = count_result.count
+            except Exception as e:
+                logger.warning(f"Error counting chunks: {e}")
+                total_chunks = 1
 
-                # Collect chunk info
-                chunks.append({
-                    "chunk_index": payload.get("chunk_index", 0),
-                    "text_preview": payload.get("text", "")[:200] + "..." if len(payload.get("text", "")) > 200 else payload.get("text", ""),
-                    "word_count": payload.get("word_count", 0),
-                    "char_count": payload.get("char_count", 0),
-                    "contains_examples": payload.get("contains_examples", False),
-                    "contains_definitions": payload.get("contains_definitions", False),
-                    "contains_formulas": payload.get("contains_formulas", False),
-                    "estimated_difficulty": payload.get("estimated_difficulty", "basic")
-                })
-
-                # Collect semantic info
-                for tag in payload.get("semantic_tags", []):
-                    if isinstance(tag, dict) and "type" in tag:
-                        semantic_tags.add(tag["type"])
-
-                for concept in payload.get("key_concepts", []):
-                    key_concepts.add(concept)
-
-            # Sort chunks by index
-            chunks.sort(key=lambda x: x["chunk_index"])
+            # Tạo lesson info với metadata cần thiết
+            lesson_data = {
+                "lessonId": lesson_id,
+                "bookId": payload.get("book_id", "Unknown"),
+                "fileUrl": payload.get("file_url", ""),
+                "uploaded_at": payload.get("uploaded_at", ""),
+                "processed_at": payload.get("processed_at", ""),
+                "content_type": payload.get("content_type", "textbook"),
+                "total_chunks": total_chunks,
+                "collection_name": found_collection,
+                # Thêm một số metadata hữu ích khác
+                "lesson_title": payload.get("lesson_title", ""),
+                "chapter_title": payload.get("chapter_title", ""),
+                "page_range": payload.get("page_range", ""),
+                "word_count_total": payload.get("word_count_total", 0),
+                "estimated_difficulty": payload.get("estimated_difficulty", "basic")
+            }
 
             return {
                 "success": True,
-                "lesson_info": lesson_info,
-                "total_chunks": len(chunks),
-                "chunks": chunks,
-                "semantic_tags": list(semantic_tags),
-                "key_concepts": list(key_concepts)[:20],  # Limit to top 20
-                "collection_name": found_collection
+                "data": lesson_data,
+                "message": f"Retrieved lesson '{lesson_id}' metadata successfully" + (f" from book '{book_id}'" if book_id else "")
             }
 
         except Exception as e:
@@ -2088,7 +2103,8 @@ class QdrantService:
             return {
                 "success": False,
                 "error": f"Error getting lesson info: {str(e)}",
-                "lesson_id": lesson_id
+                "lesson_id": lesson_id,
+                "book_id": book_id
             }
 
     async def get_all_textbooks(self) -> Dict[str, Any]:

@@ -153,11 +153,18 @@ async def quick_textbook_analysis(
 
 
 @router.get("/lessons", response_model=Dict[str, Any])
-async def get_all_lessons(book_id: Optional[str] = None) -> Dict[str, Any]:
+async def get_all_lessons(
+    book_id: Optional[str] = None,
+    lessonsID: Optional[Any] = Query(None, description="ID của bài học cụ thể cần lấy thông tin")
+) -> Dict[str, Any]:
     """
-    Lấy tất cả bài học textbook từ Qdrant
+    Lấy tất cả bài học textbook từ Qdrant hoặc thông tin bài học cụ thể
 
-    Endpoint này trả về danh sách bài học textbook đã được import vào hệ thống với các thông tin:
+    Endpoint này trả về:
+    - Nếu có lessonsID: Thông tin chi tiết của bài học cụ thể (limit 1), chủ yếu để lấy file_url
+    - Nếu không có lessonsID: Danh sách tất cả bài học textbook đã được import vào hệ thống
+
+    Thông tin trả về bao gồm:
     - bookId: ID của sách
     - lessonId: ID của bài học
     - fileUrl: URL của file PDF trên Supabase Storage
@@ -168,19 +175,56 @@ async def get_all_lessons(book_id: Optional[str] = None) -> Dict[str, Any]:
 
     Args:
         book_id: Optional - Filter theo book ID cụ thể
+        lessonsID: Optional - ID của bài học cụ thể cần lấy thông tin
 
     Returns:
-        Dict chứa danh sách bài học textbook và thông tin tổng quan
+        Dict chứa thông tin bài học hoặc danh sách bài học textbook
 
     Examples:
         curl -X GET "http://localhost:8000/api/v1/pdf/lessons"
         curl -X GET "http://localhost:8000/api/v1/pdf/lessons?book_id=hoa12"
+        curl -X GET "http://localhost:8000/api/v1/pdf/lessons?lessonsID=hoa12_bai1"
     """
     try:
         from app.services.qdrant_service import get_qdrant_service
 
         qdrant_service = get_qdrant_service()
 
+        # Nếu có lessonsID, lấy thông tin bài học cụ thể
+        if lessonsID:
+            logger.info(f"Getting specific lesson info for lessonsID: {lessonsID}" + (f" in book_id: {book_id}" if book_id else ""))
+            # Truyền book_id vào hàm để tối ưu hóa tìm kiếm
+            result = await qdrant_service.get_lesson_info_by_lesson_id(lessonsID, book_id=book_id)
+
+            if not result.get("success"):
+                if "not found" in result.get("error", "").lower():
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Lesson with ID '{lessonsID}' not found" + (f" in book '{book_id}'" if book_id else "")
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Failed to retrieve lesson: {result.get('error', 'Unknown error')}"
+                    )
+
+            # Trả về thông tin bài học cụ thể với format tương tự như danh sách
+            lesson_data = result.get("data", {})
+            return {
+                "success": True,
+                "data": {
+                    "lessons": [lesson_data] if lesson_data else [],
+                    "total_lessons": 1 if lesson_data else 0,
+                    "collections_processed": 1,
+                    "content_type": "textbook",
+                    "lesson_id": lessonsID,
+                    "book_id": book_id,
+                    "specific_lesson": True
+                },
+                "message": f"Retrieved lesson '{lessonsID}' successfully" + (f" from book '{book_id}'" if book_id else "")
+            }
+
+        # Nếu không có lessonsID, lấy tất cả bài học
         logger.info(f"Getting textbook lessons from Qdrant" + (f" for book_id={book_id}" if book_id else "..."))
         result = await qdrant_service.get_lessons_by_type(content_type="textbook", book_id=book_id)
 
@@ -199,7 +243,8 @@ async def get_all_lessons(book_id: Optional[str] = None) -> Dict[str, Any]:
                 "total_lessons": result.get("total_lessons", 0),
                 "collections_processed": result.get("collections_processed", 0),
                 "content_type": "textbook",
-                "book_id": book_id
+                "book_id": book_id,
+                "specific_lesson": False
             },
             "message": f"Retrieved {result.get('total_lessons', 0)} textbook lessons successfully" + (f" for book_id={book_id}" if book_id else "")
         }
