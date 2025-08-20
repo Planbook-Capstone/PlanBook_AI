@@ -47,15 +47,15 @@ class EnhancedTextbookService:
             logger.info(f"🚀 Starting enhanced textbook processing: {filename}")
 
             # Step 1: Extract all pages with OCR
-            logger.info("📄 Extracting pages with OCR...")
+            logger.info("📄 Đang trích xuất trang với OCR...")
             pages_data = await self._extract_pages_with_ocr(pdf_content)
             logger.info(f"✅ Extracted {len(pages_data)} pages")
 
             # Skip image analysis to improve speed
-            logger.info("⚡ Skipping image analysis for faster processing")
+            logger.info("⚡ Bỏ qua phân tích hình ảnh để xử lý nhanh hơn")
 
             # Step 2: Combine all text from pages
-            logger.info("📝 Combining text from all pages...")
+            logger.info("📝 Đang kết hợp văn bản từ tất cả các trang...")
             full_text = ""
             all_page_numbers = []
             for page in pages_data:
@@ -66,23 +66,23 @@ class EnhancedTextbookService:
             logger.info(f"📄 Combined text from {len(pages_data)} pages")
 
             # Step 3: Refine content directly with OpenRouter LLM
-            logger.info("🤖 Refining content with OpenRouter LLM...")
+            logger.info("🤖 Đang tinh chỉnh nội dung với OpenRouter LLM...")
             refined_content = await self.refine_raw_content_with_llm(full_text)
-            logger.info("✅ Content refinement completed")
+            logger.info("✅ Hoàn thành tinh chỉnh nội dung")
             logger.info("✅ Content refinement {refined_content}")
             # Step 4: Return clean text content directly
-            logger.info("✅ Content processing completed")
+            logger.info("✅ Hoàn thành xử lý nội dung")
 
             # Skip image extraction for faster processing
             images_data = []
-            logger.info("⚡ Skipping image extraction for faster processing")
+            logger.info("⚡ Bỏ qua trích xuất hình ảnh để xử lý nhanh hơn")
 
             return {
                 "success": True,
                 "clean_book_structure": refined_content,  # Return clean text directly
                 "images_data": images_data,  # Empty array
                 "total_pages": len(pages_data),
-                "message": f"Textbook processed successfully with LLM content refinement",
+                "message": f"Xử lý sách giáo khoa thành công với tinh chỉnh nội dung LLM",
             }
 
         except Exception as e:
@@ -134,7 +134,7 @@ class EnhancedTextbookService:
 
         if ocr_tasks:
             logger.info(
-                f"🔍 Applying OCR to {len(ocr_tasks)} pages with insufficient text"
+                f"🔍 Đang áp dụng OCR cho {len(ocr_tasks)} trang có văn bản không đủ"
             )
             ocr_results = await asyncio.gather(*ocr_tasks, return_exceptions=True)
 
@@ -401,7 +401,7 @@ Trả về nội dung đã được cấu trúc lại theo yêu cầu (KHÔNG ba
                 return self.clean_text_content(raw_text)
 
         except Exception as e:
-            logger.error(f"❌ Error refining content with OpenRouter: {e}")
+            logger.error(f"❌ Lỗi tinh chỉnh nội dung với OpenRouter: {e}")
             return self.clean_text_content(raw_text)
 
 
