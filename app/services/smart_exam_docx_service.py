@@ -138,8 +138,19 @@ class SmartExamDocxService:
         text = re.sub(sub_pattern, replace_sub, text)
 
         # Chuyển đổi các công thức hóa học thô (không có HTML tags)
-        # Pattern: chữ cái + số (VD: CH3, H2O, C6H12O6)
-        chemistry_pattern = r'([A-Za-z]+)(\d+)'
+        # Pattern: chuyển số thành subscript cho tất cả ký hiệu nguyên tố
+        # VD: CH3, H2O, C6H12O6, Ca(OH)2, Al2(SO4)3, C2(H2O)2
+        # Tất cả số sau dấu ngoặc đóng đều chuyển thành subscript
+
+        # Không cần bảo vệ gì cả - tất cả số đều chuyển thành subscript
+        protected_text = text
+
+        # 2. Chuyển đổi subscript cho tất cả ký hiệu nguyên tố
+        # Pattern 1: Số ngay sau ký hiệu nguyên tố (VD: H2, O2, Ca2)
+        chemistry_pattern = r'([A-Z][a-z]?)(\d+)'
+
+        # Pattern 2: Số sau dấu ngoặc đóng (VD: (OH)2, (SO4)3)
+        parenthesis_pattern = r'\)(\d+)'
 
         def replace_chemistry(match):
             element = match.group(1)
@@ -148,7 +159,15 @@ class SmartExamDocxService:
             subscript_number = ''.join(subscript_map.get(digit, digit) for digit in number)
             return element + subscript_number
 
-        text = re.sub(chemistry_pattern, replace_chemistry, text)
+        def replace_parenthesis(match):
+            number = match.group(1)
+            # Chuyển số thành subscript
+            subscript_number = ''.join(subscript_map.get(digit, digit) for digit in number)
+            return ')' + subscript_number
+
+        # Áp dụng cả hai pattern
+        protected_text = re.sub(chemistry_pattern, replace_chemistry, protected_text)
+        text = re.sub(parenthesis_pattern, replace_parenthesis, protected_text)
 
         return text
 
