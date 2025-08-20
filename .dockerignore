@@ -76,6 +76,12 @@ README.md
 data/
 chroma_db/
 tessdata/
+exports/
+monitoring/
+
+# CI/CD files
+.github/
+.git/
 
 # Celery
 celerybeat-schedule
