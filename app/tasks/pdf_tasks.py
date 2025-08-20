@@ -79,7 +79,7 @@ def process_pdf_quick_analysis(self, task_id: str) -> Dict[str, Any]:
         # Update Celery state
         self.update_state(
             state="PROGRESS",
-            meta={"progress": 0, "message": "Starting PDF quick analysis..."},
+            meta={"progress": 0, "message": "Bắt đầu phân tích nhanh PDF..."},
         )
 
         # Run async implementation
@@ -140,7 +140,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
         # KIỂM TRA LESSON_ID TRÙNG LẶP TRONG CÙNG BOOK_ID
         if lesson_id:
             await get_mongodb_task_service().update_task_progress(
-                task_id, 10, f"Checking lesson_id '{lesson_id}' in book '{book_id}'..."
+                task_id, 10, f"Đang kiểm tra lesson_id '{lesson_id}' trong sách '{book_id}'..."
             )
 
             lesson_check = await qdrant_service.check_lesson_id_exists(lesson_id)
@@ -168,7 +168,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
 
         # Process textbook
         await get_mongodb_task_service().update_task_progress(
-            task_id, 40, "Processing textbook content..."
+            task_id, 40, "Đang xử lý nội dung sách giáo khoa..."
         )
 
         book_metadata = {
@@ -186,7 +186,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
 
         # Upload PDF to Supabase Storage
         await get_mongodb_task_service().update_task_progress(
-            task_id, 60, "Uploading PDF to Supabase Storage..."
+            task_id, 60, "Đang tải PDF lên Supabase Storage..."
         )
 
         file_url = None
@@ -221,7 +221,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
 
         # Auto create embeddings
         await get_mongodb_task_service().update_task_progress(
-            task_id, 70, "Creating embeddings..."
+            task_id, 70, "Đang tạo embeddings..."
         )
 
         try:
@@ -248,7 +248,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
 
             if embeddings_result and embeddings_result.get("success"):
                 await get_mongodb_task_service().update_task_progress(
-                    task_id, 90, "Embeddings created successfully"
+                    task_id, 90, "Tạo embeddings thành công"
                 )
                 embeddings_created = True
             else:
@@ -278,7 +278,7 @@ async def _process_pdf_quick_analysis_async(task_id: str) -> Dict[str, Any]:
                 "collection_name": embeddings_result.get("collection_name") if embeddings_result else None,
                 "vector_count": embeddings_result.get("total_chunks", 0) if embeddings_result else 0,
             },
-            "message": "PDF processing completed successfully"
+            "message": "Xử lý PDF hoàn thành thành công"
         }
 
         # Mark task as completed
