@@ -53,10 +53,13 @@ RUN groupadd -r planbook && useradd -r -g planbook -m planbook \
  && mkdir -p /home/planbook/.cache/huggingface /home/planbook/.cache/torch \
  && chown -R planbook:planbook /app /usr/local/nltk_data /home/planbook
 
-# Set environment variables for cache directories
+# Set environment variables for cache directories and PyTorch optimization
 ENV HF_HOME=/home/planbook/.cache/huggingface \
     TRANSFORMERS_CACHE=/home/planbook/.cache/huggingface \
-    TORCH_HOME=/home/planbook/.cache/torch
+    TORCH_HOME=/home/planbook/.cache/torch \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1
 
 USER planbook
 
