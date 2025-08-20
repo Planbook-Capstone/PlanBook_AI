@@ -14,9 +14,9 @@ COPY requirements.txt .
 RUN pip install --upgrade pip \
  && pip install --no-cache-dir -r requirements.txt
 
-# Tải sẵn NLTK data vào /opt/nltk_data (không cần try/except)
+# Tải sẵn NLTK data vào /opt/nltk_data (bao gồm cả punkt_tab mới)
 RUN mkdir -p /opt/nltk_data \
- && python -m nltk.downloader -d /opt/nltk_data punkt stopwords
+ && python -m nltk.downloader -d /opt/nltk_data punkt punkt_tab stopwords
 
 # (tuỳ chọn) dọn rác
 RUN find /opt/venv -name "*.pyc" -delete \
