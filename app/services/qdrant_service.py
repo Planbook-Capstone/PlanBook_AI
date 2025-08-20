@@ -2004,7 +2004,7 @@ class QdrantService:
                     "book_id": book_id
                 }
 
-            # Tìm lesson trong collections (chỉ lấy 1 point để có metadata)
+            # Tìm lesson trong collections (chỉ lấy metadata point để có file_url)
             lesson_filter = qdrant_models.Filter(
                 must=[
                     qdrant_models.FieldCondition(
@@ -2013,7 +2013,7 @@ class QdrantService:
                     ),
                     qdrant_models.FieldCondition(
                         key="type",
-                        match=qdrant_models.MatchValue(value="content")
+                        match=qdrant_models.MatchValue(value="metadata")
                     )
                 ]
             )
@@ -2047,49 +2047,47 @@ class QdrantService:
                     "book_id": book_id
                 }
 
-            # Lấy metadata từ point đầu tiên (không cần lấy tất cả chunks)
+            # Lấy metadata từ point đầu tiên (đã có total_chunks trong metadata)
             payload = lesson_point.payload or {}
 
-            # Đếm tổng số chunks trong lesson (nếu cần)
-            count_filter = qdrant_models.Filter(
-                must=[
-                    qdrant_models.FieldCondition(
-                        key="lesson_id",
-                        match=qdrant_models.MatchValue(value=lesson_id)
-                    ),
-                    qdrant_models.FieldCondition(
-                        key="type",
-                        match=qdrant_models.MatchValue(value="content")
-                    )
-                ]
-            )
+            # Lấy total_chunks từ metadata (đã được lưu sẵn khi import)
+            total_chunks = payload.get("total_chunks", 0)
 
-            try:
-                count_result = self.qdrant_client.count(
-                    collection_name=found_collection,
-                    count_filter=count_filter
+            # Nếu không có total_chunks trong metadata, đếm lại từ content points
+            if total_chunks == 0:
+                count_filter = qdrant_models.Filter(
+                    must=[
+                        qdrant_models.FieldCondition(
+                            key="lesson_id",
+                            match=qdrant_models.MatchValue(value=lesson_id)
+                        ),
+                        qdrant_models.FieldCondition(
+                            key="type",
+                            match=qdrant_models.MatchValue(value="content")
+                        )
+                    ]
                 )
-                total_chunks = count_result.count
-            except Exception as e:
-                logger.warning(f"Error counting chunks: {e}")
-                total_chunks = 1
 
-            # Tạo lesson info với metadata cần thiết
+                try:
+                    count_result = self.qdrant_client.count(
+                        collection_name=found_collection,
+                        count_filter=count_filter
+                    )
+                    total_chunks = count_result.count
+                except Exception as e:
+                    logger.warning(f"Error counting chunks: {e}")
+                    total_chunks = 1
+
+            # Tạo lesson info với metadata cần thiết - format giống như get_lessons_by_type
             lesson_data = {
-                "lessonId": lesson_id,
-                "bookId": payload.get("book_id", "Unknown"),
-                "fileUrl": payload.get("file_url", ""),
+                "book_id": payload.get("book_id", "Unknown"),
+                "lesson_id": lesson_id,
+                "file_url": payload.get("file_url", ""),
                 "uploaded_at": payload.get("uploaded_at", ""),
                 "processed_at": payload.get("processed_at", ""),
                 "content_type": payload.get("content_type", "textbook"),
-                "total_chunks": total_chunks,
                 "collection_name": found_collection,
-                # Thêm một số metadata hữu ích khác
-                "lesson_title": payload.get("lesson_title", ""),
-                "chapter_title": payload.get("chapter_title", ""),
-                "page_range": payload.get("page_range", ""),
-                "word_count_total": payload.get("word_count_total", 0),
-                "estimated_difficulty": payload.get("estimated_difficulty", "basic")
+                "total_chunks": total_chunks
             }
 
             return {
