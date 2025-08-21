@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = os.getenv(
         "EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     )
+    
     MAX_CHUNK_SIZE: int = int(os.getenv("MAX_CHUNK_SIZE", "1500"))  # Word-based chunking
     CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "100"))     # Reduced overlap
     TOP_K_DOCUMENTS: int = int(os.getenv("TOP_K_DOCUMENTS", "5"))
