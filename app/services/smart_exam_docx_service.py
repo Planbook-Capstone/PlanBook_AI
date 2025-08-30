@@ -125,10 +125,12 @@ class SmartExamDocxService:
         text = re.sub(sup_pattern, replace_sup, text)
 
         # Chuyển đổi subscript (chỉ số dưới)
-        sub_pattern = r'<sub>(\d+)</sub>'
+        # Chuyển đổi subscript (chỉ số dưới) - bao gồm cả số và chữ cái n, m
+        sub_pattern = r'<sub>([\dnm]+)</sub>'
         subscript_map = {
             '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
-            '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉'
+            '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
+            'n': 'ₙ', 'm': 'ₘ' # Thêm n và m
         }
 
         def replace_sub(match):
@@ -147,10 +149,10 @@ class SmartExamDocxService:
 
         # 2. Chuyển đổi subscript cho tất cả ký hiệu nguyên tố
         # Pattern 1: Số ngay sau ký hiệu nguyên tố (VD: H2, O2, Ca2)
-        chemistry_pattern = r'([A-Z][a-z]?)(\d+)'
+        chemistry_pattern = r'([A-Z][a-z]?)([\dnm]+)'
 
         # Pattern 2: Số sau dấu ngoặc đóng (VD: (OH)2, (SO4)3)
-        parenthesis_pattern = r'\)(\d+)'
+        parenthesis_pattern = r'\)([\dnm]+)'
 
         def replace_chemistry(match):
             element = match.group(1)
