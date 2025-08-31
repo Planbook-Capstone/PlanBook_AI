@@ -149,7 +149,9 @@ class SmartExamDocxService:
 
         # 2. Chuyển đổi subscript cho tất cả ký hiệu nguyên tố
         # Pattern 1: Số ngay sau ký hiệu nguyên tố (VD: H2, O2, Ca2)
-        chemistry_pattern = r'([A-Z][a-z]?)([\dnm]+)'
+        # Pattern 1: Số hoặc n,m ngay sau ký hiệu nguyên tố (VD: H2, C6, Cn)
+        # \b để đảm bảo nó là một "từ" riêng biệt, tránh các từ như "Tinh"
+        chemistry_pattern = r'\b([A-Z][a-z]?)(\d[\dnm]*|[nm])\b'
 
         # Pattern 2: Số sau dấu ngoặc đóng (VD: (OH)2, (SO4)3)
         parenthesis_pattern = r'\)([\dnm]+)'
