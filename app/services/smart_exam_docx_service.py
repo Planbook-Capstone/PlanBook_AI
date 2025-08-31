@@ -149,7 +149,19 @@ class SmartExamDocxService:
 
         # 2. Chuyển đổi subscript cho tất cả ký hiệu nguyên tố
         # Pattern 1: Số ngay sau ký hiệu nguyên tố (VD: H2, O2, Ca2)
-        chemistry_pattern = r'([A-Z][a-z]?)([\dnm]+)'
+        # Danh sách các ký hiệu nguyên tố hóa học để khớp chính xác
+        elements = [
+            'H', 'He', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne', 'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar',
+            'K', 'Ca', 'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn', 'Ga', 'Ge', 'As', 'Se', 'Br',
+            'Kr', 'Rb', 'Sr', 'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd', 'In', 'Sn', 'Sb', 'Te',
+            'I', 'Xe', 'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er', 'Tm',
+            'Yb', 'Lu', 'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg', 'Tl', 'Pb', 'Bi', 'Po', 'At', 'Rn',
+            'Fr', 'Ra', 'Ac', 'Th', 'Pa', 'U', 'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 'Es', 'Fm', 'Md', 'No', 'Lr'
+        ]
+        elements_pattern = '|'.join(elements)
+
+        # Pattern 1: Chỉ khớp khi một ký hiệu nguyên tố trong danh sách được theo sau bởi số, n, hoặc m
+        chemistry_pattern = f'\\b({elements_pattern})([\\dnm]+)\\b'
 
         # Pattern 2: Số sau dấu ngoặc đóng (VD: (OH)2, (SO4)3)
         parenthesis_pattern = r'\)([\dnm]+)'
