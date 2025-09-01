@@ -148,17 +148,17 @@ class SmartExamDocxService:
             'Yb', 'Lu', 'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg', 'Tl', 'Pb', 'Bi', 'Po', 'At', 'Rn',
             'Fr', 'Ra', 'Ac', 'Th', 'Pa', 'U', 'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 'Es', 'Fm', 'Md', 'No', 'Lr'
         ]
-        elements_pattern = '|'.join(elements)
-
-        # Pattern 1: Số ngay sau ký hiệu nguyên tố (VD: H2, O2, Ca2, NH3, AgNO3)
-        chemistry_pattern = f'\\b({elements_pattern})([\\dnm]+)\\b'
-
-        # Pattern 2: Số sau dấu ngoặc đóng (VD: (OH)2, (SO4)3)
-        parenthesis_pattern = r'\)([\dnm]+)'
-
-        def replace_chemistry(match):
+        
+        # Tạo pattern an toàn hơn để tránh chuyển đổi từ tiếng Việt
+        # Chỉ chuyển đổi khi:
+        # 1. Nguyên tố đứng đầu từ hoặc sau khoảng trắng/dấu câu
+        # 2. Theo sau là số hoặc n,m
+        # 3. Không có chữ cái thường tiếng Việt phía sau (như "em" trong "Xem")
+        
+        def replace_chemistry_safe(match):
             element = match.group(1)
             number = match.group(2)
+            
             # Chuyển số thành subscript
             subscript_number = ''.join(subscript_map.get(digit, digit) for digit in number)
             return element + subscript_number
@@ -169,13 +169,13 @@ class SmartExamDocxService:
             subscript_number = ''.join(subscript_map.get(digit, digit) for digit in number)
             return ')' + subscript_number
 
-        # Áp dụng các pattern để chuyển đổi
-        text = re.sub(chemistry_pattern, replace_chemistry, text)
-        text = re.sub(parenthesis_pattern, replace_parenthesis, text)
-
-        return text
-
-    def _extract_numeric_answer(self, answer_text: str) -> str:
+        # Pattern 1: Nguyên tố + số/n/m, nhưng KHÔNG theo sau bởi chữ cái thường
+        # Sử dụng negative lookahead để tránh match "Xem", "Hen", v.v.
+        elements_pattern = '|'.join(elements)
+        chemistry_pattern = f'(?<!\\w)({elements_pattern})([\\d]+|n+|m+)(?![a-zàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹ])'
+        
+        # Pattern 2: Số sau dấu ngoặc đóng (VD: (OH)2, (SO4)3) - giữ nguyên vì ít có từ tiếng Việt
+        parenthesis_pattern = r'\)([\dnm]+)'
         """
         Trích xuất đáp án số thuần túy từ text cho phần III theo quy tắc mới
 
