@@ -124,13 +124,12 @@ class SmartExamDocxService:
 
         text = re.sub(sup_pattern, replace_sup, text)
 
-        # Chuyển đổi subscript (chỉ số dưới)
         # Chuyển đổi subscript (chỉ số dưới) - bao gồm cả số và chữ cái n, m
         sub_pattern = r'<sub>([\dnm]+)</sub>'
         subscript_map = {
             '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
             '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
-            'n': 'ₙ', 'm': 'ₘ' # Thêm n và m
+            'n': 'ₙ', 'm': 'ₘ'
         }
 
         def replace_sub(match):
@@ -140,15 +139,6 @@ class SmartExamDocxService:
         text = re.sub(sub_pattern, replace_sub, text)
 
         # Chuyển đổi các công thức hóa học thô (không có HTML tags)
-        # Pattern: chuyển số thành subscript cho tất cả ký hiệu nguyên tố
-        # VD: CH3, H2O, C6H12O6, Ca(OH)2, Al2(SO4)3, C2(H2O)2
-        # Tất cả số sau dấu ngoặc đóng đều chuyển thành subscript
-
-        # Không cần bảo vệ gì cả - tất cả số đều chuyển thành subscript
-        protected_text = text
-
-        # 2. Chuyển đổi subscript cho tất cả ký hiệu nguyên tố
-        # Pattern 1: Số ngay sau ký hiệu nguyên tố (VD: H2, O2, Ca2)
         # Danh sách các ký hiệu nguyên tố hóa học để khớp chính xác
         elements = [
             'H', 'He', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne', 'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar',
@@ -160,7 +150,7 @@ class SmartExamDocxService:
         ]
         elements_pattern = '|'.join(elements)
 
-        # Pattern 1: Chỉ khớp khi một ký hiệu nguyên tố trong danh sách được theo sau bởi số, n, hoặc m
+        # Pattern 1: Số ngay sau ký hiệu nguyên tố (VD: H2, O2, Ca2, NH3, AgNO3)
         chemistry_pattern = f'\\b({elements_pattern})([\\dnm]+)\\b'
 
         # Pattern 2: Số sau dấu ngoặc đóng (VD: (OH)2, (SO4)3)
@@ -179,9 +169,9 @@ class SmartExamDocxService:
             subscript_number = ''.join(subscript_map.get(digit, digit) for digit in number)
             return ')' + subscript_number
 
-        # Áp dụng cả hai pattern
-        protected_text = re.sub(chemistry_pattern, replace_chemistry, protected_text)
-        text = re.sub(parenthesis_pattern, replace_parenthesis, protected_text)
+        # Áp dụng các pattern để chuyển đổi
+        text = re.sub(chemistry_pattern, replace_chemistry, text)
+        text = re.sub(parenthesis_pattern, replace_parenthesis, text)
 
         return text
 
