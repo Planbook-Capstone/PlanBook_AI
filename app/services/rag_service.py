@@ -164,7 +164,7 @@ class RAGService:
         return context, sources
     
     def _build_rag_prompt(self, context: str, query: str) -> str:
-        """Tạo prompt cho LLM để trả về nội dung HTML thuần túy"""
+        """Tạo prompt cho LLM để trả về nội dung HTML thuần túy không có nguồn tham khảo"""
         return f"""Bạn là một trợ lý AI chuyên về giáo dục. Hãy trả lời câu hỏi dựa trên thông tin được cung cấp.
 
 NGUYÊN TẮC:
@@ -173,18 +173,14 @@ NGUYÊN TẮC:
 - Trả về nội dung HTML với style inline, KHÔNG cần thẻ div bao bọc bên ngoài
 - Sử dụng các thẻ HTML phù hợp: <h3>, <p>, <ul>, <li>, <strong>, <em>
 - Không sử dụng ký tự đặc biệt, chỉ HTML thuần
-- Chỉ hiện thị trên cùng 1 dòng và không có bất kì khoảng cách nào
+- KHÔNG bao gồm phần nguồn tham khảo hay trích dẫn
+- Chỉ trả lời nội dung chính, không cần ghi nguồn
 - Nếu thông tin không đủ để trả lời, hãy nói rõ
 
 FORMAT TRẢ LỜI (chỉ nội dung HTML thuần):
 <div style="padding: 15px; margin-bottom: 2px;line-height: 1.6; color: #333;">
     [Nội dung trả lời ở đây với các thẻ HTML phù hợp như <p>, <strong>, <em>]
 </div>
-
-<h4 style="color: #2c5aa0; margin-bottom: 2px; font-size: 16px;">Nguồn tham khảo:</h4>
-<ul style="list-style-type: none; padding: 0;">
-    [Danh sách nguồn nếu cần trích dẫn với <li> có style]
-</ul>
 
 THÔNG TIN TỪ TÀI LIỆU:
 {context}
