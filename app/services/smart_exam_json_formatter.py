@@ -53,11 +53,18 @@ class SmartExamJsonFormatter:
         """
         try:
             questions = exam_data.get("questions", [])
+            logger.info(f"🔍 Total questions to format: {len(questions)}")
 
             # Phân loại câu hỏi theo phần
             part_1_questions = [q for q in questions if q.get("part") == 1]
             part_2_questions = [q for q in questions if q.get("part") == 2]
             part_3_questions = [q for q in questions if q.get("part") == 3]
+
+            logger.info(f"📊 Question distribution: Part 1: {len(part_1_questions)}, Part 2: {len(part_2_questions)}, Part 3: {len(part_3_questions)}")
+
+            # Debug: Log first question structure
+            if questions:
+                logger.info(f"🔍 Sample question structure: {questions[0]}")
 
             parts = []
 
@@ -107,12 +114,15 @@ class SmartExamJsonFormatter:
         # Xử lý từng câu hỏi nếu có
         for i, question in enumerate(questions, 1):
             answer_data = question.get("answer", {})
+            logger.info(f"🔍 Formatting Part 1 Question {i}: answer_data = {answer_data}")
 
             # Tạo options từ A, B, C, D với chemistry format
             options = {}
             for option in ["A", "B", "C", "D"]:
                 if option in answer_data:
                     options[option] = self._docx_service._normalize_chemistry_format(str(answer_data[option]))
+
+            logger.info(f"🔍 Part 1 Question {i}: options = {options}")
 
             # Lấy đáp án đúng
             correct_answer = answer_data.get("correct_answer", "A")
@@ -133,7 +143,14 @@ class SmartExamJsonFormatter:
             if question.get("illustrationImage"):
                 formatted_question["illustrationImage"] = question["illustrationImage"]
 
-            formatted_questions.append(formatted_question)
+            # Chỉ thêm câu hỏi nếu có ít nhất một option
+            if options:
+                formatted_questions.append(formatted_question)
+                logger.info(f"✅ Part 1 Question {i}: Added to formatted_questions")
+            else:
+                logger.warning(f"❌ Part 1 Question {i}: Skipped - no options found")
+
+        logger.info(f"📊 Part 1 formatting result: {len(formatted_questions)} questions formatted")
 
         # Luôn trả về cấu trúc phần, kể cả khi không có câu hỏi
         return {

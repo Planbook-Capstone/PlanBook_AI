@@ -176,6 +176,14 @@ class SmartExamDocxService:
         
         # Pattern 2: Số sau dấu ngoặc đóng (VD: (OH)2, (SO4)3) - giữ nguyên vì ít có từ tiếng Việt
         parenthesis_pattern = r'\)([\dnm]+)'
+
+        # Áp dụng các pattern
+        text = re.sub(chemistry_pattern, replace_chemistry_safe, text)
+        text = re.sub(parenthesis_pattern, replace_parenthesis, text)
+
+        return text
+
+    def _extract_answer_for_part_3(self, answer_text: str) -> str:
         """
         Trích xuất đáp án số thuần túy từ text cho phần III theo quy tắc mới
 
@@ -1370,7 +1378,7 @@ class SmartExamDocxService:
                 # Cho Part 3, đáp án có thể ở field "dap_an" trong answer object
                 raw_answer = dap_an.get("dap_an", dap_an.get("answer", ""))
                 # Đảm bảo đáp án có đúng format 4 ký tự cho phiếu tô trắc nghiệm
-                formatted_answer = self._extract_numeric_answer(str(raw_answer))
+                formatted_answer = self._extract_answer_for_part_3(str(raw_answer))
                 table.cell(1, i + 1).text = formatted_answer
 
         except Exception as e:
