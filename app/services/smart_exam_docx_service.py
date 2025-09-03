@@ -331,7 +331,21 @@ class SmartExamDocxService:
 
 
         # Áp dụng các pattern theo thứ tự ưu tiên
-        # 0. Xử lý các nhóm nguyên tử và công thức đơn giản trước tiên (để tránh conflict)
+        # 0. Bảo vệ từ tiếng Việt trước tiên
+        vietnamese_words = [
+            'Pin', 'Hen', 'Xem', 'Cần', 'Tin', 'Vin', 'Sin', 'Bin', 'Din', 'Fin', 'Gin', 'Hin', 'Jin', 'Kin', 'Lin', 'Min', 'Nin', 'Qin', 'Rin', 'Win', 'Yin', 'Zin'
+        ]
+
+        # Tạo map để bảo vệ từ tiếng Việt
+        protected_words = {}
+        for i, word in enumerate(vietnamese_words):
+            if word.lower() in text.lower():
+                placeholder = f"__PROTECTED_WORD_{i}__"
+                protected_words[placeholder] = word
+                # Thay thế tạm thời (case-insensitive)
+                text = re.sub(re.escape(word), placeholder, text, flags=re.IGNORECASE)
+
+        # 1. Xử lý các nhóm nguyên tử và công thức đơn giản trước tiên (để tránh conflict)
         atomic_groups = [
             (r'SO4', 'SO₄'),
             (r'NH4', 'NH₄'),
@@ -344,6 +358,10 @@ class SmartExamDocxService:
             (r'H2O', 'H₂O'),
             (r'H2S', 'H₂S'),
             (r'MnO4', 'MnO₄'),
+            # Thêm các công thức với Zn
+            (r'ZnO', 'ZnO'),
+            (r'ZnCl2', 'ZnCl₂'),
+            (r'ZnSO4', 'ZnSO₄'),
         ]
 
         for pattern, replacement in atomic_groups:
@@ -446,6 +464,22 @@ class SmartExamDocxService:
         # 6. Xử lý pattern tổng quát
         text = re.sub(chemistry_pattern, replace_chemistry_safe, text)
         text = re.sub(parenthesis_pattern, replace_parenthesis, text)
+
+        # 7. Xử lý đặc biệt cho Zn (kẽm) - tránh nhầm thành Z + n
+        # Chỉ xử lý khi Zn đứng một mình hoặc trong context hóa học
+        zn_patterns = [
+            (r'\bZₙ\b', 'Zn'),  # Zn đứng một mình
+            (r'Zₙ(?=\s*\+)', 'Zn'),  # Zn trước dấu +
+            (r'Zₙ(?=\s*→)', 'Zn'),  # Zn trước mũi tên
+            (r'Zₙ(?=\s*[A-Z])', 'Zn'),  # Zn trước nguyên tố khác
+        ]
+
+        for pattern, replacement in zn_patterns:
+            text = re.sub(pattern, replacement, text)
+
+        # 8. Khôi phục từ tiếng Việt đã được bảo vệ
+        for placeholder, original_word in protected_words.items():
+            text = text.replace(placeholder, original_word)
 
         return text
 
