@@ -103,6 +103,7 @@ class SmartExamDocxService:
         """
         Chuyển đổi định dạng hóa học từ HTML sang định dạng chuẩn
         VD: <sup>6</sup>Li -> ⁶Li, S<sub>8</sub> -> S₈, Fe<sup>2+</sup> -> Fe²⁺
+        Hỗ trợ: phân số, ion phức tạp, mũi tên phản ứng, trạng thái vật chất
         """
         if not text:
             return text
@@ -138,9 +139,131 @@ class SmartExamDocxService:
 
         text = re.sub(sub_pattern, replace_sub, text)
 
-        # Chuyển đổi các công thức hóa học thô (không có HTML tags)
-        # Danh sách các ký hiệu nguyên tố hóa học để khớp chính xác
-        elements = [
+        # Xử lý các ký hiệu đặc biệt trong hóa học
+        # 1. Mũi tên phản ứng (xử lý theo thứ tự từ dài đến ngắn)
+        text = text.replace('<-->', '⇌')  # Mũi tên hai chiều dài
+        text = text.replace('<->', '⇌')   # Mũi tên hai chiều ngắn
+        text = text.replace('-->', '→')   # Mũi tên một chiều dài
+        text = text.replace('->', '→')    # Mũi tên một chiều ngắn
+        text = text.replace('⟶', '→')     # Mũi tên Unicode khác
+
+        # 2. Xử lý ion phức tạp với điện tích và trạng thái (VD: Fe3+(aq), Cu2+(s))
+        # Pattern: Nguyên tố + số + điện tích + trạng thái
+        complex_ion_pattern = r'([A-Z][a-z]?)(\d+)(\+|\-)(\([a-z]+\))'
+        def replace_complex_ion(match):
+            element = match.group(1)
+            number = match.group(2)
+            charge = match.group(3)
+            state = match.group(4)
+
+            # Chuyển số thành superscript và điện tích
+            superscript_number = ''.join(superscript_map.get(digit, digit) for digit in number)
+            superscript_charge = superscript_map.get(charge, charge)
+
+            return f"{element}{superscript_number}{superscript_charge}{state}"
+
+        text = re.sub(complex_ion_pattern, replace_complex_ion, text)
+
+        # 3. Xử lý ion đơn giản (VD: Fe3+, Cu2+, Cl-, OH-)
+        # Cần xử lý cẩn thận để không ảnh hưởng đến từ tiếng Việt
+        simple_ion_pattern = r'(?<!\w)([A-Z][a-z]?)(\d+)(\+|\-)(?!\w)'
+        def replace_simple_ion(match):
+            element = match.group(1)
+            number = match.group(2)
+            charge = match.group(3)
+
+            # Chuyển số thành superscript và điện tích
+            superscript_number = ''.join(superscript_map.get(digit, digit) for digit in number)
+            superscript_charge = superscript_map.get(charge, charge)
+
+            return f"{element}{superscript_number}{superscript_charge}"
+
+        text = re.sub(simple_ion_pattern, replace_simple_ion, text)
+
+        # 3b. Xử lý ion âm đơn giản (VD: Cl-, OH-, F-)
+        negative_ion_pattern = r'(?<!\w)([A-Z][a-z]?)(\-)(?!\w)'
+        def replace_negative_ion(match):
+            element = match.group(1)
+            charge = match.group(2)
+
+            # Chuyển điện tích thành superscript
+            superscript_charge = superscript_map.get(charge, charge)
+
+            return f"{element}{superscript_charge}"
+
+        text = re.sub(negative_ion_pattern, replace_negative_ion, text)
+
+        # 4. Xử lý ion với ký hiệu ^ (VD: SO4^2-)
+        caret_ion_pattern = r'([A-Z][a-z]?\d*)\^(\d+)(\+|\-)'
+        def replace_caret_ion(match):
+            formula = match.group(1)
+            number = match.group(2)
+            charge = match.group(3)
+
+            # Chuyển số thành superscript và điện tích
+            superscript_number = ''.join(superscript_map.get(digit, digit) for digit in number)
+            superscript_charge = superscript_map.get(charge, charge)
+
+            return f"{formula}{superscript_number}{superscript_charge}"
+
+        text = re.sub(caret_ion_pattern, replace_caret_ion, text)
+
+        # 5. Xử lý phân số hóa học đặc biệt trước
+        # Pattern đặc biệt cho OH-
+        special_fraction_patterns = [
+            (r'(\d+)OH\-/([A-Z][a-z]?\d*)', r'\1OH⁻/\2'),
+            (r'(\d+)H\+/([A-Z][a-z]?\d*)', r'\1H⁺/\2'),
+        ]
+
+        for pattern, replacement in special_fraction_patterns:
+            def replace_special_fraction(match):
+                coeff = match.group(1)
+                denominator = match.group(2)
+
+                # Xử lý denominator nếu có số
+                processed_denominator = denominator
+                for digit in '0123456789':
+                    if digit in processed_denominator:
+                        processed_denominator = processed_denominator.replace(digit, subscript_map.get(digit, digit))
+
+                if 'OH⁻' in replacement:
+                    return f"{coeff}OH⁻/{processed_denominator}"
+                else:
+                    return f"{coeff}H⁺/{processed_denominator}"
+
+            text = re.sub(pattern, replace_special_fraction, text)
+
+        # 6. Xử lý phân số hóa học tổng quát (VD: 2H+/H2, 3OH-/H2O)
+        # Pattern: số + nguyên tố/nhóm + điện tích + / + công thức
+        fraction_pattern = r'(\d+)([A-Z][a-z]?\d*)(\+|\-)/([A-Z][a-z]?\d*)'
+        def replace_fraction(match):
+            coeff = match.group(1)
+            element = match.group(2)
+            charge = match.group(3)
+            denominator = match.group(4)
+
+            # Xử lý element (có thể có số subscript)
+            processed_element = element
+            for digit in '0123456789':
+                if digit in processed_element:
+                    processed_element = processed_element.replace(digit, subscript_map.get(digit, digit))
+
+            # Chuyển điện tích thành superscript
+            superscript_charge = superscript_map.get(charge, charge)
+
+            # Xử lý denominator nếu có số
+            processed_denominator = denominator
+            for digit in '0123456789':
+                if digit in processed_denominator:
+                    processed_denominator = processed_denominator.replace(digit, subscript_map.get(digit, digit))
+
+            return f"{coeff}{processed_element}{superscript_charge}/{processed_denominator}"
+
+        text = re.sub(fraction_pattern, replace_fraction, text)
+
+        # Chuyển đổi các công thức hóa học cơ bản (không có HTML tags)
+        # Danh sách các ký hiệu nguyên tố hóa học thường gặp trong hóa học THPT
+        common_elements = [
             'H', 'He', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne', 'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar',
             'K', 'Ca', 'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn', 'Ga', 'Ge', 'As', 'Se', 'Br',
             'Kr', 'Rb', 'Sr', 'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd', 'In', 'Sn', 'Sb', 'Te',
@@ -148,17 +271,19 @@ class SmartExamDocxService:
             'Yb', 'Lu', 'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg', 'Tl', 'Pb', 'Bi', 'Po', 'At', 'Rn',
             'Fr', 'Ra', 'Ac', 'Th', 'Pa', 'U', 'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 'Es', 'Fm', 'Md', 'No', 'Lr'
         ]
-        
-        # Tạo pattern an toàn hơn để tránh chuyển đổi từ tiếng Việt
-        # Chỉ chuyển đổi khi:
-        # 1. Nguyên tố đứng đầu từ hoặc sau khoảng trắng/dấu câu
-        # 2. Theo sau là số hoặc n,m
-        # 3. Không có chữ cái thường tiếng Việt phía sau (như "em" trong "Xem")
-        
+
+        # Loại bỏ các nguyên tố có thể gây nhầm lẫn với từ tiếng Việt
+        problematic_elements = ['He', 'In', 'Am', 'No']  # He->Hen, In->trong, Am->âm, No->không
+        safe_elements = [e for e in common_elements if e not in problematic_elements]
+
+        # Thêm các nguyên tố 2 chữ cái quan trọng vào danh sách an toàn
+        important_two_letter = ['Sn', 'Pb', 'Hg', 'Ag', 'Au', 'Pt', 'Zn', 'Cu', 'Fe', 'Ni', 'Co', 'Mn', 'Cr']
+        safe_elements.extend([e for e in important_two_letter if e not in safe_elements])
+
         def replace_chemistry_safe(match):
             element = match.group(1)
             number = match.group(2)
-            
+
             # Chuyển số thành subscript
             subscript_number = ''.join(subscript_map.get(digit, digit) for digit in number)
             return element + subscript_number
@@ -169,15 +294,156 @@ class SmartExamDocxService:
             subscript_number = ''.join(subscript_map.get(digit, digit) for digit in number)
             return ')' + subscript_number
 
-        # Pattern 1: Nguyên tố + số/n/m, nhưng KHÔNG theo sau bởi chữ cái thường
-        # Sử dụng negative lookahead để tránh match "Xem", "Hen", v.v.
-        elements_pattern = '|'.join(elements)
-        chemistry_pattern = f'(?<!\\w)({elements_pattern})([\\d]+|n+|m+)(?![a-zàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹ])'
-        
-        # Pattern 2: Số sau dấu ngoặc đóng (VD: (OH)2, (SO4)3) - giữ nguyên vì ít có từ tiếng Việt
-        parenthesis_pattern = r'\)([\dnm]+)'
+        # Pattern 1: Nguyên tố an toàn + số, với điều kiện nghiêm ngặt
+        # Chỉ match khi:
+        # - Đứng đầu từ hoặc sau khoảng trắng/dấu câu/dấu ngoặc
+        # - Theo sau là số (không phải chữ cái)
+        # - Không có chữ cái tiếng Việt phía sau
+        safe_elements_pattern = '|'.join(safe_elements)
+        chemistry_pattern = f'(?<![a-zA-Zàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹ])({safe_elements_pattern})(\\d+)(?![a-zàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹ])'
 
-        # Áp dụng các pattern
+        # Pattern 2: Số sau dấu ngoặc đóng (VD: (OH)2, (SO4)3)
+        parenthesis_pattern = r'\)(\\d+)'
+
+        # Pattern 3: Xử lý các trường hợp đặc biệt an toàn
+        # CO2, H2O, NH3, etc. - các công thức phổ biến
+        common_formulas = [
+            (r'\\bCO2\\b', 'CO₂'),
+            (r'\\bH2O\\b', 'H₂O'),
+            (r'\\bNH3\\b', 'NH₃'),
+            (r'\\bCH4\\b', 'CH₄'),
+            (r'\\bSO2\\b', 'SO₂'),
+            (r'\\bSO3\\b', 'SO₃'),
+            (r'\\bSO4\\b', 'SO₄'),
+            (r'\\bNO2\\b', 'NO₂'),
+            (r'\\bNO3\\b', 'NO₃'),
+            (r'\\bO2\\b', 'O₂'),
+            (r'\\bN2\\b', 'N₂'),
+            (r'\\bCl2\\b', 'Cl₂'),
+            (r'\\bBr2\\b', 'Br₂'),
+            (r'\\bI2\\b', 'I₂'),
+            (r'\\bF2\\b', 'F₂'),
+            (r'\\bNH4\\b', 'NH₄'),
+            (r'\\bPO4\\b', 'PO₄'),
+            (r'\\bCO3\\b', 'CO₃'),
+        ]
+
+
+
+        # Áp dụng các pattern theo thứ tự ưu tiên
+        # 0. Xử lý các nhóm nguyên tử và công thức đơn giản trước tiên (để tránh conflict)
+        atomic_groups = [
+            (r'SO4', 'SO₄'),
+            (r'NH4', 'NH₄'),
+            (r'CO3', 'CO₃'),
+            (r'CO2', 'CO₂'),
+            (r'PO4', 'PO₄'),
+            (r'NO3', 'NO₃'),
+            (r'NO2', 'NO₂'),
+            (r'NH3', 'NH₃'),
+            (r'H2O', 'H₂O'),
+            (r'H2S', 'H₂S'),
+            (r'MnO4', 'MnO₄'),
+        ]
+
+        for pattern, replacement in atomic_groups:
+            text = text.replace(pattern, replacement)
+
+        # 1. Xử lý các trường hợp đặc biệt sau khi đã có subscript
+        special_cases = [
+            # Ion phức hợp đặc biệt với ^
+            (r'SO₄\^2\-', 'SO₄²⁻'),
+            (r'CO₃\^2\-', 'CO₃²⁻'),
+            (r'PO₄\^3\-', 'PO₄³⁻'),
+            (r'NH₄\+', 'NH₄⁺'),
+            (r'OH\-', 'OH⁻'),
+
+            # Công thức trong ngoặc với số bên ngoài
+            (r'\(NH₄\)(\d+)', r'(NH₄)\1'),
+            (r'\(SO₄\)(\d+)', r'(SO₄)\1'),
+            (r'\(CO₃\)(\d+)', r'(CO₃)\1'),
+            (r'\(PO₄\)(\d+)', r'(PO₄)\1'),
+        ]
+
+        for pattern, replacement in special_cases:
+            # Sử dụng lambda để xử lý subscript cho số
+            if r'\1' in replacement:
+                def replace_with_subscript(match):
+                    number = match.group(1)
+                    subscript_number = ''.join(subscript_map.get(digit, digit) for digit in number)
+                    return replacement.replace(r'\1', subscript_number)
+                text = re.sub(pattern, replace_with_subscript, text)
+            else:
+                text = re.sub(pattern, replacement, text)
+
+        # 2. Xử lý công thức phổ biến
+        for pattern, replacement in common_formulas:
+            text = re.sub(pattern, replacement, text)
+
+        # 3. Xử lý công thức trong ngoặc tổng quát (VD: (NH4)2, (SO4)3)
+        parenthesis_formula_pattern = r'\(([A-Z][a-z]?\d*)\)(\d+)'
+        def replace_parenthesis_formula(match):
+            formula_inside = match.group(1)
+            number_outside = match.group(2)
+
+            # Xử lý công thức bên trong ngoặc
+            processed_inside = formula_inside
+            for digit in '0123456789':
+                if digit in processed_inside:
+                    processed_inside = processed_inside.replace(digit, subscript_map.get(digit, digit))
+
+            # Xử lý số bên ngoài ngoặc
+            subscript_outside = ''.join(subscript_map.get(digit, digit) for digit in number_outside)
+
+            return f"({processed_inside}){subscript_outside}"
+
+        text = re.sub(parenthesis_formula_pattern, replace_parenthesis_formula, text)
+
+        # 4. Xử lý số sau ngoặc đóng (VD: Cu(OH)2, Ca(NO3)2)
+        parenthesis_number_pattern = r'\)(\d+)'
+        def replace_parenthesis_number(match):
+            number = match.group(1)
+            subscript_number = ''.join(subscript_map.get(digit, digit) for digit in number)
+            return f'){subscript_number}'
+
+        text = re.sub(parenthesis_number_pattern, replace_parenthesis_number, text)
+
+        # 5. Xử lý chữ cái n, m đơn lẻ (VD: Cn, H2Om) - cẩn thận với từ tiếng Việt
+        # Pattern đặc biệt cho công thức hóa học với biến n, m
+        chemistry_variable_patterns = [
+            (r'\bCn\(', 'Cₙ('),  # Cn( -> Cₙ(
+            (r'\bCm\(', 'Cₘ('),  # Cm( -> Cₘ(
+        ]
+
+        for pattern, replacement in chemistry_variable_patterns:
+            text = re.sub(pattern, replacement, text)
+
+        # Pattern tổng quát cho n, m - chỉ áp dụng trong context hóa học rõ ràng
+        variable_pattern = r'(?<![a-zàáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹ])([A-Z][a-z]?\d*)([nm])(?=\)|$|\s|[,.]|[+\-])'
+        def replace_variable(match):
+            element = match.group(1)
+            variable = match.group(2)
+
+            # Kiểm tra xem có phải là nguyên tố hóa học thật không
+            # Tránh các trường hợp như "Xem", "Hen"
+            if element in ['Xe', 'He', 'In', 'Am', 'No']:
+                return match.group(0)  # Giữ nguyên
+
+            subscript_variable = subscript_map.get(variable, variable)
+            return f"{element}{subscript_variable}"
+
+        text = re.sub(variable_pattern, replace_variable, text)
+
+        # 5b. Xử lý m sau ngoặc đóng (VD: (H2O)m)
+        parenthesis_variable_pattern = r'\)([nm])(?=\)|$|\s|[,.]|[+\-])'
+        def replace_parenthesis_variable(match):
+            variable = match.group(1)
+            subscript_variable = subscript_map.get(variable, variable)
+            return f'){subscript_variable}'
+
+        text = re.sub(parenthesis_variable_pattern, replace_parenthesis_variable, text)
+
+        # 6. Xử lý pattern tổng quát
         text = re.sub(chemistry_pattern, replace_chemistry_safe, text)
         text = re.sub(parenthesis_pattern, replace_parenthesis, text)
 
