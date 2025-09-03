@@ -1604,11 +1604,11 @@ LƯU Ý QUAN TRỌNG:
             enhanced_requirements.append("9. Nêu rõ thời gian và phương pháp")
 
         elif "câu hỏi" in node_title or "đặt vấn đề" in node_title:
-            enhanced_requirements.append("8. Câu hỏi phải liên quan trực tiếp đến bài học")
+            enhanced_requirements.append("8. Câu hỏi phải liên quan trực tiếp đến bài học và theo thứ tự")
             enhanced_requirements.append("9. Phù hợp với trình độ học sinh")
 
         elif "bài tập" in node_title or "luyện tập" in node_title:
-            enhanced_requirements.append("8. Nêu rõ loại bài tập và mức độ khó")
+            enhanced_requirements.append("8. Nêu rõ loại bài tập và mức độ khó kèm theo lời giải")
             enhanced_requirements.append("9. Ước tính thời gian làm bài")
 
         elif "đánh giá" in node_title or "kiểm tra" in node_title:
