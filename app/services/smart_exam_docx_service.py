@@ -180,9 +180,22 @@ class SmartExamDocxService:
 
         text = re.sub(simple_ion_pattern, replace_simple_ion, text)
 
-        # 3b. Xử lý ion âm đơn giản (VD: Cl-, OH-, F-)
-        negative_ion_pattern = r'(?<!\w)([A-Z][a-z]?)(\-)(?!\w)'
-        def replace_negative_ion(match):
+        # 3b. Xử lý ion phức tạp không có số (VD: ClO4-, SO4^2- đã được xử lý)
+        complex_ion_no_number_pattern = r'(?<!\w)([A-Z][a-z]?[A-Z]?\d*)(\-)(?!\w)'
+        def replace_complex_ion_no_number(match):
+            formula = match.group(1)
+            charge = match.group(2)
+
+            # Chuyển điện tích thành superscript
+            superscript_charge = superscript_map.get(charge, charge)
+
+            return f"{formula}{superscript_charge}"
+
+        text = re.sub(complex_ion_no_number_pattern, replace_complex_ion_no_number, text)
+
+        # 3c. Xử lý ion đơn giản không có số (VD: Na+, H+, Cl-)
+        simple_ion_no_number_pattern = r'(?<!\w)([A-Z][a-z]?)(\+|\-)(?!\w)'
+        def replace_simple_ion_no_number(match):
             element = match.group(1)
             charge = match.group(2)
 
@@ -191,7 +204,7 @@ class SmartExamDocxService:
 
             return f"{element}{superscript_charge}"
 
-        text = re.sub(negative_ion_pattern, replace_negative_ion, text)
+        text = re.sub(simple_ion_no_number_pattern, replace_simple_ion_no_number, text)
 
         # 4. Xử lý ion với ký hiệu ^ (VD: SO4^2-)
         caret_ion_pattern = r'([A-Z][a-z]?\d*)\^(\d+)(\+|\-)'
@@ -331,19 +344,47 @@ class SmartExamDocxService:
 
 
         # Áp dụng các pattern theo thứ tự ưu tiên
-        # 0. Bảo vệ từ tiếng Việt trước tiên
+        # 0. Bảo vệ từ tiếng Việt và thuật ngữ đặc biệt trước tiên
         vietnamese_words = [
-            'Pin', 'Hen', 'Xem', 'Cần', 'Tin', 'Vin', 'Sin', 'Bin', 'Din', 'Fin', 'Gin', 'Hin', 'Jin', 'Kin', 'Lin', 'Min', 'Nin', 'Qin', 'Rin', 'Win', 'Yin', 'Zin'
+            'Pin', 'Hen', 'Xem', 'Cần', 'Tin', 'Vin', 'Sin', 'Bin', 'Din', 'Fin', 'Gin', 'Hin', 'Jin', 'Kin', 'Lin', 'Min', 'Nin', 'Qin', 'Rin', 'Win', 'Yin', 'Zin',
+            'Kim', 'Amino', 'Amin', 'Am'  # Thêm các từ có thể gây nhầm lẫn
         ]
 
-        # Tạo map để bảo vệ từ tiếng Việt
+        # Bảo vệ các cụm từ đặc biệt
+        special_phrases = [
+            'amino acid', 'Amino acid', 'AMINO ACID', 'Amino Acid',
+            'kim loại', 'Kim loại', 'KIM LOẠI',
+            'kim cương', 'Kim cương', 'KIM CƯƠNG',
+            'kim khí', 'Kim khí', 'KIM KHÍ',
+            'kim tuyến', 'Kim tuyến', 'KIM TUYẾN'
+        ]
+
+        # Tạo map để bảo vệ từ tiếng Việt và cụm từ đặc biệt
         protected_words = {}
+
+        # Bảo vệ cụm từ đặc biệt trước (ưu tiên cao hơn)
+        for i, phrase in enumerate(special_phrases):
+            # Tìm exact match với case sensitivity
+            pattern = r'\b' + re.escape(phrase) + r'\b'
+            matches = list(re.finditer(pattern, text, flags=re.IGNORECASE))
+
+            for match in reversed(matches):  # Reverse để không ảnh hưởng index
+                matched_text = match.group(0)
+                placeholder = f"__PROTECTED_PHRASE_{i}_{match.start()}__"
+                protected_words[placeholder] = matched_text  # Giữ nguyên case
+                text = text[:match.start()] + placeholder + text[match.end():]
+
+        # Bảo vệ từ đơn lẻ
         for i, word in enumerate(vietnamese_words):
-            if word.lower() in text.lower():
-                placeholder = f"__PROTECTED_WORD_{i}__"
-                protected_words[placeholder] = word
-                # Thay thế tạm thời (case-insensitive)
-                text = re.sub(re.escape(word), placeholder, text, flags=re.IGNORECASE)
+            # Tìm exact match với case sensitivity
+            pattern = r'\b' + re.escape(word) + r'\b'
+            matches = list(re.finditer(pattern, text, flags=re.IGNORECASE))
+
+            for match in reversed(matches):  # Reverse để không ảnh hưởng index
+                matched_text = match.group(0)
+                placeholder = f"__PROTECTED_WORD_{i}_{match.start()}__"
+                protected_words[placeholder] = matched_text  # Giữ nguyên case
+                text = text[:match.start()] + placeholder + text[match.end():]
 
         # 1. Xử lý các nhóm nguyên tử và công thức đơn giản trước tiên (để tránh conflict)
         atomic_groups = [
@@ -355,13 +396,38 @@ class SmartExamDocxService:
             (r'NO3', 'NO₃'),
             (r'NO2', 'NO₂'),
             (r'NH3', 'NH₃'),
+            (r'NH2', 'NH₂'),  # Nhóm amino
             (r'H2O', 'H₂O'),
             (r'H2S', 'H₂S'),
             (r'MnO4', 'MnO₄'),
+            (r'ClO4', 'ClO₄'),  # Perchlorate
+            (r'ClO3', 'ClO₃'),  # Chlorate
+            (r'ClO2', 'ClO₂'),  # Chlorite
+            (r'ClO', 'ClO'),    # Hypochlorite
+            # Thêm các công thức đơn giản
+            (r'CH4', 'CH₄'),    # Methane
+            (r'C2H6', 'C₂H₆'),  # Ethane
+            (r'C3H8', 'C₃H₈'),  # Propane
+            (r'C4H10', 'C₄H₁₀'), # Butane
+            # Thêm các muối
+            (r'CaCl2', 'CaCl₂'),
+            (r'MnCl2', 'MnCl₂'),
+            (r'FeCl2', 'FeCl₂'),
+            (r'FeCl3', 'FeCl₃'),
+            (r'BaCl2', 'BaCl₂'),
+            (r'MgCl2', 'MgCl₂'),
             # Thêm các công thức với Zn
             (r'ZnO', 'ZnO'),
             (r'ZnCl2', 'ZnCl₂'),
             (r'ZnSO4', 'ZnSO₄'),
+            # Thêm các công thức với Am (Americium)
+            (r'Am2O3', 'Am₂O₃'),
+            # Thêm các công thức amin và alkyl
+            (r'CH3NH2', 'CH₃NH₂'),  # Methylamine
+            (r'C2H5NH2', 'C₂H₅NH₂'),  # Ethylamine
+            (r'CH3', 'CH₃'),  # Methyl group
+            (r'C2H5', 'C₂H₅'),  # Ethyl group
+            (r'C3H7', 'C₃H₇'),  # Propyl group
         ]
 
         for pattern, replacement in atomic_groups:
@@ -431,9 +497,26 @@ class SmartExamDocxService:
         chemistry_variable_patterns = [
             (r'\bCn\(', 'Cₙ('),  # Cn( -> Cₙ(
             (r'\bCm\(', 'Cₘ('),  # Cm( -> Cₘ(
+            # Xử lý biến hóa học phức tạp (thứ tự quan trọng - từ phức tạp đến đơn giản)
+            (r'\(CnH2n\+1\)', '(CₙH₂ₙ₊₁)'), # (CnH2n+1) -> (CₙH₂ₙ₊₁)
+            (r'\bCnH2n\+2\b', 'CₙH₂ₙ₊₂'),  # CnH2n+2 -> CₙH₂ₙ₊₂
+            (r'\bCnH2n\-2\b', 'CₙH₂ₙ₋₂'),  # CnH2n-2 -> CₙH₂ₙ₋₂
+            (r'\bCnH2n\b', 'CₙH₂ₙ'),       # CnH2n -> CₙH₂ₙ (phải để cuối)
         ]
 
         for pattern, replacement in chemistry_variable_patterns:
+            text = re.sub(pattern, replacement, text)
+
+        # Xử lý các pattern phức tạp hơn cho biến hóa học
+        complex_variable_patterns = [
+            # Xử lý +1, -1, +2, -2 trong biến hóa học
+            (r'CₙH₂ₙ\+1', 'CₙH₂ₙ₊₁'),
+            (r'CₙH₂ₙ\-1', 'CₙH₂ₙ₋₁'),
+            (r'CₙH₂ₙ\+2', 'CₙH₂ₙ₊₂'),
+            (r'CₙH₂ₙ\-2', 'CₙH₂ₙ₋₂'),
+        ]
+
+        for pattern, replacement in complex_variable_patterns:
             text = re.sub(pattern, replacement, text)
 
         # Pattern tổng quát cho n, m - chỉ áp dụng trong context hóa học rõ ràng
