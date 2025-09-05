@@ -180,34 +180,60 @@ class SmartExamGenerationService:
     ) -> List[Dict[str, Any]]:
         """Tạo câu hỏi cho một mức độ nhận thức cụ thể"""
         try:
+            logger.info(f"🎯 Starting generation: Part {part_num}, Level {level}, Count {count}")
+
             # Phần 3 sử dụng quy trình tư duy ngược với validation loop
             if part_num == 3:
                 return await self._generate_part3_questions_with_reverse_thinking(
                     level, count, lesson_data, subject, lesson_id, question_callback
                 )
 
-            # Phần 1 và 2 sử dụng quy trình cũ
+            # Phần 1 và 2 sử dụng quy trình cải thiện
             prompt = self._create_prompt_for_level(
                 part_num, level, count, lesson_data, subject, lesson_id
             )
 
-            # Gọi LLM để tạo câu hỏi - tăng max_tokens cho nhiều câu hỏi
-            max_tokens = 6000 if count > 3 else 4000  # Tăng token limit cho nhiều câu
+            # Tăng max_tokens cho APPLICATION level và nhiều câu hỏi
+            max_tokens = self._calculate_max_tokens(level, count)
+
+            # Điều chỉnh temperature cho APPLICATION level
+            temperature = 0.4 if level == "APPLICATION" else 0.3
+
+            logger.info(f"📝 LLM params: max_tokens={max_tokens}, temperature={temperature}")
+
             response = await self.llm_service.generate_content(
                 prompt=prompt,
-                temperature=0.3,
+                temperature=temperature,
                 max_tokens=max_tokens
             )
 
             if not response.get("success", False):
-                logger.error(f"LLM failed for part {part_num}, level {level}: {response.get('error')}")
+                logger.error(f"❌ LLM failed for part {part_num}, level {level}: {response.get('error')}")
                 return []
 
-            # Parse response JSON
-            questions = self._parse_llm_response(response.get("text", ""), part_num, level, lesson_id)
+            # Log raw response để debug
+            raw_response = response.get("text", "")
+            logger.info(f"📥 Raw response length: {len(raw_response)} chars")
+            logger.info(f"📥 Raw response preview: {raw_response[:200]}...")
+
+            # Parse response JSON với improved parsing
+            questions = self._parse_llm_response_improved(raw_response, part_num, level, lesson_id)
+
+            logger.info(f"✅ Parsed {len(questions)} questions from LLM")
+
+            # Nếu không đủ câu hỏi, thử retry một lần
+            if len(questions) < count:
+                logger.warning(f"⚠️ Only got {len(questions)}/{count} questions, attempting retry...")
+                retry_questions = await self._retry_generation_if_needed(
+                    part_num, level, count - len(questions), lesson_data, subject, lesson_id
+                )
+                questions.extend(retry_questions)
+                logger.info(f"🔄 After retry: {len(questions)} total questions")
 
             # Giới hạn số câu hỏi theo yêu cầu
             limited_questions = questions[:count]
+
+            logger.info(f"📊 Final result: {len(limited_questions)}/{count} questions for Part {part_num}, Level {level}")
 
             # Gọi callback cho từng câu hỏi nếu có
             if question_callback and limited_questions:
@@ -220,8 +246,235 @@ class SmartExamGenerationService:
             return limited_questions
 
         except Exception as e:
-            logger.error(f"Error generating questions for level {level}: {e}")
+            logger.error(f"💥 Error generating questions for level {level}: {e}")
             return []
+
+    def _calculate_max_tokens(self, level: str, count: int) -> int:
+        """Tính toán max_tokens dựa trên level và số lượng câu hỏi"""
+        base_tokens = {
+            "KNOWLEDGE": 3000,
+            "COMPREHENSION": 4000,
+            "APPLICATION": 5000  # Tăng cho APPLICATION level
+        }
+
+        base = base_tokens.get(level, 4000)
+
+        # Tăng tokens cho nhiều câu hỏi
+        if count > 5:
+            return base + 2000
+        elif count > 3:
+            return base + 1000
+        else:
+            return base
+
+    async def _retry_generation_if_needed(
+        self, part_num: int, level: str, missing_count: int,
+        lesson_data: Dict[str, Any], subject: str, lesson_id: str
+    ) -> List[Dict[str, Any]]:
+        """Retry generation nếu thiếu câu hỏi"""
+        try:
+            if missing_count <= 0:
+                return []
+
+            logger.info(f"🔄 Retrying generation for {missing_count} missing questions")
+
+            # Tạo prompt đơn giản hơn cho retry
+            retry_prompt = self._create_simple_retry_prompt(
+                part_num, level, missing_count, lesson_data, subject, lesson_id
+            )
+
+            # Sử dụng params conservative hơn cho retry
+            max_tokens = self._calculate_max_tokens(level, missing_count)
+
+            response = await self.llm_service.generate_content(
+                prompt=retry_prompt,
+                temperature=0.5,  # Tăng creativity cho retry
+                max_tokens=max_tokens
+            )
+
+            if not response.get("success", False):
+                logger.error(f"❌ Retry failed: {response.get('error')}")
+                return []
+
+            retry_questions = self._parse_llm_response_improved(
+                response.get("text", ""), part_num, level, lesson_id
+            )
+
+            logger.info(f"✅ Retry generated {len(retry_questions)} additional questions")
+            return retry_questions[:missing_count]
+
+        except Exception as e:
+            logger.error(f"💥 Error in retry generation: {e}")
+            return []
+
+    def _create_simple_retry_prompt(
+        self, part_num: int, level: str, count: int,
+        lesson_data: Dict[str, Any], subject: str, lesson_id: str
+    ) -> str:
+        """Tạo prompt đơn giản cho retry generation"""
+
+        main_content = self._extract_lesson_content(lesson_data)
+        content_preview = main_content[:1000] if len(main_content) > 1000 else main_content
+
+        return f"""
+Bạn là chuyên gia tạo đề thi {subject}. Hãy tạo CHÍNH XÁC {count} câu hỏi cho:
+
+PHẦN: {part_num} - {self._get_part_description(part_num)}
+MỨC ĐỘ: {level}
+NỘI DUNG: {content_preview}
+
+YÊU CẦU:
+- Tạo ĐÚNG {count} câu hỏi
+- Format JSON array: [{{...}}, {{...}}]
+- Mỗi câu hỏi phải có: question, answer, explanation
+
+ĐỊNH DẠNG TRẢ VỀ:
+[
+    {{
+        "question": "Nội dung câu hỏi",
+        "answer": {self._get_answer_format_by_part(part_num)},
+        "explanation": "Giải thích chi tiết",
+        "cognitive_level": "{level}",
+        "part": {part_num}
+    }}
+]
+
+CHỈ TRẢ VỀ JSON ARRAY, KHÔNG CÓ TEXT KHÁC!
+"""
+
+    def _parse_llm_response_improved(self, response_text: str, part_num: int, level: str, lesson_id: str) -> List[Dict[str, Any]]:
+        """Parse response từ LLM với improved logic"""
+        try:
+            logger.info(f"🔍 Parsing response for part {part_num}, level {level}")
+            logger.info(f"📝 Response length: {len(response_text)} chars")
+
+            # Method 1: Tìm JSON array
+            questions = self._try_parse_json_array(response_text)
+            if questions:
+                logger.info(f"✅ Method 1 success: Found {len(questions)} questions in array")
+                return self._validate_and_enrich_questions(questions, part_num, level, lesson_id)
+
+            # Method 2: Tìm single JSON object
+            questions = self._try_parse_single_object(response_text)
+            if questions:
+                logger.info(f"✅ Method 2 success: Found {len(questions)} questions from single object")
+                return self._validate_and_enrich_questions(questions, part_num, level, lesson_id)
+
+            # Method 3: Tìm multiple objects
+            questions = self._try_parse_multiple_objects(response_text)
+            if questions:
+                logger.info(f"✅ Method 3 success: Found {len(questions)} questions from multiple objects")
+                return self._validate_and_enrich_questions(questions, part_num, level, lesson_id)
+
+            logger.error("❌ All parsing methods failed")
+            return []
+
+        except Exception as e:
+            logger.error(f"💥 Error in improved parsing: {e}")
+            return []
+
+    def _try_parse_json_array(self, response_text: str) -> List[Dict[str, Any]]:
+        """Thử parse JSON array từ response"""
+        try:
+            start_idx = response_text.find('[')
+            end_idx = response_text.rfind(']') + 1
+
+            if start_idx == -1 or end_idx == 0:
+                return []
+
+            json_str = response_text[start_idx:end_idx]
+            questions = json.loads(json_str)
+
+            if isinstance(questions, list):
+                return questions
+            else:
+                return []
+
+        except json.JSONDecodeError:
+            return []
+        except Exception:
+            return []
+
+    def _try_parse_single_object(self, response_text: str) -> List[Dict[str, Any]]:
+        """Thử parse single JSON object và convert thành array"""
+        try:
+            start_idx = response_text.find('{')
+            end_idx = response_text.rfind('}') + 1
+
+            if start_idx == -1 or end_idx == 0:
+                return []
+
+            json_str = response_text[start_idx:end_idx]
+            question = json.loads(json_str)
+
+            if isinstance(question, dict) and "question" in question:
+                return [question]
+            else:
+                return []
+
+        except json.JSONDecodeError:
+            return []
+        except Exception:
+            return []
+
+    def _try_parse_multiple_objects(self, response_text: str) -> List[Dict[str, Any]]:
+        """Thử tìm multiple JSON objects trong text"""
+        try:
+            questions = []
+            lines = response_text.split('\n')
+            current_json = ""
+            brace_count = 0
+
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+
+                current_json += line + "\n"
+                brace_count += line.count('{') - line.count('}')
+
+                # Khi brace_count về 0, có thể là end của một object
+                if brace_count == 0 and current_json.strip():
+                    try:
+                        obj = json.loads(current_json.strip())
+                        if isinstance(obj, dict) and "question" in obj:
+                            questions.append(obj)
+                    except json.JSONDecodeError:
+                        pass
+                    current_json = ""
+
+            return questions
+
+        except Exception:
+            return []
+
+    def _validate_and_enrich_questions(self, questions: List[Dict[str, Any]], part_num: int, level: str, lesson_id: str) -> List[Dict[str, Any]]:
+        """Validate và enrich questions với metadata"""
+        validated_questions = []
+
+        for i, q in enumerate(questions):
+            if isinstance(q, dict) and "question" in q:
+                # Enrich với metadata
+                q["part"] = part_num
+                q["cognitive_level"] = level
+                q["lesson_id"] = lesson_id
+
+                # Xác định loại câu hỏi theo phần
+                if part_num == 1:
+                    q["question_type"] = "TN"  # Trắc nghiệm nhiều phương án
+                elif part_num == 2:
+                    q["question_type"] = "DS"  # Đúng/Sai
+                elif part_num == 3:
+                    q["question_type"] = "TL"  # Tự luận
+                else:
+                    q["question_type"] = "TN"  # Default
+
+                validated_questions.append(q)
+                logger.info(f"✅ Question {i+1} validated and enriched")
+            else:
+                logger.warning(f"❌ Question {i+1} invalid: missing 'question' field or not dict")
+
+        return validated_questions
 
     async def _generate_part3_questions_with_reverse_thinking(
         self, level: str, count: int, lesson_data: Dict[str, Any],
@@ -1560,45 +1813,52 @@ Lưu ý: Chỉ trả về JSON, tập trung vào việc cải thiện chất lư
         }
 
         prompt = f"""
-Bạn là chuyên gia tạo đề thi {subject} theo chuẩn THPT 2025, hãy dựa vào thông tin cung cấp bên dưới để tạo ra ma trận đề và trả về JSON tương ứng
-{part_descriptions.get(part_num, "")}
-THÔNG TIN BÀI HỌC:
-- Nội dung: {content_preview}...
+Bạn là chuyên gia tạo đề thi {subject} theo chuẩn THPT 2025.
 
-YÊU CẦU:
-- Tạo {count} câu hỏi ở mức độ nhận thức "{level}"
-- Phần {part_num} - {self._get_part_description(part_num)}
-- Câu hỏi phải dựa trên nội dung bài học
-- Ngữ liệu, dữ kiện trong câu phải khoa học, đúng thực tế.
-- Tuân thủ nghiêm ngặt ma trận đề thi chuẩn THPT 2025
-- Đảm bảo kiến thức chính xác, logic, không gây hiểu nhầm.
-- KIỂM TRA KỸ LOGIC HÓA HỌC: phương trình phản ứng, tỉ lệ mol, bảo toàn nguyên tố, tính hợp lý
+🎯 YÊU CẦU CHÍNH XÁC:
+- Tạo ĐÚNG {count} câu hỏi (không nhiều hơn, không ít hơn)
+- Mức độ nhận thức: "{level}"
+- Phần {part_num}: {self._get_part_description(part_num)}
+
+📚 THÔNG TIN BÀI HỌC:
+{content_preview}
+
+📋 HƯỚNG DẪN CHI TIẾT:
 {self._get_specific_instructions_by_part(part_num, level)}
 
-ĐỊNH DẠNG JSON TRẢ VỀ:
+🔧 ĐỊNH DẠNG JSON BẮT BUỘC:
 [
     {{
-        "question": "Nội dung câu hỏi",
+        "question": "Nội dung câu hỏi chi tiết",
         "answer": {self._get_answer_format_by_part(part_num)},
-        "explanation": "Giải thích chi tiết từng bước giải bài với công thức, tính toán cụ thể, và lý do tại sao đáp án đúng",
+        "explanation": "Giải thích từng bước với công thức và tính toán cụ thể",
+        "cognitive_level": "{level}",
+        "part": {part_num}
+    }},
+    {{
+        "question": "Câu hỏi thứ 2...",
+        "answer": {self._get_answer_format_by_part(part_num)},
+        "explanation": "Giải thích chi tiết...",
         "cognitive_level": "{level}",
         "part": {part_num}
     }}
 ]
 
-LƯU Ý QUAN TRỌNG:
-- Chỉ trả về JSON, không có văn bản bổ sung
-- Field "explanation" phải là giải thích cách giải bài với tính toán chi tiết, không phải mô tả câu hỏi
-- ÁP DỤNG NGUYÊN TẮC HÓA HỌC: bảo toàn, cân bằng, tỉ lệ mol (không phải tỉ lệ khối lượng)
-- THỰC HIỆN TÍNH TOÁN CHÍNH XÁC: kiểm tra từng bước, đơn vị, công thức
-- Đảm bảo tính chính xác khoa học và hợp lý thực tế
+⚠️ LƯU Ý QUAN TRỌNG:
+1. PHẢI TRẢ VỀ ĐÚNG {count} CÂU HỎI trong JSON array
+2. CHỈ trả về JSON array, KHÔNG có text khác
+3. Mỗi câu hỏi phải có đầy đủ các field: question, answer, explanation, cognitive_level, part
+4. Kiểm tra logic hóa học: phương trình, tỉ lệ mol, bảo toàn nguyên tố
+5. Đảm bảo tính chính xác khoa học và phù hợp thực tế
 
-VALIDATION NGHIÊM NGẶT - PHẢI KIỂM TRA:
-✓ Khối lượng mol chính xác: CaCO₃=100, NaCl=58.5, H₂SO₄=98...
-✓ Công thức phân tử nhất quán: nếu n=17 thì C₁₇H₃₇N, không phải C₃H₉N
-✓ Tỉ lệ mol theo phương trình cân bằng
-✓ Bảo toàn nguyên tố trong mọi phản ứng
-✓ Giá trị số học hợp lý và có thể tính được
+✅ VALIDATION CHECKLIST:
+- Khối lượng mol chính xác (CaCO₃=100, NaCl=58.5, H₂SO₄=98...)
+- Công thức phân tử nhất quán
+- Tỉ lệ mol theo phương trình cân bằng
+- Bảo toàn nguyên tố
+- Giá trị số học hợp lý
+
+BẮT ĐẦU TẠO {count} CÂU HỎI:
 """
         return prompt
 
